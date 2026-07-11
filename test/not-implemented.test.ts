@@ -1,8 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { runCli, SUBCOMMANDS } from "./support.js";
 
+/** Commands with real behaviour — no longer stubs (own test files). */
+const IMPLEMENTED = new Set(["sign-statement"]);
+
 describe("subcommand stubs", () => {
   for (const [name, spec] of Object.entries(SUBCOMMANDS)) {
+    if (IMPLEMENTED.has(name)) {
+      continue;
+    }
     test(`${name}: human mode exits non-zero with the ${spec.issue} message`, () => {
       const result = runCli([name, ...spec.args]);
       expect(result.exitCode).toBe(1);

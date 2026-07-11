@@ -11,13 +11,13 @@ export default defineForestrieCommand({
   args: {
     key: {
       type: "string",
-      description: "ES256 P-256 PKCS#8 PEM signing key",
+      description: "ES256 P-256 private signing key (PEM or JWK file)",
       valueHint: "path",
       required: true,
     },
     payload: {
       type: "string",
-      description: "Payload file to sign",
+      description: "Payload file to sign ('-' reads stdin)",
       valueHint: "path",
       required: true,
     },
