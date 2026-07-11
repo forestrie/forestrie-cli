@@ -73,8 +73,8 @@ bun run build:binary:darwin-arm64
 - `-v` / `--verbosity` per `@forestrie/cli-kit` reporting (`-1` silences
   stderr feedback; stdout stays pipeable).
 - Env fallbacks: `FORESTRIE_BASE_URL`, `RPC_URL`, `GRANT_B64`,
-  `OWNER_ADDRESS`, `FORESTRIE_CONFIG`; any string flag also accepts
-  `${env:VAR}` / `${env}` whole-value templates.
+  `OWNER_ADDRESS`, `DEPLOYER_KEY`, `FORESTRIE_CONFIG`; any string flag also
+  accepts `${env:VAR}` / `${env}` whole-value templates.
 - **ES256 is the paved path end-to-end**; KS256 appears only in the
   Safe / ERC-1271 aside.
 
@@ -87,7 +87,7 @@ installable without auth:
 `@forestrie/cli-kit` · `@forestrie/deploy-core` · `@forestrie/encoding` ·
 `@forestrie/grant-builder` · `@forestrie/scrapi-client` ·
 `@forestrie/receipt-verify` · `@forestrie/merklelog` ·
-`@forestrie/delegation-cose`
+`@forestrie/delegation-cose` · `viem` (deploy tx signing/submission)
 
 ## License
 
