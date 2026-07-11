@@ -23,9 +23,9 @@ export default defineForestrieCommand({
     },
     statement: {
       type: "string",
-      description: "COSE Sign1 signed statement file",
+      description:
+        "COSE Sign1 signed statement file ('-' or omitted: read stdin)",
       valueHint: "path",
-      required: true,
     },
     "grant-b64": {
       type: "string",
@@ -35,8 +35,19 @@ export default defineForestrieCommand({
     },
     out: {
       type: "string",
-      description: "Receipt output path (default: stdout)",
+      description: "Write the receipt bytes to this path",
       valueHint: "path",
+    },
+    timeout: {
+      type: "string",
+      description: "Overall receipt wait budget in seconds (default 60)",
+      valueHint: "seconds",
+    },
+    "poll-interval": {
+      type: "string",
+      description:
+        "Pacing between registration/receipt polls in seconds (default 1; Retry-After wins when longer)",
+      valueHint: "seconds",
     },
   },
   run: defineCommandRunner(parseRegisterOptions, runRegister),

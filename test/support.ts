@@ -75,6 +75,7 @@ export const SUBCOMMANDS: Record<
       "--grant-b64",
       "AAAA",
     ],
+    implemented: true,
   },
   "register-grant": {
     issue: "FOR-343",
