@@ -37,12 +37,32 @@ export type StageRow = {
  * Expand the library's `{ok, stage, reason}` into one row per stage:
  * on success all four pass; on failure the reported stage failed, earlier
  * stages passed, later stages were not reached.
+ *
+ * A stage this CLI does not know (a future `@forestrie/receipt-verify`
+ * addition) still renders explicitly as the failed row — degrading it to
+ * four silent "skipped" rows would hide the failure (F3, plan-2607-14
+ * W1.3). We cannot order an unknown stage among the known ones, so the
+ * known stages read "skipped" (not evaluated by this CLI's knowledge) and
+ * the unknown stage carries the failure.
  */
 export function stageRows(result: ReceiptVerifyResult): StageRow[] {
   if (result.ok) {
     return VERIFY_STAGES.map((stage) => ({ stage, status: "ok" }));
   }
   const failedAt = VERIFY_STAGES.indexOf(result.stage);
+  if (failedAt === -1) {
+    return [
+      ...VERIFY_STAGES.map((stage) => ({
+        stage,
+        status: "skipped" as const,
+      })),
+      {
+        stage: result.stage,
+        status: "failed" as const,
+        reason: result.reason ?? "unknown",
+      },
+    ];
+  }
   return VERIFY_STAGES.map((stage, i) => {
     if (i < failedAt) return { stage, status: "ok" as const };
     if (i === failedAt) {

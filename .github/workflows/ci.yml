@@ -55,10 +55,10 @@ jobs:
 
       - name: Smoke test implemented commands
         # Implemented commands: --help must render (exit 0) and a
-        # bogus-input invocation must fail (any non-zero exit). No JSON
-        # shape is asserted for verify's failure output — its structured
-        # error envelope is a known finding (F3, plan-2607-14 W1.3)
-        # being fixed in remediation, not here.
+        # bogus-input invocation must fail (any non-zero exit). verify's
+        # --json failure output is additionally shape-asserted: since F3
+        # (plan-2607-14 W1.3) landed, verify owns stdout with the
+        # structured error envelope in EVERY failure branch.
         run: |
           set -x
           run_expect_fail() {
@@ -72,6 +72,10 @@ jobs:
           run_expect_fail ./dist/forestrie-linux-x64 register --base-url https://x --log-id L --statement missing.cose --grant-b64 AAAA
           run_expect_fail ./dist/forestrie-linux-x64 decode-receipt missing.cbor
           run_expect_fail ./dist/forestrie-linux-x64 verify --genesis missing.cbor --receipt missing.cbor --grant-b64 AAAA
+          # verify --json must emit the structured error envelope on stdout
+          # (F3 closed): parseable JSON, error code + stage, non-zero exit.
+          ./dist/forestrie-linux-x64 verify --json --genesis missing.cbor --receipt missing.cbor --grant-b64 AAAA > verify-error.json || test $? -eq 1
+          jq -e '.error == "verify_input_failed" and .command == "verify" and .stage == "input"' verify-error.json
 
   darwin-smoke:
     name: Darwin binary smoke

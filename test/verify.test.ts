@@ -7,8 +7,12 @@ import {
   decodeLogStateResult,
   toContractLogId,
 } from "../src/lib/verify-anchored.js";
-import type { VerifyReport } from "../src/lib/verify-report.js";
-import { runVerify } from "../src/main/verify.js";
+import {
+  stageRows,
+  type StageRow,
+  type VerifyReport,
+} from "../src/lib/verify-report.js";
+import { runVerify, type VerifyErrorReport } from "../src/main/verify.js";
 import { parseVerifyOptions } from "../src/options/verify.js";
 import { runCli } from "./support.js";
 import {
@@ -128,20 +132,49 @@ describe("forestrie verify — offline (no network)", () => {
     expect(r.exitCode).toBe(0);
   });
 
-  test("raw payload --grant-b64 without --entry-id is a usage error", async () => {
-    await expect(
-      verifyInProcess(
-        baseArgs({
-          "grant-b64": Buffer.from(fx.grantPayloadCbor).toString("base64"),
-        }),
-      ),
-    ).rejects.toThrow(/--entry-id/);
+  test("raw payload --grant-b64 without --entry-id is a structured input error (F3)", async () => {
+    const r = await verifyInProcess(
+      baseArgs({
+        "grant-b64": Buffer.from(fx.grantPayloadCbor).toString("base64"),
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = JSON.parse(r.stdout) as VerifyErrorReport;
+    expect(report.error).toBe("verify_input_failed");
+    expect(report.command).toBe("verify");
+    expect(report.stage).toBe("input");
+    expect(report.message).toMatch(/--entry-id/);
   });
 
-  test("missing genesis file is a clear error", async () => {
-    await expect(
-      verifyInProcess(baseArgs({ genesis: file("nope.cbor") })),
-    ).rejects.toThrow(/--genesis/);
+  test("missing genesis file: --json owns stdout with the error envelope (F3)", async () => {
+    const r = await verifyInProcess(
+      baseArgs({ genesis: file("nope.cbor"), json: true }),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = JSON.parse(r.stdout) as VerifyErrorReport;
+    expect(report.error).toBe("verify_input_failed");
+    expect(report.stage).toBe("input");
+    expect(report.message).toMatch(/--genesis/);
+  });
+
+  test("missing genesis file, human mode: clean stderr line, empty stdout, no stack", async () => {
+    const r = await verifyInProcess(baseArgs({ genesis: file("nope.cbor") }));
+    expect(r.exitCode).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("forestrie verify: input:");
+    expect(r.stderr).toContain("--genesis");
+    expect(r.stderr).not.toMatch(/\n\s+at /);
+  });
+
+  test("garbage --grant-b64 is a structured input error, not a crash (F3)", async () => {
+    const r = await verifyInProcess(
+      baseArgs({ "grant-b64": "AAAA", json: true }),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = JSON.parse(r.stdout) as VerifyErrorReport;
+    expect(report.error).toBe("verify_input_failed");
+    expect(report.stage).toBe("input");
   });
 
   test("tampered signature fails at stage=signature, exit 1", async () => {
@@ -299,6 +332,28 @@ describe("forestrie verify — chain-anchored mode", () => {
     expect(r.exitCode).toBe(1);
     expect(jsonReport(r.stdout).stage).toBe("signature");
   });
+
+  test("RPC transport failure: --json owns stdout with anchor_check_failed (F3)", async () => {
+    const refusedFetch = (async () => {
+      throw new TypeError("fetch failed: connect ECONNREFUSED 127.0.0.1:8545");
+    }) as unknown as typeof fetch;
+    const r = await verifyInProcess(chainArgs(), refusedFetch);
+    expect(r.exitCode).toBe(1);
+    const report = JSON.parse(r.stdout) as VerifyErrorReport;
+    expect(report.error).toBe("anchor_check_failed");
+    expect(report.command).toBe("verify");
+    expect(report.stage).toBe("anchor");
+    expect(report.message).toContain("ECONNREFUSED");
+  });
+
+  test("RPC garbage result: structured anchor error, human mode stays clean", async () => {
+    const badRpc = rpcFetch("0x01"); // too short to decode
+    const r = await verifyInProcess(chainArgs({ json: undefined }), badRpc);
+    expect(r.exitCode).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain("forestrie verify: anchor:");
+    expect(r.stderr).not.toMatch(/\n\s+at /);
+  });
 });
 
 describe("verify-anchored helpers", () => {
@@ -320,6 +375,35 @@ describe("verify-anchored helpers", () => {
     expect(state.size).toBe(42n);
     expect(state.accumulator.map(bytesToHex)).toEqual(peaks.map(bytesToHex));
     expect(() => decodeLogStateResult("0x")).toThrow(/empty/);
+  });
+});
+
+describe("verify-report stageRows", () => {
+  test("unknown future stage renders explicitly as the failed row (F3)", () => {
+    // A stage this CLI predates must NOT degrade to four silent
+    // "skipped" rows with the failure dropped.
+    const rows = stageRows({
+      ok: false,
+      stage: "consistency" as never,
+      reason: "consistency_failed",
+    });
+    expect(rows).toHaveLength(5);
+    const failed = rows.filter((r: StageRow) => r.status === "failed");
+    expect(failed).toEqual([
+      {
+        stage: "consistency" as never,
+        status: "failed",
+        reason: "consistency_failed",
+      },
+    ]);
+    for (const known of [
+      "parse",
+      "signature",
+      "inclusion",
+      "binding",
+    ] as const) {
+      expect(rows).toContainEqual({ stage: known, status: "skipped" });
+    }
   });
 });
 
@@ -353,6 +437,27 @@ describe("forestrie verify — CLI surface", () => {
     const report = JSON.parse(result.stdout) as VerifyReport;
     expect(report.ok).toBe(false);
     expect(report.stage).toBe("signature");
+  });
+
+  test("CLI run: bogus input under --json emits parseable JSON, exit non-zero, no stack (F3)", () => {
+    // The CI implemented-smoke jq assertion mirrors this exact shape.
+    const result = runCli([
+      "verify",
+      "--json",
+      "--genesis",
+      "missing.cbor",
+      "--receipt",
+      "missing.cbor",
+      "--grant-b64",
+      "AAAA",
+    ]);
+    expect(result.exitCode).toBe(1);
+    const report = JSON.parse(result.stdout) as VerifyErrorReport;
+    expect(report.error).toBe("verify_input_failed");
+    expect(report.command).toBe("verify");
+    expect(report.stage).toBe("input");
+    expect(report.message).toContain("--genesis");
+    expect(result.stderr).not.toMatch(/\n\s+at /);
   });
 
   test("CLI run: GRANT_B64 env fallback works", () => {
