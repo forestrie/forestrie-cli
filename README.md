@@ -70,5 +70,4 @@ installable without auth:
 
 ## License
 
-No repository license yet — whether this repo goes public (and MIT) is an
-open decision. The packages it builds on are MIT regardless.
+MIT — see [LICENSE](./LICENSE).

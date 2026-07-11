@@ -2,7 +2,7 @@
   "name": "@forestrie/forestrie-cli",
   "version": "0.1.0",
   "private": true,
-  "description": "forestrie — single-binary participant CLI for forestrie transparency logs",
+  "description": "forestrie \u2014 single-binary participant CLI for forestrie transparency logs",
   "type": "module",
   "bin": {
     "forestrie": "./dist/cli.js"
@@ -33,5 +33,6 @@
   },
   "files": [
     "dist"
-  ]
+  ],
+  "license": "MIT"
 }
