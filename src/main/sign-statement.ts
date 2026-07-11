@@ -19,7 +19,7 @@ export type SignStatementReport = {
   kid: string;
   /** Payload size in bytes. */
   payloadBytes: number;
-  /** COSE content type header value (label 3). */
+  /** COSE content type header value (label 3, protected). */
   contentType: string;
   /** Signed statement (COSE Sign1 CBOR) size in bytes. */
   statementBytes: number;
@@ -39,9 +39,11 @@ export type SignStatementError = {
 /**
  * FOR-341: build a plain COSE Sign1 signed statement
  * (`@forestrie/encoding`). `kid` = first 32 bytes of x||y under ES256;
- * content type (COSE label 3) in the unprotected header. Statement bytes
- * go to `--out`, or raw to stdout — except under `--json` without `--out`,
- * where they are returned base64 inside the report (stdout carries JSON).
+ * alg (label 1), content type (label 3), and kid (label 4) all in the
+ * **protected** header — the signature covers them; nothing interpretable
+ * rides unprotected (review F1). Statement bytes go to `--out`, or raw to
+ * stdout — except under `--json` without `--out`, where they are returned
+ * base64 inside the report (stdout carries JSON).
  */
 export async function runSignStatement(
   out: Out,

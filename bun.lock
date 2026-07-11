@@ -9,7 +9,7 @@
         "@forestrie/cli-kit": "^0.1.0",
         "@forestrie/delegation-cose": "^0.1.3",
         "@forestrie/deploy-core": "^0.6.0",
-        "@forestrie/encoding": "^0.1.0",
+        "@forestrie/encoding": "^0.2.0",
         "@forestrie/grant-builder": "^0.1.1",
         "@forestrie/merklelog": "^0.0.3",
         "@forestrie/receipt-verify": "^0.3.0",
@@ -45,7 +45,7 @@
 
     "@forestrie/deploy-core": ["@forestrie/deploy-core@0.6.0", "", { "dependencies": { "viem": "^2.31.0" } }, "sha512-XKBD1+RmqoJvZO/s7D6LcgVjjLVw0uWeXRCBOZfXd46kUUCIXY/8RqoRueSH5xjBdA3Z6Pd0nSGjvzH0x0Z4iw=="],
 
-    "@forestrie/encoding": ["@forestrie/encoding@0.1.0", "", { "dependencies": { "@noble/curves": "^1.8.1", "cbor-x": "^1.5.9" } }, "sha512-cnMyR/UJ1kvxo8sDdh+yGfx7zPIt+SFQE3th0EQ6xwewOLXQ/4I72HYebiSMFWXvKv5oVkvn3PbwEfnPHgvdAA=="],
+    "@forestrie/encoding": ["@forestrie/encoding@0.2.0", "", { "dependencies": { "@noble/curves": "^1.8.1", "cbor-x": "^1.5.9" } }, "sha512-rizl2MA5dYpqFGxCOesRaPOplnVtewZCCXoemktfXPtKuVncHW/+i2dvY2B2dBqt7UavhH9PA2e4KrhxJV7Svw=="],
 
     "@forestrie/grant-builder": ["@forestrie/grant-builder@0.1.1", "", { "dependencies": { "@forestrie/encoding": "0.1.0", "@noble/curves": "^1.9.7", "@noble/hashes": "^1.7.1", "cbor-x": "^1.5.9" } }, "sha512-4kE8aSLwCEI/Cv4YtEFJH2+Sgq6V/Oz4M7/T8Qne0B0tHVWiH16OFOFRLrSkrCobLt9hlIqw6M3kK6JAxx3h3A=="],
 
@@ -98,6 +98,10 @@
     "viem": ["viem@2.55.0", "", { "dependencies": { "@noble/curves": "1.9.1", "@noble/hashes": "1.8.0", "@scure/bip32": "1.7.0", "@scure/bip39": "1.6.0", "abitype": "1.2.3", "isows": "1.0.7", "ox": "0.14.30", "ws": "8.21.0" }, "peerDependencies": { "typescript": ">=5.0.4" }, "optionalPeers": ["typescript"] }, "sha512-5XWSTCTmNvHCeT38Fsp31uofmOZFJdj4nOUH+H2Vh/hzsx9M7r+KgL3fSYUZeVn4H0UyQxjwPFqEaV4M0CI1tA=="],
 
     "ws": ["ws@8.21.0", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g=="],
+
+    "@forestrie/grant-builder/@forestrie/encoding": ["@forestrie/encoding@0.1.0", "", { "dependencies": { "@noble/curves": "^1.8.1", "cbor-x": "^1.5.9" } }, "sha512-cnMyR/UJ1kvxo8sDdh+yGfx7zPIt+SFQE3th0EQ6xwewOLXQ/4I72HYebiSMFWXvKv5oVkvn3PbwEfnPHgvdAA=="],
+
+    "@forestrie/receipt-verify/@forestrie/encoding": ["@forestrie/encoding@0.1.0", "", { "dependencies": { "@noble/curves": "^1.8.1", "cbor-x": "^1.5.9" } }, "sha512-cnMyR/UJ1kvxo8sDdh+yGfx7zPIt+SFQE3th0EQ6xwewOLXQ/4I72HYebiSMFWXvKv5oVkvn3PbwEfnPHgvdAA=="],
 
     "ox/@noble/curves": ["@noble/curves@1.9.1", "", { "dependencies": { "@noble/hashes": "1.8.0" } }, "sha512-k11yZxZg+t+gWvBbIswW0yoJlu8cHOC7dhunwOzoWH/mXGBiYyR4YY6hAEK/3EUs4UpB8la1RfdRpeGsFHkWsA=="],
 

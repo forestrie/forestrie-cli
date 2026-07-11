@@ -6,7 +6,7 @@ export default defineForestrieCommand({
   meta: {
     name: "sign-statement",
     description:
-      "Produce a plain COSE Sign1 signed statement (ES256; kid = first 32 bytes of x||y) [FOR-341]",
+      "Produce a plain COSE Sign1 signed statement (ES256; alg, content type and kid all in the protected header; kid = first 32 bytes of x||y) [FOR-341]",
   },
   args: {
     key: {
@@ -23,7 +23,7 @@ export default defineForestrieCommand({
     },
     "content-type": {
       type: "string",
-      description: "Payload content type (COSE header label 3)",
+      description: "Payload content type (protected COSE header, label 3)",
       default: "application/json",
     },
     out: {
