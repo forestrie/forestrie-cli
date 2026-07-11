@@ -11,9 +11,9 @@ export default defineForestrieCommand({
   args: {
     receipt: {
       type: "positional",
-      description: "COSE receipt file",
+      description: "COSE receipt file (omit or use `-` to read stdin)",
       valueHint: "path",
-      required: true,
+      required: false,
     },
   },
   run: defineCommandRunner(parseDecodeReceiptOptions, runDecodeReceipt),
