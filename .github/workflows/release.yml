@@ -1,0 +1,165 @@
+# Tag-triggered release: build the forestrie static binaries
+# (linux-x64, darwin-arm64) and attach them + sha256 sidecars to a
+# GitHub release (pattern: univocity-tools .github/workflows/release.yml).
+#
+# All actions are SHA-pinned; the only write permission is contents: write
+# on the publish job (needed to create the release and upload assets).
+name: Release
+
+permissions:
+  contents: read
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Recovery path: `gh workflow run release.yml --ref vX.Y.Z`. The
+  # tag<->version assertion fails closed if the ref is not a v* tag.
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    name: Build linux-x64 binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          install: true
+
+      - name: Assert tag matches package.json version
+        run: bun scripts/assert-tag-version.ts
+
+      # No registry credentials anywhere in this workflow: the release
+      # binary is buildable tokenless from public npmjs (plan-2607-12).
+      - name: Install dependencies (tokenless, frozen)
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun run test
+
+      - name: Build linux-x64 binary
+        run: bun run build:binary:linux-x64
+
+      - name: Smoke test binary
+        run: |
+          set -euo pipefail
+          ./dist/forestrie-linux-x64 --help
+          # Stub commands parse their full argument surface, then exit 1
+          # with a structured not_implemented report; --json must be
+          # machine-readable on stdout.
+          ./dist/forestrie-linux-x64 verify --json --genesis g.cbor --receipt r.cbor --grant-b64 AAAA > verify.json || test $? -eq 1
+          jq -e '.error == "not_implemented" and .issue == "FOR-347"' verify.json
+
+      - name: Write sha256 sidecar
+        run: |
+          set -euo pipefail
+          cd dist
+          shasum -a 256 forestrie-linux-x64 > forestrie-linux-x64.sha256
+
+      - name: Upload linux-x64 release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-linux-x64
+          path: |
+            dist/forestrie-linux-x64
+            dist/forestrie-linux-x64.sha256
+          if-no-files-found: error
+
+  build-darwin:
+    name: Build darwin-arm64 binary
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          install: true
+
+      - name: Assert tag matches package.json version
+        run: bun scripts/assert-tag-version.ts
+
+      - name: Install dependencies (tokenless, frozen)
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun run test
+
+      # scripts/build-binary.ts ad-hoc codesigns the darwin binary
+      # (codesign --sign -) so it runs without Gatekeeper kills on arm64.
+      - name: Build darwin-arm64 binary
+        run: bun run build:binary:darwin-arm64
+
+      - name: Smoke test binary
+        run: |
+          set -euo pipefail
+          ./dist/forestrie-darwin-arm64 --help
+          ./dist/forestrie-darwin-arm64 verify --json --genesis g.cbor --receipt r.cbor --grant-b64 AAAA > verify.json || test $? -eq 1
+          jq -e '.error == "not_implemented" and .issue == "FOR-347"' verify.json
+
+      - name: Write sha256 sidecar
+        run: |
+          set -euo pipefail
+          cd dist
+          shasum -a 256 forestrie-darwin-arm64 > forestrie-darwin-arm64.sha256
+
+      - name: Upload darwin-arm64 release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-darwin-arm64
+          path: |
+            dist/forestrie-darwin-arm64
+            dist/forestrie-darwin-arm64.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: [build-linux, build-darwin]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: upload
+
+      - name: Verify checksums and stage assets
+        run: |
+          set -euo pipefail
+          cd upload
+          shasum -a 256 -c forestrie-linux-x64.sha256 forestrie-darwin-arm64.sha256
+          chmod +x forestrie-linux-x64 forestrie-darwin-arm64
+          ls -l
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          assets=(
+            upload/forestrie-linux-x64
+            upload/forestrie-linux-x64.sha256
+            upload/forestrie-darwin-arm64
+            upload/forestrie-darwin-arm64.sha256
+          )
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --generate-notes "${assets[@]}"
+          fi

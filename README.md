@@ -25,6 +25,27 @@ The demo the subcommands serve:
 Adoption Call, initiative
 [MMR Profile Adoption Call Demo](https://linear.app/forestrie/initiative/mmr-profile-adoption-call-demo-3822bf4c5af7)).
 
+## Install from a release
+
+Every [GitHub release](https://github.com/forestrie/forestrie-cli/releases)
+attaches prebuilt static binaries — `forestrie-darwin-arm64` and
+`forestrie-linux-x64` — each with a `.sha256` sidecar. No runtime is
+needed; just download, verify, and run:
+
+```bash
+target=darwin-arm64   # or: linux-x64
+base=https://github.com/forestrie/forestrie-cli/releases/latest/download
+curl -fsSLO "${base}/forestrie-${target}"
+curl -fsSLO "${base}/forestrie-${target}.sha256"
+shasum -a 256 -c "forestrie-${target}.sha256"
+chmod +x "forestrie-${target}"
+./forestrie-${target} --help
+```
+
+Releases are cut by pushing a `v*` tag; the workflow fails closed unless
+the tag matches the `package.json` version
+([.github/workflows/release.yml](./.github/workflows/release.yml)).
+
 ## Install from source
 
 Requires [Bun](https://bun.sh) (pinned in `mise.toml`; `mise install`
