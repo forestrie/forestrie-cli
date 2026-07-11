@@ -3,10 +3,15 @@ import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+// `cbor-x` is a transitive dependency of `@forestrie/encoding` (see
+// test/verify-fixture.ts for the same pattern).
+import { decode as decodeCbor } from "cbor-x";
 import {
+  COSE_ALG_ES256,
   coseUnprotectedToMap,
   decodeCoseSign1,
   encodeCoseProtectedMapBytes,
+  extractAlgFromProtected,
   verifyCoseSign1WithParsedKey,
 } from "@forestrie/encoding";
 import {
@@ -62,6 +67,19 @@ function expectedKid(): Uint8Array {
   xy.set(x, 0);
   xy.set(y, 32);
   return xy.slice(0, ES256_KID_BYTES);
+}
+
+/** Decode a COSE protected-header bstr into a label -> value map. */
+function protectedToMap(protectedBstr: Uint8Array): Map<number, unknown> {
+  const decoded = decodeCbor(protectedBstr) as unknown;
+  if (decoded instanceof Map) return decoded as Map<number, unknown>;
+  const out = new Map<number, unknown>();
+  for (const [k, v] of Object.entries(
+    decoded as Record<string, unknown>,
+  )) {
+    out.set(Number(k), v);
+  }
+  return out;
 }
 
 /** As `runCli`, but with binary stdout and optional stdin bytes. */
@@ -120,25 +138,59 @@ describe("sign-statement build (golden path)", () => {
       "application/json",
     );
 
-    // Plain COSE Sign1: untagged array(4), protected as a plain bstr
-    // (0x58 0x24 = bstr(36) for map { 4: kid(32) }) — no cbor-x tag 64.
-    expect(Array.from(statement.subarray(0, 3))).toEqual([0x84, 0x58, 0x24]);
+    // Plain COSE Sign1: untagged array(4), protected as a plain bstr with a
+    // 1-byte length (0x84 0x58 xx head) — no cbor-x tag 64.
+    expect(statement[0]).toBe(0x84);
+    expect(statement[1]).toBe(0x58);
 
     const decoded = decodeCoseSign1(statement);
     expect(decoded).not.toBeNull();
     if (decoded === null) throw new Error("unreachable");
 
-    // Protected header is exactly { 4: kid }.
-    expect(decoded.protectedBstr).toEqual(encodeCoseProtectedMapBytes(key.kid));
+    // Protected header is exactly the canonical
+    // { 1: ES256, 3: cty, 4: kid } map (encoding >= 0.2.0).
+    expect(decoded.protectedBstr).toEqual(
+      encodeCoseProtectedMapBytes(key.kid, {
+        alg: COSE_ALG_ES256,
+        cty: "application/json",
+      }),
+    );
+    // Round-trip decode: alg, cty, and kid are all INSIDE the protected
+    // bstr (F1: nothing interpretable is malleable).
+    const protectedMap = protectedToMap(decoded.protectedBstr);
+    expect(protectedMap.get(1)).toBe(COSE_ALG_ES256);
+    expect(protectedMap.get(COSE_CONTENT_TYPE)).toBe("application/json");
+    expect(
+      Buffer.from(protectedMap.get(4) as Uint8Array).toString("hex"),
+    ).toBe(Buffer.from(key.kid).toString("hex"));
+    expect(extractAlgFromProtected(decoded.protectedBstr)).toBe(
+      COSE_ALG_ES256,
+    );
     // Payload round-trips.
     expect(decoded.payloadBstr).toEqual(PAYLOAD);
-    // Content type (label 3) in the unprotected header.
+    // The unprotected header is empty — cty no longer rides there.
     const unprotected = coseUnprotectedToMap(decoded.unprotected);
-    expect(unprotected.get(COSE_CONTENT_TYPE)).toBe("application/json");
+    expect(unprotected.size).toBe(0);
     // Signature verifies against the public point.
     expect(
       await verifyCoseSign1WithParsedKey(statement, { x, y, curve: "P-256" }),
     ).toBe(true);
+  });
+
+  test("tampering the protected cty invalidates the signature", async () => {
+    const key = await loadEs256SigningKey(pemPath);
+    const statement = await buildSignedStatement(
+      PAYLOAD,
+      key,
+      "application/json",
+    );
+    // Byte 6 sits inside the protected bstr ({1: alg} then the cty label);
+    // the signature covers it, so any flip must fail verification.
+    const tampered = new Uint8Array(statement);
+    tampered[6] = (tampered[6] ?? 0) ^ 0x01;
+    expect(
+      await verifyCoseSign1WithParsedKey(tampered, { x, y, curve: "P-256" }),
+    ).toBe(false);
   });
 
   test("readPayloadBytes surfaces missing files as errors", () => {
@@ -233,10 +285,14 @@ describe("forestrie sign-statement (CLI)", () => {
       Buffer.from(report["statementB64"] as string, "base64"),
     );
     expect(statement.length).toBe(report["statementBytes"] as number);
-    const unprotected = coseUnprotectedToMap(
-      decodeCoseSign1(statement)?.unprotected,
-    );
-    expect(unprotected.get(COSE_CONTENT_TYPE)).toBe("text/plain");
+    const decoded = decodeCoseSign1(statement);
+    expect(decoded).not.toBeNull();
+    if (decoded === null) throw new Error("unreachable");
+    // Content type is in the PROTECTED header; unprotected stays empty.
+    const protectedMap = protectedToMap(decoded.protectedBstr);
+    expect(protectedMap.get(COSE_CONTENT_TYPE)).toBe("text/plain");
+    expect(protectedMap.get(1)).toBe(COSE_ALG_ES256);
+    expect(coseUnprotectedToMap(decoded.unprotected).size).toBe(0);
     expect(
       await verifyCoseSign1WithParsedKey(statement, { x, y, curve: "P-256" }),
     ).toBe(true);

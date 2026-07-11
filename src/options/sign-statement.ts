@@ -12,7 +12,7 @@ export type SignStatementOptions = ForestrieCommonOptions & {
   key: string;
   /** Payload file to wrap as the COSE Sign1 payload (`-` = stdin). */
   payload: string;
-  /** Payload content type (COSE `content type` header, label 3). */
+  /** Payload content type (COSE `content type` header, label 3, protected). */
   contentType: string;
   /** Signed statement output path (default: stdout). */
   out: string | undefined;

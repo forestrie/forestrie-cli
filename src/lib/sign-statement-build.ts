@@ -3,30 +3,23 @@
  * (FOR-341).
  *
  * The signed statement is a plain COSE Sign1 (forestrie-demo-01.md, answer
- * 5): protected header `{4: kid}`, ES256 signature via
- * `@forestrie/encoding` `signCoseSign1Statement`. The payload content type
- * (COSE header label 3, RFC 9052 §3.1) rides in the unprotected header.
+ * 5) with **all interpretable labels in the protected header**:
+ * `{1: alg (ES256, -7), 3: cty, 4: kid}`, signed via `@forestrie/encoding`
+ * `signCoseSign1Statement` (encoding >= 0.2.0). Nothing rides unprotected —
+ * per SCITT, the content type that tells a relying party how to interpret
+ * the signed bytes must be covered by the signature (review F1,
+ * plan-2607-14 W1.2), and the algorithm is pinned the same way.
  *
- * The final four-tuple is emitted with the canonical raw-CBOR helpers
- * rather than `mergeUnprotectedIntoCoseSign1`: the cbor-x re-encode path
- * wraps bstrs in tag 64 (typed array), which strict "plain COSE Sign1"
- * consumers (any SCRAPI client) may reject. The signed bytes (protected
- * header, payload, signature) are byte-identical either way — unprotected
- * headers are outside the Sig_structure.
+ * The encoder emits canonical tag-free CBOR, so the wire stays a plain
+ * untagged four-tuple (`84 58 xx ...`) that strict "plain COSE Sign1"
+ * consumers (any SCRAPI client) accept — no cbor-x tag 64 re-encode
+ * workaround is needed now that no unprotected header is merged in.
  */
 import { readFileSync } from "node:fs";
-import {
-  appendCborBstr,
-  appendCborText,
-  decodeCoseSign1,
-  signCoseSign1Statement,
-} from "@forestrie/encoding";
-import {
-  errorMessage,
-  type Es256SigningKey,
-} from "./sign-statement-key.js";
+import { COSE_ALG_ES256, signCoseSign1Statement } from "@forestrie/encoding";
+import { errorMessage, type Es256SigningKey } from "./sign-statement-key.js";
 
-/** COSE header label for content type (RFC 9052 §3.1). */
+/** COSE header label for content type (RFC 9052 §3.1) — protected. */
 export const COSE_CONTENT_TYPE = 3;
 
 /**
@@ -48,33 +41,22 @@ export function readPayloadBytes(pathOrDash: string): Uint8Array {
 /**
  * Sign `payload` as a plain COSE Sign1 signed statement.
  *
+ * Protected header carries `{1: ES256, 3: contentType, 4: kid}`; the
+ * unprotected header is empty. The signature covers alg and cty (they are
+ * inside the protected bstr in the Sig_structure).
+ *
  * @param payload - Statement payload bytes
  * @param key - Loaded ES256 signing key (kid = first 32 bytes of `x||y`)
- * @param contentType - COSE content type header value (label 3)
- * @returns CBOR COSE Sign1 bytes
+ * @param contentType - COSE content type header value (label 3, protected)
+ * @returns CBOR COSE Sign1 bytes (untagged array(4))
  */
 export async function buildSignedStatement(
   payload: Uint8Array,
   key: Es256SigningKey,
   contentType: string,
 ): Promise<Uint8Array> {
-  const coseSign1 = await signCoseSign1Statement(
-    payload,
-    key.kid,
-    key.privateKey,
-  );
-  const decoded = decodeCoseSign1(coseSign1);
-  if (decoded === null) {
-    throw new Error("signCoseSign1Statement produced invalid COSE Sign1");
-  }
-
-  // Canonical plain COSE Sign1: array(4) of untagged bstrs, unprotected
-  // map(1) { 3: contentType }.
-  const bytes: number[] = [0x84]; // array(4)
-  appendCborBstr(bytes, decoded.protectedBstr);
-  bytes.push(0xa1, COSE_CONTENT_TYPE); // map(1) { 3: tstr }
-  appendCborText(bytes, contentType);
-  appendCborBstr(bytes, payload);
-  appendCborBstr(bytes, decoded.signature);
-  return new Uint8Array(bytes);
+  return signCoseSign1Statement(payload, key.kid, key.privateKey, {
+    alg: COSE_ALG_ES256,
+    cty: contentType,
+  });
 }
