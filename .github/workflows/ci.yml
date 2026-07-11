@@ -1,0 +1,79 @@
+name: CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Typecheck, test, binary smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+
+      # No registry credentials are mounted anywhere in this workflow:
+      # a passing install IS the tokenless-install acceptance check
+      # (plan-2607-12).
+      - name: Install dependencies (tokenless)
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun run test
+
+      - name: Build binary (linux-x64)
+        run: bun run build:binary:linux-x64
+
+      - name: Smoke test forestrie --help
+        run: ./dist/forestrie-linux-x64 --help
+
+      - name: Smoke test structured not-implemented errors
+        run: |
+          set -x
+          run_expect_1() {
+            "$@" && exit 1 || test $? -eq 1
+          }
+          run_expect_1 ./dist/forestrie-linux-x64 deploy --rpc-url http://localhost:8545
+          run_expect_1 ./dist/forestrie-linux-x64 sign-statement --key k.pem --payload p.json
+          run_expect_1 ./dist/forestrie-linux-x64 register --base-url https://x --log-id L --statement s.cose --grant-b64 AAAA
+          run_expect_1 ./dist/forestrie-linux-x64 register-grant --base-url https://x --owner-log A --data-log B --sign-with k.pem --self-referential
+          run_expect_1 ./dist/forestrie-linux-x64 complete-grant --grant g.b64 --checkpoint c.sth
+          run_expect_1 ./dist/forestrie-linux-x64 create-receipt --massif m.log --mmr-index 0 --checkpoint c.sth
+          run_expect_1 ./dist/forestrie-linux-x64 decode-receipt r.cbor
+          run_expect_1 ./dist/forestrie-linux-x64 verify --genesis g.cbor --receipt r.cbor --grant-b64 AAAA
+          # --json output must parse as JSON
+          ./dist/forestrie-linux-x64 verify --json --genesis g.cbor --receipt r.cbor --grant-b64 AAAA > verify.json || test $? -eq 1
+          jq -e '.error == "not_implemented" and .issue == "FOR-347"' verify.json
+
+  darwin-smoke:
+    name: Darwin binary smoke
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+
+      - name: Install dependencies (tokenless)
+        run: bun install --frozen-lockfile
+
+      - name: Build darwin-arm64 binary
+        run: bun run build:binary:darwin-arm64
+
+      - name: Smoke test forestrie --help
+        run: ./dist/forestrie-darwin-arm64 --help

@@ -1,0 +1,4 @@
+# forestrie-cli: Bun for the TypeScript CLI and static binary compile.
+
+[tools]
+bun = "1.2.21"
