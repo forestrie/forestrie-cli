@@ -21,7 +21,8 @@ export type RegisterFlowStage =
   | "register" // POST /register/{logId}/entries rejected
   | "status" // query-registration-status broke the 303 contract
   | "receipt" // resolve-receipt answered non-200/404
-  | "timeout"; // `--timeout` budget exhausted while pending
+  | "network" // fetch itself failed (ECONNREFUSED, DNS, reset) — no response
+  | "timeout"; // `--timeout` budget exhausted (pending, or a hung request)
 
 export class RegisterFlowError extends Error {
   readonly stage: RegisterFlowStage;
@@ -100,6 +101,77 @@ export type RegisterFlowResult = {
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+/** One line for a transport failure: `code: message (cause)` where known. */
+function describeFetchError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const code = (err as { code?: unknown }).code;
+  const cause =
+    err.cause instanceof Error && err.cause.message !== err.message
+      ? ` (${err.cause.message})`
+      : "";
+  return typeof code === "string" && code !== "" && !err.message.includes(code)
+    ? `${code}: ${err.message}${cause}`
+    : `${err.message}${cause}`;
+}
+
+function requestUrl(input: Parameters<typeof fetch>[0]): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
+/**
+ * F4 (plan-2607-14 W1.4): bound every request with an AbortSignal tied to
+ * the remaining `--timeout` budget — a hung server cannot stall the flow
+ * past the deadline (the deadline was previously only checked BETWEEN
+ * polls) — and map fetch-level failures (ECONNREFUSED, DNS, resets) into
+ * the `RegisterFlowError` taxonomy instead of letting bare TypeErrors
+ * escape as unstructured crashes.
+ *
+ * The timer uses real wall-clock (`setTimeout`) while `remaining` comes
+ * from the injectable `now` — with a fake clock the fake fetch resolves
+ * immediately and the timer is cleared before it can fire.
+ */
+function boundedFetch(
+  baseFetch: typeof fetch,
+  now: () => number,
+  deadline: number,
+  timeoutMs: number,
+): typeof fetch {
+  return (async (
+    input: Parameters<typeof fetch>[0],
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      throw new RegisterFlowError(
+        `timed out after ${timeoutMs}ms waiting for the receipt`,
+        { stage: "timeout" },
+      );
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), remaining);
+    try {
+      return await baseFetch(input, { ...init, signal: controller.signal });
+    } catch (err) {
+      if (err instanceof RegisterFlowError) throw err;
+      const url = requestUrl(input);
+      if (controller.signal.aborted) {
+        throw new RegisterFlowError(
+          `timed out after ${timeoutMs}ms: no response from ${url} within the --timeout budget`,
+          { stage: "timeout", detail: url },
+        );
+      }
+      throw new RegisterFlowError(
+        `request to ${url} failed: ${describeFetchError(err)}`,
+        { stage: "network", detail: describeFetchError(err) },
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }) as typeof fetch;
+}
+
 /**
  * Register `statement` and wait for its receipt: POST → 303 status URL →
  * poll query-registration-status until the receipt redirect → poll
@@ -109,11 +181,16 @@ export async function runRegisterFlow(
   params: RegisterFlowParams,
   deps: RegisterFlowDeps = {},
 ): Promise<RegisterFlowResult> {
-  const fetchImpl = deps.fetchImpl ?? fetch;
   const sleep = deps.sleep ?? defaultSleep;
   const now = deps.now ?? Date.now;
   const onProgress = deps.onProgress ?? (() => {});
   const deadline = now() + params.timeoutMs;
+  const fetchImpl = boundedFetch(
+    deps.fetchImpl ?? fetch,
+    now,
+    deadline,
+    params.timeoutMs,
+  );
 
   const paceOrTimeout = async (
     waitMs: number,

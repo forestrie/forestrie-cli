@@ -49,7 +49,7 @@ exports[`forestrie decode-receipt (CLI) --json output is stable (snapshot) 1`] =
       "hex": "6c6c6c6c6c6c6c6c6c6c6c6c",
     },
     "vds": {
-      "name": "MMRIVER (draft-bryce COSE MMR proofs)",
+      "name": "MMR profile (draft-bryce, codepoint TBD)",
       "value": 3,
     },
   },

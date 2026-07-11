@@ -35,6 +35,7 @@ export type RegisterErrorReport = {
     | "registration_failed"
     | "status_failed"
     | "receipt_failed"
+    | "network_failed"
     | "timeout";
   command: "register";
   message: string;
@@ -55,6 +56,7 @@ const FLOW_ERROR_CODES = {
   register: "registration_failed",
   status: "status_failed",
   receipt: "receipt_failed",
+  network: "network_failed",
   timeout: "timeout",
 } as const;
 
