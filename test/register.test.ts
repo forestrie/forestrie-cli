@@ -222,6 +222,135 @@ describe("runRegisterFlow", () => {
     expect(flowErr.statusUrl).toBe(`${BASE}${STATUS_PATH}`);
     expect(clock.waits).toEqual([100, 100, 100, 100]); // stops at 400 < 450
   });
+
+  test("F4: connection-refused fetch failure maps to stage network", async () => {
+    const err = await runRegisterFlow(flowParams, {
+      fetchImpl: (async () => {
+        throw Object.assign(
+          new TypeError("Unable to connect. Is the computer able to access the url?"),
+          { code: "ConnectionRefused" },
+        );
+      }) as unknown as typeof fetch,
+      ...fakeClock(),
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(RegisterFlowError);
+    const flowErr = err as RegisterFlowError;
+    expect(flowErr.stage).toBe("network");
+    expect(flowErr.message).toContain(`/register/${LOG_ID}/entries`);
+    expect(flowErr.message).toContain("ConnectionRefused");
+    expect(flowErr.detail).toContain("Unable to connect");
+  });
+
+  test("F4: DNS failure mid-flow (status poll) maps to stage network", async () => {
+    const err = await runRegisterFlow(flowParams, {
+      fetchImpl: (async (
+        input: Parameters<typeof fetch>[0],
+        init?: RequestInit,
+      ) => {
+        if ((init?.method ?? "GET") === "POST") return see(STATUS_PATH);
+        throw Object.assign(new Error("getaddrinfo ENOTFOUND scrapi.example"), {
+          code: "ENOTFOUND",
+        });
+      }) as unknown as typeof fetch,
+      ...fakeClock(),
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(RegisterFlowError);
+    const flowErr = err as RegisterFlowError;
+    expect(flowErr.stage).toBe("network");
+    expect(flowErr.detail).toContain("ENOTFOUND");
+  });
+
+  test("F4: every request carries an AbortSignal bounded by the remaining budget", async () => {
+    const signals: (AbortSignal | null | undefined)[] = [];
+    await runRegisterFlow(flowParams, {
+      fetchImpl: (async (
+        input: Parameters<typeof fetch>[0],
+        init?: RequestInit,
+      ) => {
+        signals.push(init?.signal);
+        const url = new URL(String(input));
+        if ((init?.method ?? "GET") === "POST") return see(STATUS_PATH);
+        if (url.pathname === STATUS_PATH) return see(RECEIPT_PATH);
+        return new Response(RECEIPT, { status: 200 });
+      }) as unknown as typeof fetch,
+      ...fakeClock(),
+    });
+    expect(signals).toHaveLength(3);
+    for (const signal of signals) {
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal!.aborted).toBe(false); // cleared, not fired
+    }
+  });
+
+  test("F4: a hanging fake fetch is aborted by the budget timer → stage timeout", async () => {
+    // Real clock/timer (no fakeClock): the fetch never resolves on its
+    // own — it only rejects when the flow's per-request AbortSignal
+    // fires, exactly like a hung socket.
+    const err = await runRegisterFlow(
+      { ...flowParams, timeoutMs: 100 },
+      {
+        fetchImpl: ((
+          _input: Parameters<typeof fetch>[0],
+          init?: RequestInit,
+        ) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("The operation was aborted.", "AbortError")),
+            );
+          })) as unknown as typeof fetch,
+      },
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(RegisterFlowError);
+    const flowErr = err as RegisterFlowError;
+    expect(flowErr.stage).toBe("timeout");
+    expect(flowErr.message).toContain("--timeout");
+  }, 5_000);
+});
+
+describe("runRegisterFlow — hung server (real fetch, real clock)", () => {
+  test("F4: --timeout bounds wall-clock even when the server never answers", async () => {
+    // Deliberately hanging server: accepts the connection, never responds.
+    const hung = Bun.serve({
+      port: 0,
+      fetch() {
+        return new Promise<Response>(() => {});
+      },
+    });
+    try {
+      const timeoutMs = 400;
+      const started = Date.now();
+      const err = await runRegisterFlow(
+        {
+          ...flowParams,
+          baseUrl: `http://127.0.0.1:${hung.port}`,
+          timeoutMs,
+          pollIntervalMs: 50,
+        },
+        // Default deps: REAL fetch, REAL sleep, REAL clock — the previous
+        // implementation hung here forever (deadline only checked
+        // between polls); the AbortSignal now bounds the request itself.
+      ).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      const elapsed = Date.now() - started;
+      expect(err).toBeInstanceOf(RegisterFlowError);
+      expect((err as RegisterFlowError).stage).toBe("timeout");
+      expect(elapsed).toBeGreaterThanOrEqual(timeoutMs - 50);
+      expect(elapsed).toBeLessThan(5_000); // bounded, not hung
+    } finally {
+      hung.stop(true);
+    }
+  }, 10_000);
 });
 
 describe("runRegister (main)", () => {
@@ -285,6 +414,32 @@ describe("runRegister (main)", () => {
     expect(report["error"]).toBe("registration_failed");
     expect(report["httpStatus"]).toBe(404);
     expect(report["problem"]).toEqual({ detail: "log unknown", status: 404 });
+  });
+
+  test("F4: fetch-level failure is a structured network_failed --json error", async () => {
+    const out = createCaptureOut();
+    process.exitCode = 0;
+    await runRegister(out, baseOptions, {
+      readStdin: async () => STATEMENT,
+      fetchImpl: (async () => {
+        throw Object.assign(
+          new TypeError("Unable to connect. Is the computer able to access the url?"),
+          { code: "ConnectionRefused" },
+        );
+      }) as unknown as typeof fetch,
+      ...fakeClock(),
+    });
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+    const report = JSON.parse(
+      out.lines
+        .filter((l) => l.stream === "stdout")
+        .map((l) => l.text)
+        .join("\n"),
+    ) as Record<string, unknown>;
+    expect(report["error"]).toBe("network_failed");
+    expect(report["command"]).toBe("register");
+    expect(String(report["message"])).toContain("ConnectionRefused");
   });
 
   test("missing statement file is a structured error", async () => {
