@@ -84,11 +84,18 @@ export const ALG_NAMES: ReadonlyMap<number, string> = new Map([
   [-65799, "KS256 (secp256k1 + Keccak-256, forestrie private-use)"],
 ]);
 
-/** Verifiable data structure ids (draft-ietf-cose-merkle-tree-proofs registry). */
+/**
+ * Verifiable data structure ids (draft-ietf-cose-merkle-tree-proofs
+ * registry). 3 is NOT a registered codepoint: draft-bryce-cose-merkle-
+ * mountain-range-proofs requests TBD_1 (registration pending), and 3 is
+ * only the value our test fixtures use — production emitters do not emit
+ * header 395 at all. Render it as the draft's unregistered codepoint,
+ * never as registry fact (F7, plan-2607-14 W1.5).
+ */
 export const VDS_NAMES: ReadonlyMap<number, string> = new Map([
   [1, "RFC9162_SHA256 (Certificate Transparency)"],
   [2, "CCF_LEDGER_SHA256"],
-  [3, "MMRIVER (draft-bryce COSE MMR proofs)"],
+  [3, "MMR profile (draft-bryce, codepoint TBD)"],
 ]);
 
 /** CWT claim keys (RFC 8392 §3.1, cnf per RFC 8747). */

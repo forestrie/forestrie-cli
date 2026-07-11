@@ -35,7 +35,10 @@ describe("decodeReceipt (golden fixture)", () => {
       byteLength: 12,
     });
     expect(decoded.protected.vds?.value).toBe(3);
-    expect(decoded.protected.vds?.name).toContain("MMRIVER");
+    // F7: 3 is the draft's UNREGISTERED codepoint (draft-bryce requests
+    // TBD_1) — rendered as such, never asserted as registry fact.
+    expect(decoded.protected.vds?.name).toContain("codepoint TBD");
+    expect(decoded.protected.vds?.name).not.toContain("MMRIVER");
   });
 
   test("inclusion proof summary: index, path length, detached peak", () => {
@@ -88,7 +91,9 @@ describe("renderReceipt (human tree)", () => {
     expect(text).toContain("COSE_Sign1 — tagged 18");
     expect(text).toContain("1 (alg): -7 — ES256");
     expect(text).toContain("4 (kid): 6c6c6c6c6c6c6c6c6c6c6c6c (12 bytes)");
-    expect(text).toContain("395 (verifiable data structure): 3 — MMRIVER");
+    expect(text).toContain(
+      "395 (verifiable data structure): 3 — MMR profile (draft-bryce, codepoint TBD)",
+    );
     expect(text).toContain("396 (verifiable proofs)");
     expect(text).toContain("-1 (inclusion proofs)");
     expect(text).toContain("1 (mmr index): 5");
