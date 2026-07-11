@@ -34,9 +34,10 @@ export type RegisterOptions = ForestrieCommonOptions & {
 
 /**
  * Read `--<name>` as a positive (fractional allowed) number of seconds,
- * returning milliseconds; a missing flag yields the default.
+ * returning milliseconds; a missing flag yields the default. Shared with
+ * `register-grant`, which follows the same 303 receipt-redirect contract.
  */
-function durationOptionMs(
+export function durationOptionMs(
   args: LooseParsedArgs,
   name: string,
   defaultSeconds: number,
