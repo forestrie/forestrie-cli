@@ -8,9 +8,9 @@ import {
 
 /** `forestrie sign-statement` — FOR-341. */
 export type SignStatementOptions = ForestrieCommonOptions & {
-  /** ES256 P-256 PKCS#8 PEM signing key path. */
+  /** ES256 P-256 private signing key path (SEC1/PKCS#8 PEM or JWK). */
   key: string;
-  /** Payload file to wrap as the COSE Sign1 payload. */
+  /** Payload file to wrap as the COSE Sign1 payload (`-` = stdin). */
   payload: string;
   /** Payload content type (COSE `content type` header, label 3). */
   contentType: string;
