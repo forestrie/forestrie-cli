@@ -1,0 +1,186 @@
+import { ethCall, normalizeHexAddress } from "@forestrie/chain-rpc";
+import { verifyCoseSign1WithParsedKey } from "@forestrie/encoding";
+import {
+  decodeTrustRootFromGenesis,
+  parseReceipt,
+} from "@forestrie/receipt-verify";
+
+/**
+ * Chain-anchored receipt check (FOR-347 / demo step 5a): read the
+ * Univocity `logState(bytes32)` accumulator over JSON-RPC and assert the
+ * receipt's peak is one of the anchored accumulator peaks. This is the
+ * ONLY networked path in `forestrie verify`; the core verify stays pure
+ * over bytes.
+ *
+ * Anchoring test: for a detached-payload receipt the checkpoint signature
+ * covers the peak (COSE detached content), so the peak the receipt commits
+ * to is exactly the one the signature verifies over. We therefore try the
+ * genesis trust key against each on-chain accumulator peak as the detached
+ * payload — a match proves the signed peak is on-chain, and the offline
+ * verify already proved leaf inclusion under that same signed peak. For an
+ * attached-payload receipt the peak is explicit and byte-compared.
+ */
+
+/** Selector for `logState(bytes32)` (arbor publishproof Univocity ABI). */
+const LOG_STATE_SELECTOR = "0xeecac1b7";
+
+export type OnChainLogState = {
+  /** Anchored accumulator peaks (32 bytes each), contract order. */
+  accumulator: Uint8Array[];
+  /** Anchored MMR size. */
+  size: bigint;
+};
+
+export type AnchorCheck = OnChainLogState & {
+  /** True when the receipt's peak is one of the anchored accumulator peaks. */
+  anchored: boolean;
+  /** Index of the matched accumulator peak, or null. */
+  matchedPeak: number | null;
+  /** Stable failure token when not anchored. */
+  reason?: string;
+};
+
+/**
+ * Normalize a log id (UUID with dashes, 32-hex UUID form, or 64-hex
+ * contract form) to the 32-byte contract key: Univocity stores logs with
+ * the UUID in the low 16 bytes, zero-padded on the left.
+ */
+export function toContractLogId(logId: string): string {
+  const hex = logId.replace(/-/g, "").replace(/^0x/, "").toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(hex) && !/^[0-9a-f]{64}$/.test(hex)) {
+    throw new Error(
+      `--log-id must be a UUID or 16/32-byte hex id, got '${logId}'`,
+    );
+  }
+  return "0x" + hex.padStart(64, "0");
+}
+
+function readWord(hex: string, wordIndex: number): bigint {
+  const start = wordIndex * 64;
+  if (hex.length < start + 64) {
+    throw new Error(
+      `logState result too short: need word ${wordIndex}, have ${hex.length} hex chars`,
+    );
+  }
+  return BigInt("0x" + hex.slice(start, start + 64));
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+/**
+ * Decode the `logState(bytes32)` return — the dynamic tuple
+ * `(bytes32[] accumulator, uint64 size)`: word0 = offset to the tuple,
+ * then relative to the tuple start: word = offset to the accumulator
+ * array, word = `size`, and the array as length + elements.
+ */
+export function decodeLogStateResult(resultHex: string): OnChainLogState {
+  const hex = resultHex.replace(/^0x/, "");
+  if (hex.length === 0) {
+    throw new Error("logState returned empty result (log not found?)");
+  }
+  const tupleOffset = readWord(hex, 0);
+  const base = Number(tupleOffset) / 32; // word index of the tuple start
+  const accumulatorOffset = readWord(hex, base);
+  const size = readWord(hex, base + 1);
+  const arrayBase = base + Number(accumulatorOffset) / 32;
+  const length = Number(readWord(hex, arrayBase));
+  const accumulator: Uint8Array[] = [];
+  for (let i = 0; i < length; i++) {
+    const start = (arrayBase + 1 + i) * 64;
+    if (hex.length < start + 64) {
+      throw new Error(
+        `logState accumulator truncated at peak ${i} of ${length}`,
+      );
+    }
+    accumulator.push(hexToBytes(hex.slice(start, start + 64)));
+  }
+  return { accumulator, size };
+}
+
+/** `eth_call` `logState(logId)` via `@forestrie/chain-rpc`. */
+export async function fetchOnChainLogState(opts: {
+  univocity: string;
+  logId: string;
+  rpcUrl: string;
+}): Promise<OnChainLogState> {
+  const address = normalizeHexAddress(opts.univocity);
+  if (address === null) {
+    throw new Error(`--univocity is not a valid address: '${opts.univocity}'`);
+  }
+  const data = LOG_STATE_SELECTOR + toContractLogId(opts.logId).slice(2);
+  const result = await ethCall(opts.rpcUrl, `0x${address}`, data);
+  if (typeof result !== "string" || result === "0x") {
+    throw new Error(
+      `logState eth_call returned no data for log ${opts.logId} at ${opts.univocity}`,
+    );
+  }
+  return decodeLogStateResult(result);
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let x = 0;
+  for (let i = 0; i < a.length; i++) x |= a[i]! ^ b[i]!;
+  return x === 0;
+}
+
+/**
+ * Assert the receipt's peak is anchored in the on-chain accumulator.
+ * Call only after the offline verify passed (the signature/inclusion/
+ * binding layers are its job; this adds the contract anchor).
+ */
+export async function checkReceiptAnchored(opts: {
+  genesisCbor: Uint8Array;
+  receiptCbor: Uint8Array;
+  univocity: string;
+  logId: string;
+  rpcUrl: string;
+}): Promise<AnchorCheck> {
+  const { explicitPeak } = parseReceipt(opts.receiptCbor);
+  const trustRoot = await decodeTrustRootFromGenesis(opts.genesisCbor);
+  if (explicitPeak === null && !(trustRoot instanceof CryptoKey)) {
+    // Detached receipts locate their peak via the ES256 signature; a
+    // KS256 root cannot verify here (same surface as `no_es256_trust_key`).
+    return {
+      accumulator: [],
+      size: 0n,
+      anchored: false,
+      matchedPeak: null,
+      reason: "no_es256_trust_key",
+    };
+  }
+
+  const state = await fetchOnChainLogState(opts);
+
+  let matchedPeak: number | null = null;
+  for (let i = 0; i < state.accumulator.length; i++) {
+    const peak = state.accumulator[i]!;
+    if (explicitPeak !== null) {
+      if (bytesEqual(explicitPeak, peak)) {
+        matchedPeak = i;
+        break;
+      }
+    } else if (
+      await verifyCoseSign1WithParsedKey(opts.receiptCbor, trustRoot as CryptoKey, {
+        detachedPayload: peak,
+      })
+    ) {
+      matchedPeak = i;
+      break;
+    }
+  }
+
+  const anchored = matchedPeak !== null;
+  return {
+    ...state,
+    anchored,
+    matchedPeak,
+    ...(anchored ? {} : { reason: "peak_not_in_onchain_accumulator" }),
+  };
+}

@@ -161,4 +161,39 @@ describe("parseVerifyOptions", () => {
       }),
     ).toThrow(/--entry-id/);
   });
+
+  const base = {
+    genesis: "g.cbor",
+    receipt: "r.cbor",
+    "grant-b64": "AAAA",
+  };
+
+  test("defaults to the offline anchor (no network)", () => {
+    expect(parseVerifyOptions({ ...base }).anchor).toBe("offline");
+  });
+
+  test("univocity selects chain mode and requires log-id + rpc-url", () => {
+    delete process.env["RPC_URL"];
+    expect(() =>
+      parseVerifyOptions({ ...base, univocity: "0xabc" }),
+    ).toThrow(/--univocity, --log-id and --rpc-url/);
+    const options = parseVerifyOptions({
+      ...base,
+      univocity: "0xabc",
+      "log-id": "L",
+      "rpc-url": "http://x",
+    });
+    expect(options.anchor).toBe("chain");
+  });
+
+  test("chain mode rpc-url falls back to RPC_URL env", () => {
+    process.env["RPC_URL"] = "http://from-env";
+    const options = parseVerifyOptions({
+      ...base,
+      univocity: "0xabc",
+      "log-id": "L",
+    });
+    expect(options.anchor).toBe("chain");
+    expect(options.rpcUrl).toBe("http://from-env");
+  });
 });

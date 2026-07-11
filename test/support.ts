@@ -104,15 +104,9 @@ export const SUBCOMMANDS: Record<
     issue: "FOR-346",
     args: ["receipt.cbor"],
   },
-  verify: {
-    issue: "FOR-347",
-    args: [
-      "--genesis",
-      "genesis.cbor",
-      "--receipt",
-      "receipt.cbor",
-      "--grant-b64",
-      "AAAA",
-    ],
-  },
+};
+
+/** Implemented subcommands (graduated out of the stub set; help coverage only). */
+export const IMPLEMENTED_SUBCOMMANDS: Record<string, { issue: string }> = {
+  verify: { issue: "FOR-347" },
 };

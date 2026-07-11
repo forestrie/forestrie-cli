@@ -6,7 +6,7 @@ export default defineForestrieCommand({
   meta: {
     name: "verify",
     description:
-      "Verify a receipt offline against the cached checkpoint (ES256 only; no network) — the same closer for every demo step [FOR-347]",
+      "Verify a receipt offline against the cached checkpoint (ES256 only; no network) — the same closer for every demo step; add --univocity/--log-id/--rpc-url to also check the on-chain accumulator [FOR-347]",
   },
   args: {
     genesis: {
@@ -36,6 +36,23 @@ export default defineForestrieCommand({
       type: "string",
       description: "Entry id within the grant CBOR (with --grant)",
       valueHint: "id",
+    },
+    univocity: {
+      type: "string",
+      description:
+        "ImutableUnivocity contract address — enables the chain-anchored check (with --log-id and --rpc-url)",
+      valueHint: "address",
+    },
+    "log-id": {
+      type: "string",
+      description: "Log id (UUID or hex) for the on-chain accumulator read",
+      valueHint: "uuid",
+    },
+    "rpc-url": {
+      type: "string",
+      description:
+        "JSON-RPC endpoint for the chain-anchored check (default: ${env} → RPC_URL)",
+      valueHint: "url",
     },
   },
   run: defineCommandRunner(parseVerifyOptions, runVerify),
