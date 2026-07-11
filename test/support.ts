@@ -45,10 +45,14 @@ export function runCli(
   };
 }
 
-/** Minimal valid argv per subcommand (parse succeeds; run is the stub). */
+/**
+ * Minimal valid argv per subcommand (parse succeeds). `implemented`
+ * commands have real behaviour — the not-implemented stub contract
+ * no longer applies to them (they have their own test files).
+ */
 export const SUBCOMMANDS: Record<
   string,
-  { issue: string; args: string[] }
+  { issue: string; args: string[]; implemented?: boolean }
 > = {
   deploy: {
     issue: "FOR-340",
@@ -103,6 +107,7 @@ export const SUBCOMMANDS: Record<
   "decode-receipt": {
     issue: "FOR-346",
     args: ["receipt.cbor"],
+    implemented: true,
   },
   verify: {
     issue: "FOR-347",
