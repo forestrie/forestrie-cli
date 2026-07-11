@@ -6,19 +6,20 @@ import {
 
 /** `forestrie decode-receipt` — FOR-346. */
 export type DecodeReceiptOptions = ForestrieCommonOptions & {
-  /** COSE receipt file to decode (Sign1 + MMR inclusion). */
-  receipt: string;
+  /**
+   * COSE receipt file to decode (Sign1 + MMR inclusion).
+   * Omitted or `-`: read the receipt CBOR from stdin.
+   */
+  receipt?: string;
 };
 
 export function parseDecodeReceiptOptions(
   args: LooseParsedArgs,
 ): DecodeReceiptOptions {
+  const options: DecodeReceiptOptions = parseForestrieCommonOptions(args);
   const receipt = typeof args["receipt"] === "string" ? args["receipt"] : "";
-  if (receipt === "") {
-    throw new Error("missing required positional: receipt file");
+  if (receipt !== "") {
+    options.receipt = receipt;
   }
-  return {
-    ...parseForestrieCommonOptions(args),
-    receipt,
-  };
+  return options;
 }

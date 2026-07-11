@@ -1,0 +1,100 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`forestrie decode-receipt (CLI) --json output is stable (snapshot) 1`] = `
+{
+  "byteLength": 304,
+  "inclusion": {
+    "mmrIndex": "5",
+    "path": [
+      "1111111111111111111111111111111111111111111111111111111111111111",
+      "2222222222222222222222222222222222222222222222222222222222222222",
+      "3333333333333333333333333333333333333333333333333333333333333333",
+    ],
+    "pathLength": 3,
+    "peakHex": null,
+    "peakSource": "derived at verify time (detached payload)",
+  },
+  "payload": {
+    "detached": true,
+  },
+  "protected": {
+    "alg": {
+      "name": "ES256 (ECDSA P-256 + SHA-256)",
+      "value": -7,
+    },
+    "byteLength": 21,
+    "cwtClaims": null,
+    "entries": [
+      {
+        "label": 1,
+        "name": "alg",
+        "note": null,
+        "value": -7,
+      },
+      {
+        "label": 4,
+        "name": "kid",
+        "note": null,
+        "value": "h'6c6c6c6c6c6c6c6c6c6c6c6c'",
+      },
+      {
+        "label": 395,
+        "name": "verifiable data structure",
+        "note": "COSE receipts (draft)",
+        "value": 3,
+      },
+    ],
+    "kid": {
+      "byteLength": 12,
+      "hex": "6c6c6c6c6c6c6c6c6c6c6c6c",
+    },
+    "vds": {
+      "name": "MMRIVER (draft-bryce COSE MMR proofs)",
+      "value": 3,
+    },
+  },
+  "signature": {
+    "byteLength": 64,
+    "hex": "99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999",
+  },
+  "tag": 18,
+  "unprotected": {
+    "delegation": {
+      "byteLength": 81,
+      "nestedCoseSign1": true,
+    },
+    "entries": [
+      {
+        "label": 396,
+        "name": "verifiable proofs",
+        "note": "COSE receipts (draft)",
+        "value": {
+          "-1": [
+            {
+              "1": 5,
+              "2": [
+                "h'1111111111111111111111111111111111111111111111111111111111111111'",
+                "h'2222222222222222222222222222222222222222222222222222222222222222'",
+                "h'3333333333333333333333333333333333333333333333333333333333333333'",
+              ],
+            },
+          ],
+        },
+      },
+      {
+        "label": 1000,
+        "name": "delegation certificate",
+        "note": "forestrie: Custodian per-log delegation (nested COSE_Sign1)",
+        "value": "h'8443a10126a048abababababababab5840cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd'",
+      },
+      {
+        "label": -70000,
+        "name": null,
+        "note": null,
+        "value": "mystery",
+      },
+    ],
+    "peakReceipts": null,
+  },
+}
+`;

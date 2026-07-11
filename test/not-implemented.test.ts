@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { runCli, SUBCOMMANDS } from "./support.js";
 
 describe("subcommand stubs", () => {
-  for (const [name, spec] of Object.entries(SUBCOMMANDS)) {
+  const stubs = Object.entries(SUBCOMMANDS).filter(
+    ([, spec]) => !spec.implemented,
+  );
+  for (const [name, spec] of stubs) {
     test(`${name}: human mode exits non-zero with the ${spec.issue} message`, () => {
       const result = runCli([name, ...spec.args]);
       expect(result.exitCode).toBe(1);
