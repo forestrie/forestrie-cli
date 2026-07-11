@@ -61,6 +61,7 @@ export const SUBCOMMANDS: Record<
   "sign-statement": {
     issue: "FOR-341",
     args: ["--key", "alice.es256.pem", "--payload", "statement.json"],
+    implemented: true,
   },
   register: {
     issue: "FOR-342",
