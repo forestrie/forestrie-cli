@@ -2,7 +2,7 @@
   "name": "@forestrie/forestrie-cli",
   "version": "0.1.0",
   "private": true,
-  "description": "forestrie \u2014 single-binary participant CLI for forestrie transparency logs",
+  "description": "forestrie — single-binary participant CLI for forestrie transparency logs",
   "type": "module",
   "bin": {
     "forestrie": "./dist/cli.js"
@@ -17,6 +17,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@forestrie/chain-rpc": "^0.1.1",
     "@forestrie/cli-kit": "^0.1.0",
     "@forestrie/delegation-cose": "^0.1.3",
     "@forestrie/deploy-core": "^0.6.0",
