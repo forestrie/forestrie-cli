@@ -19,6 +19,7 @@ import {
   buildCreateReceiptFixture,
   buildMultiPeakFixture,
   buildV2CheckpointBytes,
+  buildV2MassifBytes,
   tamperMassifSibling,
   type CreateReceiptFixture,
   type MultiPeakFixture,
@@ -47,6 +48,17 @@ beforeAll(async () => {
     buildV2CheckpointBytes({ mmrSize: 8n, peakReceipts: [] }),
   );
   writeFileSync(file("checkpoint-garbage.sth"), new Uint8Array([1, 2, 3]));
+  // A massif blob for a DIFFERENT massif than leaf 1: massifIndex 1 holds mmr
+  // indexes 7..10, so a request for leaf mmrIndex 1 falls below firstIndex —
+  // the chain-mode wrong_massif pre-check (plan-2607-18 W3, V2/V3).
+  writeFileSync(
+    file("massif-other.log"),
+    buildV2MassifBytes({
+      massifHeight: 3,
+      massifIndex: 1,
+      logHashes: Array.from({ length: 4 }, () => new Uint8Array(32)),
+    }),
+  );
   writeFileSync(file("genesis.cbor"), fx.genesisCbor);
   writeFileSync(file("grant1.cbor"), encodeGrantPayload(fx.leaf1.grant));
 });
@@ -500,6 +512,78 @@ describe("create-receipt chain mode (report-only; plan-2607-15 §3, FOR-345)", (
     expect(report.onchain.size).toBe("8");
     expect(report.peakCheck).toBeUndefined();
   });
+
+  test("wrong_massif: blob is for a different massif than the leaf, exit 5", async () => {
+    // plan-2607-18 W3 (V2/V3): massif-other.log is massifIndex 1 (holds mmr
+    // indexes 7..10); leaf 1 falls below its firstIndex, so the leaf's path
+    // cannot be built from this blob. Previously misreported as `coverage`
+    // ("fetch the covering massif") — a misleading remedy; the fix is a
+    // DIFFERENT massif, not a later one. On-chain size 8 keeps the leaf
+    // anchored (mmrIndex 1 < 8) so the wrong_massif pre-check (not
+    // not_yet_anchored) is what fires.
+    const result = await createReceiptInProcess(
+      chainArgs({ massif: file("massif-other.log"), json: true }),
+      rpcFetch([fx.n2], 8n),
+    );
+    expect(result.exitCode).toBe(5);
+    const report = JSON.parse(result.stdout) as CreateReceiptChainReport;
+    expect(report.ok).toBe(false);
+    expect(report.outcome).toBe("wrong_massif");
+    // The blob's own window is reported; the leaf sits outside it.
+    expect(report.massif).toEqual({
+      massifIndex: "1",
+      massifHeight: 3,
+      firstIndex: "7",
+      lastIndex: "10",
+    });
+    expect(report.leaf.mmrIndex).toBe("1");
+    // No peak was computed — the pre-check short-circuits before it.
+    expect(report.peakCheck).toBeUndefined();
+  });
+
+  test("wrong_massif (human mode): FAIL names the mmrIndex to supply", async () => {
+    const result = await createReceiptInProcess(
+      chainArgs({ massif: file("massif-other.log") }),
+      rpcFetch([fx.n2], 8n),
+    );
+    expect(result.exitCode).toBe(5);
+    expect(result.stdout).toContain("FAIL: wrong_massif");
+    expect(result.stdout).toContain("mmrIndex 1");
+  });
+
+  test("accumulator_short: on-chain accumulator has fewer peaks than the slot, exit 6", async () => {
+    // plan-2607-18 W3 (V4): leaf 3 at size 4 is its own peak — slot 1. Supply
+    // an accumulator with a single element, so slot 1 is absent: a shape
+    // disagreement (chain behind/truncated), distinct from a byte-level
+    // peak_mismatch. The blob DOES cover size 4 (lastIndex 3), so this is not
+    // coverage, and the leaf IS in-massif, so not wrong_massif.
+    const result = await createReceiptInProcess(
+      chainArgs({ "mmr-index": "3", json: true }),
+      rpcFetch([fx.n2], 4n),
+    );
+    expect(result.exitCode).toBe(6);
+    const report = JSON.parse(result.stdout) as CreateReceiptChainReport;
+    expect(report.ok).toBe(false);
+    expect(report.outcome).toBe("accumulator_short");
+    expect(report.onchain).toEqual({ size: "4", peakCount: 1 });
+    // The peak WAS computed (blob is fine); there is just no on-chain slot.
+    expect(report.peakCheck).toMatchObject({
+      peakIndex: 1,
+      matched: false,
+      onchainPeakHex: "",
+    });
+    expect(report.peakCheck!.computedPeakHex).not.toBe("");
+  });
+
+  // Cross-massif proof note (plan-2607-18 W3, V1): a leaf's OWN inclusion path
+  // is always built from the leaf's own massif blob — the leaf node must be
+  // present locally (which is exactly what wrong_massif guards). Proof
+  // siblings from earlier massifs resolve through the in-blob ancestor peak
+  // stack, and the "verified at a LARGER on-chain size" test above already
+  // exercises a peak selected against a multi-peak accumulator spanning beyond
+  // the leaf. A genuine 2-massif on-disk fixture adds no distinct leaf-path
+  // code path (the leaf is still in one blob) and is heavy to build, so it is
+  // documented rather than materialised here.
 
   test("peak_mismatch: tampered node data, exit 4", async () => {
     // Correct size/shape, but the anchored peak is NOT n2 → tamper-shaped.

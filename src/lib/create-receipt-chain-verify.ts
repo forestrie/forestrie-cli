@@ -38,7 +38,9 @@ import {
 export type ChainVerifyOutcome =
   | "verified"
   | "not_yet_anchored"
+  | "wrong_massif"
   | "coverage"
+  | "accumulator_short"
   | "peak_mismatch";
 
 /**
@@ -133,12 +135,19 @@ const defaultDeps: ChainVerifyDeps = { fetchOnChainLogState };
 /**
  * Run the report-only chain-anchored peak check.
  *
- * Failure taxonomy (plan §3, all reported — never thrown):
+ * Failure taxonomy (plan §3, plan-2607-18 W3, all reported — never thrown):
  * - `not_yet_anchored` — `mmrIndex >= size`: the leaf postdates the last
  *   anchor ("anchor lag"); the local massif may hold it, but the chain does
  *   not attest it yet.
- * - `coverage` — the local blob does not hold nodes up to the on-chain size
- *   (the on-chain size lives in a later massif); a later blob is required.
+ * - `wrong_massif` — the loaded massif blob is for a *different* massif than
+ *   the leaf: the leaf's `mmrIndex` falls outside this blob's own
+ *   `firstIndex..lastIndex` window, so its inclusion path cannot be built
+ *   from these bytes. The remedy is a different blob (the one holding the
+ *   leaf), NOT a *later* blob — which is why this is distinct from
+ *   `coverage`. Mirrors the offline builder's `leaf_not_in_massif` guard.
+ * - `coverage` — the leaf IS in this massif, but the blob does not hold nodes
+ *   up to the on-chain size (the on-chain tip lives in a later massif); a
+ *   later blob is required.
  * - `peak_mismatch` — the computed peak differs from the anchored one: the
  *   local node data has been tampered with (or is for the wrong log).
  *
@@ -187,6 +196,20 @@ export async function verifyChainAnchored(
     return { outcome: "not_yet_anchored", ...base };
   }
 
+  // Wrong massif: the loaded blob must actually hold the leaf. The leaf's own
+  // inclusion path is built from THIS blob's node data, so the leaf must fall
+  // inside `firstIndex..lastIndex`. A leaf below `firstIndex` belongs to an
+  // earlier massif; above `lastIndex`, a later one. Either way the remedy is a
+  // *different* blob (the one containing the leaf) — not a later one — so this
+  // is distinct from `coverage`. Mirrors `buildReceiptOffline`'s
+  // `leaf_not_in_massif` guard (create-receipt-derive.ts), which the chain
+  // path previously omitted (plan-2607-18 W3, V2/V3). Without it a
+  // wrong-massif blob was misreported as `coverage` ("fetch the covering
+  // massif"), a misleading remedy.
+  if (input.mmrIndex < store.firstIndex || input.mmrIndex > store.lastIndex) {
+    return { outcome: "wrong_massif", ...base };
+  }
+
   // Coverage: the path is built at `size - 1`, so the local blob must hold
   // the log tip up to `size - 1`. Nodes below `firstIndex` resolve through
   // the ancestor peak stack, so only the upper bound can be short here.
@@ -214,10 +237,13 @@ export async function verifyChainAnchored(
   const peakMMRIndex = peaks[computed.peakIndex] ?? -1n;
   const onchainPeak = state.accumulator[computed.peakIndex];
   if (onchainPeak === undefined) {
-    // The contract holds fewer peaks than the selected slot — the on-chain
-    // accumulator disagrees with the computed shape: tamper-shaped.
+    // The contract holds FEWER peaks than the selected slot: a shape/length
+    // disagreement, not a byte-level peak mismatch. Distinct reason
+    // (`accumulator_short`, plan-2607-18 W3 V4) so a truncated on-chain
+    // accumulator reads differently from tampered node data — the computed
+    // peak is fine; the chain simply has no slot to compare it against.
     return {
-      outcome: "peak_mismatch",
+      outcome: "accumulator_short",
       ...base,
       peakCheck: {
         proofLength: computed.proof.length,

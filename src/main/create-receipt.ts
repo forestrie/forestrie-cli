@@ -48,6 +48,11 @@ export const CHAIN_EXIT_CODE: Record<ChainVerifyOutcome, number> = {
   not_yet_anchored: 2,
   coverage: 3,
   peak_mismatch: 4,
+  // plan-2607-18 W3: `wrong_massif` (V2/V3) and `accumulator_short` (V4) split
+  // out of the coverage / peak_mismatch buckets; next free codes in the 2/3/4
+  // scheme. No collision with `verify`, which only uses 0/1.
+  wrong_massif: 5,
+  accumulator_short: 6,
 };
 
 /**
@@ -171,8 +176,12 @@ const CHAIN_OUTCOME_NARRATION: Record<ChainVerifyOutcome, string> = {
   verified: "computed peak matches the on-chain accumulator",
   not_yet_anchored:
     "leaf postdates the last on-chain anchor (mmrIndex >= on-chain size) — anchor lag",
+  wrong_massif:
+    "the massif blob is for a different massif than the leaf",
   coverage:
     "local massif blob does not hold nodes up to the on-chain size — fetch the covering massif",
+  accumulator_short:
+    "the on-chain accumulator holds fewer peaks than the leaf's proof selects — chain state is behind or truncated",
   peak_mismatch:
     "computed peak differs from the anchored peak — local node data does not match the chain",
 };
@@ -289,9 +298,13 @@ async function runChainAnchored(
       `PASS: leaf verified against the on-chain accumulator (size ${result.onchain.size}, peak slot ${result.peakCheck!.peakIndex}) — no receipt needed`,
     );
   } else {
-    out.out(
-      `FAIL: ${result.outcome} — ${CHAIN_OUTCOME_NARRATION[result.outcome]}`,
-    );
+    // `wrong_massif` names the concrete mmrIndex the caller must supply the
+    // massif for (plan-2607-18 W3: "supply the massif containing mmrIndex N").
+    const detail =
+      result.outcome === "wrong_massif"
+        ? `${CHAIN_OUTCOME_NARRATION.wrong_massif} (supply the massif containing mmrIndex ${leaf.mmrIndex})`
+        : CHAIN_OUTCOME_NARRATION[result.outcome];
+    out.out(`FAIL: ${result.outcome} — ${detail}`);
   }
   process.exitCode = CHAIN_EXIT_CODE[result.outcome];
 }
