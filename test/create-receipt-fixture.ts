@@ -43,13 +43,21 @@ function cborBytes(value: unknown): Uint8Array {
     : new Uint8Array(encoded as ArrayLike<number>);
 }
 
-/** Build v2 massif bytes with `logHashes[i]` at MMR log index i. */
+const URKLE_LEAF_VALUE_OFFSET = 8; // after the 8-byte key
+
+/**
+ * Build v2 massif bytes with `logHashes[i]` at MMR log index i. When
+ * `leafRecords` is given, populates the urkle leaf table (index region) at each
+ * ordinal with the 8-byte idtimestamp key + 32-byte committed content hash —
+ * what the FOR-373/FOR-344 index reader scans to locate a leaf offline.
+ */
 export function buildV2MassifBytes(opts: {
   massifHeight: number;
   massifIndex: number;
   logHashes: Uint8Array[];
+  leafRecords?: { idtimestampBe8: Uint8Array; valueBytes: Uint8Array }[];
 }): Uint8Array {
-  const { massifHeight, massifIndex, logHashes } = opts;
+  const { massifHeight, massifIndex, logHashes, leafRecords = [] } = opts;
   const leafCount = 1 << (massifHeight - 1);
   const mBits = BLOOM_BITS_PER_ELEMENT_V1 * leafCount;
   const bitsetBytes = Math.ceil(mBits / 8);
@@ -83,6 +91,21 @@ export function buildV2MassifBytes(opts: {
       throw new Error(`logHashes[${i}] must be 32 bytes`);
     }
     massifBytes.set(h, logStart + i * VALUE_BYTES);
+  }
+
+  const leafTableStart =
+    trieHeaderEnd + bloomBitsetsBytes + URKLE_FRONTIER_STATE_V1_BYTES;
+  for (let ordinal = 0; ordinal < leafRecords.length; ordinal++) {
+    const { idtimestampBe8, valueBytes } = leafRecords[ordinal]!;
+    if (idtimestampBe8.length !== 8) {
+      throw new Error(`leafRecords[${ordinal}].idtimestampBe8 must be 8 bytes`);
+    }
+    if (valueBytes.length !== 32) {
+      throw new Error(`leafRecords[${ordinal}].valueBytes must be 32 bytes`);
+    }
+    const off = leafTableStart + ordinal * URKLE_LEAF_RECORD_BYTES;
+    massifBytes.set(idtimestampBe8, off);
+    massifBytes.set(valueBytes, off + URKLE_LEAF_VALUE_OFFSET);
   }
 
   return massifBytes;

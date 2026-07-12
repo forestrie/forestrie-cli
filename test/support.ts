@@ -138,6 +138,7 @@ export const SUBCOMMANDS: Record<
   "complete-grant": {
     issue: "FOR-344",
     args: ["--grant", "grant.b64", "--checkpoint", "checkpoint.sth"],
+    implemented: true,
   },
   "create-receipt": {
     issue: "FOR-345",

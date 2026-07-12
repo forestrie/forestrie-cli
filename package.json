@@ -23,8 +23,8 @@
     "@forestrie/deploy-core": "^0.6.0",
     "@forestrie/encoding": "^0.3.0",
     "@forestrie/grant-builder": "^0.1.2",
-    "@forestrie/merklelog": "^0.0.3",
-    "@forestrie/receipt-verify": "^0.5.1",
+    "@forestrie/merklelog": "^0.1.1",
+    "@forestrie/receipt-verify": "^0.6.0",
     "@forestrie/scrapi-client": "^0.1.2",
     "citty": "^0.2.2",
     "viem": "^2.31.0"
