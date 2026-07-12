@@ -2,28 +2,24 @@
 
 `forestrie` — the single-binary **participant CLI** for forestrie
 transparency logs (SCITT / COSE receipts). One static Bun binary hosts the
-Zero-to-Hero demo subcommands; each subcommand is a demo step:
+subcommands a participant needs to deploy, sign, register, and verify
+against a forestrie log:
 
-| Subcommand | What it does | Linear |
-|---|---|---|
-| `deploy` | Deploy a univocity instance (ES256 bootstrap is the paved path) | FOR-340 |
-| `sign-statement` | Produce a plain COSE Sign1 signed statement | FOR-341 |
-| `register` | Register a signed statement via SCRAPI, download the receipt | FOR-342 |
-| `register-grant` | Authorize a signer for a child/data log (one grant per signer) | FOR-343 |
-| `complete-grant` | Self-create the `Forestrie-Grant` header from a checkpoint | FOR-344 |
-| `create-receipt` | Self-serve COSE receipt from log data + checkpoint (or chain-anchored) | FOR-345 |
-| `decode-receipt` | Decode a COSE receipt — it is just COSE: Sign1 + MMR inclusion | FOR-346 |
-| `verify` | Verify a receipt offline — the same closer for every demo step | FOR-347 |
+| Subcommand | What it does |
+|---|---|
+| `deploy` | Deploy a univocity instance (ES256 bootstrap is the paved path) |
+| `sign-statement` | Produce a plain COSE Sign1 signed statement |
+| `register` | Register a signed statement via SCRAPI, download the receipt |
+| `register-grant` | Authorize a signer for a child/data log (one grant per signer) |
+| `complete-grant` | Self-create the `Forestrie-Grant` header from a checkpoint |
+| `create-receipt` | Self-serve COSE receipt from log data + checkpoint (or chain-anchored) |
+| `decode-receipt` | Decode a COSE receipt — it is just COSE: Sign1 + MMR inclusion |
+| `verify` | Verify a receipt offline — the same closer for every other subcommand |
 
-**Status:** scaffold (FOR-339). Every subcommand declares its real argument
-surface and parses it, then exits non-zero with a structured
-`not_implemented` error naming its issue. `--json` emits that report as
-JSON on stdout. Implementations land per-subcommand.
-
-The demo the subcommands serve:
-`canopy/docs/demo/forestrie-demo-01.md` (Zero to Hero — MMR Profile
-Adoption Call, initiative
-[MMR Profile Adoption Call Demo](https://linear.app/forestrie/initiative/mmr-profile-adoption-call-demo-3822bf4c5af7)).
+**Status:** subcommands not yet implemented declare their real argument
+surface and parse it, then exit non-zero with a structured `not_implemented`
+error. `--json` emits that report as JSON on stdout. Implementations land
+per-subcommand.
 
 ## Install from a release
 
