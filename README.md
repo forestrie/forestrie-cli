@@ -158,8 +158,22 @@ forestrie complete-grant \
   --out-b64 grant.completed.b64
 ```
 
+```
+complete-grant: leaf       — mmrIndex 0 (recovered from massif)
+complete-grant: entry id   — 01010101010101010000000000000000 (idtimestamp from massif)
+complete-grant: proof      — 1 node(s) to peak 1/2
+complete-grant: checkpoint — sealed size 4, delegation cert copied: no
+complete-grant: receipt    — 118 bytes attached (header 396)
+```
+
 Self-creates the `Forestrie-Grant` header from a checkpoint, without an
-operator round-trip.
+operator round-trip: it locates the grant's leaf in the local `--massif` blob
+by its commitment hash (recovering the `mmrIndex` and the sequenced
+idtimestamp), rebuilds the inclusion receipt against the checkpoint's pre-signed
+peak, and attaches the receipt + idtimestamp — the same completed bearer
+`register-grant` produces online. `--massif` is required (it carries the leaf);
+`--idtimestamp <hex|path>` is a fallback for the rare massif with no index
+region.
 
 ### `create-receipt`
 

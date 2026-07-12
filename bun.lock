@@ -11,8 +11,8 @@
         "@forestrie/deploy-core": "^0.6.0",
         "@forestrie/encoding": "^0.3.0",
         "@forestrie/grant-builder": "^0.1.2",
-        "@forestrie/merklelog": "^0.0.3",
-        "@forestrie/receipt-verify": "^0.5.1",
+        "@forestrie/merklelog": "^0.1.1",
+        "@forestrie/receipt-verify": "^0.6.0",
         "@forestrie/scrapi-client": "^0.1.2",
         "citty": "^0.2.2",
         "viem": "^2.31.0",
@@ -38,9 +38,9 @@
 
     "@forestrie/grant-builder": ["@forestrie/grant-builder@0.1.2", "", { "dependencies": { "@forestrie/encoding": "0.3.0", "@noble/curves": "^1.9.7", "@noble/hashes": "^1.7.1" } }, "sha512-OGFrWt5AjccbmFz1LGUug9Z0qyd1NvxBmlZrMBZVxS0xkkoT2aMk7aV6PPDqpRIpRhRz8yjC6MA6oReAAi+JmQ=="],
 
-    "@forestrie/merklelog": ["@forestrie/merklelog@0.0.3", "", {}, "sha512-u7gdNzQ5FdXb3qmoBSpOvHaR7hw71UDDPCtnI+EbzMb5+dbhmOA1dG/8idejEkpCoszxcZ7cRa7WicbaxGJQgA=="],
+    "@forestrie/merklelog": ["@forestrie/merklelog@0.1.1", "", {}, "sha512-xrHyZffnuddV5XA+rsiSMExcUKIrn9u/6UZTTuNFKxFRORvODWxJZgVZJICW1EUKZnUCO7C8EwQKijYgkzqPqw=="],
 
-    "@forestrie/receipt-verify": ["@forestrie/receipt-verify@0.5.1", "", { "dependencies": { "@forestrie/encoding": "0.3.0", "@forestrie/merklelog": "0.1.0", "@noble/hashes": "^1.7.1" } }, "sha512-0vIRghhGYeh5CcpKnSty/z5QowBl8cNWVBaIkhq71B1tnU+ZKyN5D894fSqvRV58jjB6ygZCdIhtvfojChn8NA=="],
+    "@forestrie/receipt-verify": ["@forestrie/receipt-verify@0.6.0", "", { "dependencies": { "@forestrie/encoding": "0.3.0", "@forestrie/merklelog": "0.1.1", "@noble/hashes": "^1.7.1" } }, "sha512-qCuQPToQqJ7TpEf35inq3+rpJdvfkEGb6OvQa5w0KUlWEXcLOOnZvCcc96ZfLXvXsuNdLpmJuWOZBeAa3052Aw=="],
 
     "@forestrie/scrapi-client": ["@forestrie/scrapi-client@0.1.2", "", { "dependencies": { "@forestrie/encoding": "0.3.0" } }, "sha512-c63NOQ/76r74GX4iJnFdkZ08mOxTWE55ZavRZAJNOZuFqbeadKwGFZuqvJjBQMN4a3XnGFrmLn7cE3BxVjcEyg=="],
 
@@ -79,8 +79,6 @@
     "viem": ["viem@2.55.1", "", { "dependencies": { "@noble/curves": "1.9.1", "@noble/hashes": "1.8.0", "@scure/bip32": "1.7.0", "@scure/bip39": "1.6.0", "abitype": "1.2.3", "isows": "1.0.7", "ox": "0.14.30", "ws": "8.21.0" }, "peerDependencies": { "typescript": ">=5.0.4" }, "optionalPeers": ["typescript"] }, "sha512-sajvEmONS3dEDFh0jKXGugTU8ImyGoIV3sEHSWNRhgkH484v/+6DjZAplRhcdeqNV/VBxOs/l3raOG4NaXvX9A=="],
 
     "ws": ["ws@8.21.0", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g=="],
-
-    "@forestrie/receipt-verify/@forestrie/merklelog": ["@forestrie/merklelog@0.1.0", "", {}, "sha512-dfMdP6QhPjqyIjk2/2w4bJ/k9TRgGMceYLIKrhMslsd+whWe6vA3vK6SRv+lbiFQV79KNUM2lsSkEkeZAM3U4w=="],
 
     "@scure/bip32/@noble/curves": ["@noble/curves@1.9.1", "", { "dependencies": { "@noble/hashes": "1.8.0" } }, "sha512-k11yZxZg+t+gWvBbIswW0yoJlu8cHOC7dhunwOzoWH/mXGBiYyR4YY6hAEK/3EUs4UpB8la1RfdRpeGsFHkWsA=="],
 
