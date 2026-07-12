@@ -235,7 +235,7 @@ export function grantWithData(logId: string, grantData: Uint8Array): Grant {
   };
 }
 
-/** Forestrie-Grant COSE Sign1 (transparent statement profile) for --grant-b64. */
+/** Forestrie-Grant COSE Sign1 (transparent statement profile) for --committed-grant. */
 export async function buildGrantCose(
   grantPayloadCbor: Uint8Array,
   idtimestampBe8: Uint8Array,

@@ -21,20 +21,20 @@ export default defineForestrieCommand({
       valueHint: "path",
       required: true,
     },
-    "grant-b64": {
+    "committed-grant": {
       type: "string",
       description:
-        "Completed grant credential, base64 (env GRANT_B64); or use --grant + --entry-id",
+        "Grant committed at the receipt's leaf, base64 (env GRANT_B64); or use --committed-grant-file + --entry-id",
       valueHint: "base64",
     },
-    grant: {
+    "committed-grant-file": {
       type: "string",
-      description: "Grant CBOR file (alternative to --grant-b64)",
+      description: "Grant CBOR file (alternative to --committed-grant)",
       valueHint: "path",
     },
     "entry-id": {
       type: "string",
-      description: "Entry id within the grant CBOR (with --grant)",
+      description: "Entry id within the grant CBOR (with --committed-grant-file)",
       valueHint: "id",
     },
     univocity: {
