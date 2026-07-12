@@ -238,19 +238,19 @@ describe("parseCreateReceiptOptions", () => {
 });
 
 describe("parseVerifyOptions", () => {
-  test("requires grant-b64 or grant CBOR", () => {
+  test("requires committed-grant or committed-grant-file", () => {
     delete process.env["GRANT_B64"];
     expect(() =>
       parseVerifyOptions({ genesis: "g.cbor", receipt: "r.cbor" }),
-    ).toThrow(/--grant-b64 or --grant/);
+    ).toThrow(/--committed-grant or --committed-grant-file/);
   });
 
-  test("grant CBOR requires entry-id", () => {
+  test("committed-grant-file requires entry-id", () => {
     expect(() =>
       parseVerifyOptions({
         genesis: "g.cbor",
         receipt: "r.cbor",
-        grant: "grant.cbor",
+        "committed-grant-file": "grant.cbor",
       }),
     ).toThrow(/--entry-id/);
   });
@@ -258,7 +258,7 @@ describe("parseVerifyOptions", () => {
   const base = {
     genesis: "g.cbor",
     receipt: "r.cbor",
-    "grant-b64": "AAAA",
+    "committed-grant": "AAAA",
   };
 
   test("defaults to the offline anchor (no network)", () => {

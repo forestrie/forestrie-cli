@@ -69,10 +69,10 @@ jobs:
           run_expect_fail ./dist/forestrie-linux-x64 sign-statement --key missing.pem --payload missing.json
           run_expect_fail ./dist/forestrie-linux-x64 register --base-url https://x --log-id L --statement missing.cose --grant-b64 AAAA
           run_expect_fail ./dist/forestrie-linux-x64 decode-receipt missing.cbor
-          run_expect_fail ./dist/forestrie-linux-x64 verify --genesis missing.cbor --receipt missing.cbor --grant-b64 AAAA
+          run_expect_fail ./dist/forestrie-linux-x64 verify --genesis missing.cbor --receipt missing.cbor --committed-grant AAAA
           # verify --json must emit the structured error envelope on stdout
           # (F3 closed): parseable JSON, error code + stage, non-zero exit.
-          ./dist/forestrie-linux-x64 verify --json --genesis missing.cbor --receipt missing.cbor --grant-b64 AAAA > verify-error.json || test $? -eq 1
+          ./dist/forestrie-linux-x64 verify --json --genesis missing.cbor --receipt missing.cbor --committed-grant AAAA > verify-error.json || test $? -eq 1
           jq -e '.error == "verify_input_failed" and .command == "verify" and .stage == "input"' verify-error.json
 
   darwin-smoke:

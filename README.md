@@ -199,7 +199,7 @@ COSE_Sign1 — tagged 18 (COSE_Sign1) — 304 bytes
 
 ```bash
 forestrie verify \
-  --genesis genesis.cbor --receipt receipt.cbor --grant-b64 "$GRANT_B64"
+  --genesis genesis.cbor --receipt receipt.cbor --committed-grant "$GRANT_B64"
 ```
 
 ```

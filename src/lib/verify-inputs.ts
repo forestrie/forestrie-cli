@@ -12,17 +12,17 @@ import {
  * — strictly no network.
  *
  * Grant sources (mirrors the canopy FOR-282 tracer):
- * - `--grant-b64`: base64 of either a Forestrie-Grant COSE Sign1 (carries
- *   the idtimestamp in unprotected header -65537) or a raw grant payload
- *   CBOR (keys 1–6; then `--entry-id` must supply the idtimestamp).
- * - `--grant` + `--entry-id`: grant CBOR file (COSE or raw payload); the
- *   idtimestamp comes from the permanent SCRAPI entry id.
+ * - `--committed-grant`: base64 of either a Forestrie-Grant COSE Sign1
+ *   (carries the idtimestamp in unprotected header -65537) or a raw grant
+ *   payload CBOR (keys 1–6; then `--entry-id` must supply the idtimestamp).
+ * - `--committed-grant-file` + `--entry-id`: grant CBOR file (COSE or raw
+ *   payload); the idtimestamp comes from the permanent SCRAPI entry id.
  */
 export type VerifyInputOptions = {
   genesis: string;
   receipt: string;
-  grantB64: string | undefined;
-  grant: string | undefined;
+  committedGrant: string | undefined;
+  committedGrantFile: string | undefined;
   entryId: string | undefined;
 };
 
@@ -38,7 +38,9 @@ function readBytes(path: string, flag: string): Uint8Array {
 function decodeBase64(b64: string): Uint8Array {
   const bytes = new Uint8Array(Buffer.from(b64, "base64"));
   if (bytes.length === 0) {
-    throw new Error("--grant-b64 is not valid base64 (decoded to 0 bytes)");
+    throw new Error(
+      "--committed-grant is not valid base64 (decoded to 0 bytes)",
+    );
   }
   return bytes;
 }
@@ -79,14 +81,16 @@ export function loadVerifyArtifacts(
 
   let grantBytes: Uint8Array;
   let source: string;
-  if (options.grantB64 !== undefined) {
-    grantBytes = decodeBase64(options.grantB64);
-    source = "--grant-b64";
-  } else if (options.grant !== undefined) {
-    grantBytes = readBytes(options.grant, "--grant");
-    source = `--grant '${options.grant}'`;
+  if (options.committedGrant !== undefined) {
+    grantBytes = decodeBase64(options.committedGrant);
+    source = "--committed-grant";
+  } else if (options.committedGrantFile !== undefined) {
+    grantBytes = readBytes(options.committedGrantFile, "--committed-grant-file");
+    source = `--committed-grant-file '${options.committedGrantFile}'`;
   } else {
-    throw new Error("either --grant-b64 or --grant is required");
+    throw new Error(
+      "either --committed-grant or --committed-grant-file is required",
+    );
   }
 
   const { grant, idtimestampBe8 } = decodeGrantBytes(

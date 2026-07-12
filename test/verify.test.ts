@@ -82,7 +82,7 @@ function baseArgs(overrides: LooseArgs = {}) {
   return {
     genesis: file("genesis.cbor"),
     receipt: file("receipt.cbor"),
-    "grant-b64": fx.grantCoseB64,
+    "committed-grant": fx.grantCoseB64,
     ...overrides,
   };
 }
@@ -92,7 +92,7 @@ function jsonReport(stdout: string): VerifyReport {
 }
 
 describe("forestrie verify — offline (no network)", () => {
-  test("golden pass with --grant-b64 (Forestrie-Grant COSE); fetch is never touched", async () => {
+  test("golden pass with --committed-grant (Forestrie-Grant COSE); fetch is never touched", async () => {
     const r = await verifyInProcess(baseArgs());
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain("PASS: receipt verified offline");
@@ -102,11 +102,11 @@ describe("forestrie verify — offline (no network)", () => {
     expect(r.stderr).not.toContain("failed");
   });
 
-  test("golden pass with --grant CBOR + --entry-id", async () => {
+  test("golden pass with --committed-grant-file CBOR + --entry-id", async () => {
     const r = await verifyInProcess(
       baseArgs({
-        "grant-b64": undefined,
-        grant: file("grant.cbor"),
+        "committed-grant": undefined,
+        "committed-grant-file": file("grant.cbor"),
         "entry-id": fx.entryIdHex,
       }),
     );
@@ -114,10 +114,10 @@ describe("forestrie verify — offline (no network)", () => {
     expect(r.stdout).toContain("PASS");
   });
 
-  test("golden pass with --grant-b64 raw payload + --entry-id", async () => {
+  test("golden pass with --committed-grant raw payload + --entry-id", async () => {
     const r = await verifyInProcess(
       baseArgs({
-        "grant-b64": Buffer.from(fx.grantPayloadCbor).toString("base64"),
+        "committed-grant": Buffer.from(fx.grantPayloadCbor).toString("base64"),
         "entry-id": fx.entryIdHex,
       }),
     );
@@ -132,10 +132,12 @@ describe("forestrie verify — offline (no network)", () => {
     expect(r.exitCode).toBe(0);
   });
 
-  test("raw payload --grant-b64 without --entry-id is a structured input error (F3)", async () => {
+  test("raw payload --committed-grant without --entry-id is a structured input error (F3)", async () => {
     const r = await verifyInProcess(
       baseArgs({
-        "grant-b64": Buffer.from(fx.grantPayloadCbor).toString("base64"),
+        "committed-grant": Buffer.from(fx.grantPayloadCbor).toString(
+          "base64",
+        ),
         json: true,
       }),
     );
@@ -167,9 +169,9 @@ describe("forestrie verify — offline (no network)", () => {
     expect(r.stderr).not.toMatch(/\n\s+at /);
   });
 
-  test("garbage --grant-b64 is a structured input error, not a crash (F3)", async () => {
+  test("garbage --committed-grant is a structured input error, not a crash (F3)", async () => {
     const r = await verifyInProcess(
-      baseArgs({ "grant-b64": "AAAA", json: true }),
+      baseArgs({ "committed-grant": "AAAA", json: true }),
     );
     expect(r.exitCode).toBe(1);
     const report = JSON.parse(r.stdout) as VerifyErrorReport;
@@ -218,7 +220,7 @@ describe("forestrie verify — offline (no network)", () => {
     // Same grant bytes but a different idtimestamp — leaf no longer matches.
     const r = await verifyInProcess(
       baseArgs({
-        "grant-b64": other,
+        "committed-grant": other,
         "entry-id": "0f0f0f0f0f0f0f0f0000000000000001",
         json: true,
       }),
@@ -415,7 +417,7 @@ describe("forestrie verify — CLI surface", () => {
       file("genesis.cbor"),
       "--receipt",
       file("receipt.cbor"),
-      "--grant-b64",
+      "--committed-grant",
       fx.grantCoseB64,
     ]);
     expect(result.exitCode).toBe(0);
@@ -430,7 +432,7 @@ describe("forestrie verify — CLI surface", () => {
       file("genesis.cbor"),
       "--receipt",
       file("receipt-bad-sig.cbor"),
-      "--grant-b64",
+      "--committed-grant",
       fx.grantCoseB64,
     ]);
     expect(result.exitCode).toBe(1);
@@ -448,7 +450,7 @@ describe("forestrie verify — CLI surface", () => {
       "missing.cbor",
       "--receipt",
       "missing.cbor",
-      "--grant-b64",
+      "--committed-grant",
       "AAAA",
     ]);
     expect(result.exitCode).toBe(1);

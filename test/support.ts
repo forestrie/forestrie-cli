@@ -163,7 +163,7 @@ export const SUBCOMMANDS: Record<
       "genesis.cbor",
       "--receipt",
       "receipt.cbor",
-      "--grant-b64",
+      "--committed-grant",
       "AAAA",
     ],
     implemented: true,

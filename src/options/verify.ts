@@ -29,11 +29,11 @@ export type VerifyOptions = ForestrieCommonOptions & {
   genesis: string;
   /** COSE receipt file to verify. */
   receipt: string;
-  /** Completed grant credential, base64 (or file via --grant + --entry-id). */
-  grantB64: string | undefined;
-  /** Grant CBOR file (alternative to --grant-b64). */
-  grant: string | undefined;
-  /** Entry id within the grant CBOR (used with --grant). */
+  /** Completed grant credential, base64 (or file via --committed-grant-file + --entry-id). */
+  committedGrant: string | undefined;
+  /** Grant CBOR file (alternative to --committed-grant). */
+  committedGrantFile: string | undefined;
+  /** Entry id within the grant CBOR (used with --committed-grant-file). */
   entryId: string | undefined;
   /** ImutableUnivocity contract address (chain mode). */
   univocity: string | undefined;
@@ -63,20 +63,26 @@ export function parseVerifyOptions(args: LooseParsedArgs): VerifyOptions {
     anchor,
     genesis: requiredStringOption(args, "genesis"),
     receipt: requiredStringOption(args, "receipt"),
-    grantB64: optionalStringOption(args, "grant-b64", "GRANT_B64"),
-    grant: optionalStringOption(args, "grant"),
+    committedGrant: optionalStringOption(args, "committed-grant", "GRANT_B64"),
+    committedGrantFile: optionalStringOption(args, "committed-grant-file"),
     entryId: optionalStringOption(args, "entry-id"),
     univocity,
     logId,
     rpcUrl,
   };
-  if (options.grantB64 === undefined && options.grant === undefined) {
+  if (
+    options.committedGrant === undefined &&
+    options.committedGrantFile === undefined
+  ) {
     throw new Error(
-      "either --grant-b64 or --grant (grant CBOR, with --entry-id) is required",
+      "either --committed-grant or --committed-grant-file (grant CBOR, with --entry-id) is required",
     );
   }
-  if (options.grant !== undefined && options.entryId === undefined) {
-    throw new Error("--grant requires --entry-id");
+  if (
+    options.committedGrantFile !== undefined &&
+    options.entryId === undefined
+  ) {
+    throw new Error("--committed-grant-file requires --entry-id");
   }
   return options;
 }
