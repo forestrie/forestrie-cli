@@ -61,6 +61,23 @@ export default defineForestrieCommand({
       description: "Completed grant base64 output path (default: stdout)",
       valueHint: "path",
     },
+    "bootstrap-log": {
+      type: "string",
+      description:
+        "Forest bootstrap/root log id — first /register/ path segment (default: --owner-log)",
+      valueHint: "uuid",
+    },
+    timeout: {
+      type: "string",
+      description: "Overall receipt wait budget in seconds (default 60)",
+      valueHint: "seconds",
+    },
+    "poll-interval": {
+      type: "string",
+      description:
+        "Pacing between registration/receipt polls in seconds (default 1; Retry-After wins when longer)",
+      valueHint: "seconds",
+    },
   },
   run: defineCommandRunner(parseRegisterGrantOptions, runRegisterGrant),
 });

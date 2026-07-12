@@ -85,11 +85,12 @@ export const SUBCOMMANDS: Record<
       "--owner-log",
       "00000000-0000-0000-0000-000000000000",
       "--data-log",
-      "11111111-1111-1111-1111-111111111111",
+      "00000000-0000-0000-0000-000000000000",
       "--sign-with",
       "bootstrap.es256.pem",
       "--self-referential",
     ],
+    implemented: true,
   },
   "complete-grant": {
     issue: "FOR-344",
