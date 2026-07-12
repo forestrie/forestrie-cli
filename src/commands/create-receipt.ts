@@ -17,9 +17,15 @@ export default defineForestrieCommand({
     },
     "mmr-index": {
       type: "string",
-      description: "MMR index of the leaf to prove",
+      description:
+        "MMR index of the leaf to prove (exactly one of --mmr-index / --entry-id)",
       valueHint: "n",
-      required: true,
+    },
+    "entry-id": {
+      type: "string",
+      description:
+        "Permanent SCRAPI entry id addressing the leaf (idtimestamp_be8 || mmrIndex_be8, 32 hex chars)",
+      valueHint: "hex",
     },
     checkpoint: {
       type: "string",

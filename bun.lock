@@ -12,7 +12,7 @@
         "@forestrie/encoding": "^0.2.0",
         "@forestrie/grant-builder": "^0.1.1",
         "@forestrie/merklelog": "^0.0.3",
-        "@forestrie/receipt-verify": "^0.3.0",
+        "@forestrie/receipt-verify": "^0.4.0",
         "@forestrie/scrapi-client": "^0.1.1",
         "citty": "^0.2.2",
       },
@@ -51,7 +51,7 @@
 
     "@forestrie/merklelog": ["@forestrie/merklelog@0.0.3", "", {}, "sha512-u7gdNzQ5FdXb3qmoBSpOvHaR7hw71UDDPCtnI+EbzMb5+dbhmOA1dG/8idejEkpCoszxcZ7cRa7WicbaxGJQgA=="],
 
-    "@forestrie/receipt-verify": ["@forestrie/receipt-verify@0.3.0", "", { "dependencies": { "@forestrie/encoding": "0.1.0", "@forestrie/merklelog": "0.0.3", "@noble/hashes": "^1.7.1", "cbor-x": "^1.5.9" } }, "sha512-bgG+dahZKDCCq1NyNmPpHKSX2oJCVSi033tbnrc45/iBWMOzh11/E1yOv+D5IMHO/uvsRDeXvYjBYZcecLBtfA=="],
+    "@forestrie/receipt-verify": ["@forestrie/receipt-verify@0.4.0", "", { "dependencies": { "@forestrie/encoding": "0.2.0", "@forestrie/merklelog": "0.0.3", "@noble/hashes": "^1.7.1", "cbor-x": "^1.5.9" } }, "sha512-KJ1Gk9Tr60lrqBswgWgP5cSxQwoZtZ0043KmaolwR43rvS8IVSvkBzoNvHuQIbEMu5IKY5Sz8/lp+J78JYhdXw=="],
 
     "@forestrie/scrapi-client": ["@forestrie/scrapi-client@0.1.1", "", { "dependencies": { "cbor-x": "^1.5.9" } }, "sha512-8HJ1ZYQEoEG0KFKq4+GLJDpo8ISeT3agjrVplT5dmb4oIUR2H5OH4/ds/Rpd/tII5DYRLJB/BevJbYixZJxqdg=="],
 
@@ -100,8 +100,6 @@
     "ws": ["ws@8.21.0", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g=="],
 
     "@forestrie/grant-builder/@forestrie/encoding": ["@forestrie/encoding@0.1.0", "", { "dependencies": { "@noble/curves": "^1.8.1", "cbor-x": "^1.5.9" } }, "sha512-cnMyR/UJ1kvxo8sDdh+yGfx7zPIt+SFQE3th0EQ6xwewOLXQ/4I72HYebiSMFWXvKv5oVkvn3PbwEfnPHgvdAA=="],
-
-    "@forestrie/receipt-verify/@forestrie/encoding": ["@forestrie/encoding@0.1.0", "", { "dependencies": { "@noble/curves": "^1.8.1", "cbor-x": "^1.5.9" } }, "sha512-cnMyR/UJ1kvxo8sDdh+yGfx7zPIt+SFQE3th0EQ6xwewOLXQ/4I72HYebiSMFWXvKv5oVkvn3PbwEfnPHgvdAA=="],
 
     "ox/@noble/curves": ["@noble/curves@1.9.1", "", { "dependencies": { "@noble/hashes": "1.8.0" } }, "sha512-k11yZxZg+t+gWvBbIswW0yoJlu8cHOC7dhunwOzoWH/mXGBiYyR4YY6hAEK/3EUs4UpB8la1RfdRpeGsFHkWsA=="],
 

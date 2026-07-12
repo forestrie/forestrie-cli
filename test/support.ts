@@ -105,6 +105,7 @@ export const SUBCOMMANDS: Record<
       "--checkpoint",
       "checkpoint.sth",
     ],
+    implemented: true,
   },
   "decode-receipt": {
     issue: "FOR-346",
