@@ -7,8 +7,9 @@ import { createCaptureOut } from "@forestrie/cli-kit/reporting";
 import { encodeGrantPayload } from "@forestrie/encoding";
 import { verifyGrantReceiptOffline } from "@forestrie/receipt-verify";
 import type {
+  CreateReceiptChainErrorReport,
+  CreateReceiptChainReport,
   CreateReceiptErrorReport,
-  CreateReceiptNotImplementedReport,
   CreateReceiptReport,
 } from "../src/main/create-receipt.js";
 import { runCreateReceipt } from "../src/main/create-receipt.js";
@@ -22,6 +23,8 @@ import {
   type CreateReceiptFixture,
   type MultiPeakFixture,
 } from "./create-receipt-fixture.js";
+import { encodeLogStateResult } from "./verify-fixture.js";
+import { toContractLogId } from "../src/lib/verify-anchored.js";
 import { runCli } from "./support.js";
 
 let fx: CreateReceiptFixture;
@@ -57,13 +60,14 @@ const forbiddenFetch = (() => {
 
 async function createReceiptInProcess(
   args: LooseArgs,
+  fetchImpl: typeof fetch = forbiddenFetch,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const out = createCaptureOut(0);
   const options = parseCreateReceiptOptions(args);
   const realFetch = globalThis.fetch;
   const savedExitCode = process.exitCode;
   process.exitCode = 0;
-  globalThis.fetch = forbiddenFetch;
+  globalThis.fetch = fetchImpl;
   try {
     await runCreateReceipt(out, options);
   } finally {
@@ -388,33 +392,198 @@ describe("create-receipt error taxonomy", () => {
   });
 });
 
-describe("create-receipt chain mode (plan-2607-15 phase 2 stub)", () => {
-  const chainArgs = {
-    massif: "massif.log",
-    "mmr-index": "0",
-    univocity: "0x" + "ab".repeat(20),
-    "log-id": "660e8400-e29b-41d4-a716-446655440001",
-    "rpc-url": "http://localhost:8545",
-  };
+describe("create-receipt chain mode (report-only; plan-2607-15 §3, FOR-345)", () => {
+  const UNIVOCITY = "0x" + "ab".repeat(20);
+  const LOG_ID = "660e8400-e29b-41d4-a716-446655440001";
 
-  test("--json: structured not_implemented citing phase 2", async () => {
-    const result = await createReceiptInProcess({ ...chainArgs, json: true });
+  const chainArgs = (overrides: Record<string, unknown> = {}) => ({
+    massif: file("massif.log"),
+    "mmr-index": "1",
+    univocity: UNIVOCITY,
+    "log-id": LOG_ID,
+    "rpc-url": "http://rpc.mock",
+    ...overrides,
+  });
+
+  /** Mock `logState` returning `accumulator` / `size`; records the calldata. */
+  function rpcFetch(
+    accumulator: Uint8Array[],
+    size: bigint,
+    calls: unknown[] = [],
+  ): typeof fetch {
+    return (async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        method: string;
+        params: unknown[];
+      };
+      calls.push(body);
+      expect(body.method).toBe("eth_call");
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: encodeLogStateResult(accumulator, size),
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+  }
+
+  test("verified: computed peak matches the on-chain accumulator (exit 0)", async () => {
+    // Size-3 accumulator = [n2]; leaf 1 proves into n2 via sibling n0.
+    const calls: { params: [{ data: string }, string] }[] = [];
+    const result = await createReceiptInProcess(
+      chainArgs({ json: true }),
+      rpcFetch([fx.n2], 3n, calls),
+    );
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as CreateReceiptChainReport;
+    expect(report.command).toBe("create-receipt");
+    expect(report.anchor).toBe("chain");
+    expect(report.ok).toBe(true);
+    expect(report.outcome).toBe("verified");
+    expect(report.onchain).toEqual({ size: "3", peakCount: 1 });
+    expect(report.peakCheck).toMatchObject({
+      proofLength: 1,
+      peakIndex: 0,
+      peakMMRIndex: "2",
+      matched: true,
+    });
+    // computed peak equals the on-chain peak at the selected slot.
+    expect(report.peakCheck!.computedPeakHex).toBe(
+      report.peakCheck!.onchainPeakHex,
+    );
+    // logState(bytes32) selector + zero-padded contract log id.
+    expect(calls[0]!.params[0].data).toBe(
+      "0xeecac1b7" + toContractLogId(LOG_ID).slice(2),
+    );
+  });
+
+  test("verified: works at a LARGER on-chain size (no exact-size constraint)", async () => {
+    // Size-4 accumulator = [n2, n3]; leaf 1 still lives under n2 (slot 0).
+    const result = await createReceiptInProcess(
+      chainArgs({ json: true }),
+      rpcFetch([fx.n2, fx.n3], 4n),
+    );
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as CreateReceiptChainReport;
+    expect(report.outcome).toBe("verified");
+    expect(report.onchain).toEqual({ size: "4", peakCount: 2 });
+    expect(report.peakCheck).toMatchObject({ peakIndex: 0, matched: true });
+  });
+
+  test("not_yet_anchored: leaf postdates the anchor (mmrIndex >= size), exit 2", async () => {
+    // Leaf at mmrIndex 3 with an on-chain size of 3 → not yet anchored.
+    const result = await createReceiptInProcess(
+      chainArgs({ "mmr-index": "3", json: true }),
+      rpcFetch([fx.n2], 3n),
+    );
+    expect(result.exitCode).toBe(2);
+    const report = JSON.parse(result.stdout) as CreateReceiptChainReport;
+    expect(report.ok).toBe(false);
+    expect(report.outcome).toBe("not_yet_anchored");
+    expect(report.onchain.size).toBe("3");
+    // No peak was computed for an un-anchored leaf.
+    expect(report.peakCheck).toBeUndefined();
+  });
+
+  test("coverage: local blob short of the on-chain size, exit 3", async () => {
+    // On-chain size 8 needs nodes up to mmr index 7; this blob holds 0..3.
+    const result = await createReceiptInProcess(
+      chainArgs({ json: true }),
+      rpcFetch([new Uint8Array(32).fill(0x11)], 8n),
+    );
+    expect(result.exitCode).toBe(3);
+    const report = JSON.parse(result.stdout) as CreateReceiptChainReport;
+    expect(report.ok).toBe(false);
+    expect(report.outcome).toBe("coverage");
+    expect(report.onchain.size).toBe("8");
+    expect(report.peakCheck).toBeUndefined();
+  });
+
+  test("peak_mismatch: tampered node data, exit 4", async () => {
+    // Correct size/shape, but the anchored peak is NOT n2 → tamper-shaped.
+    const wrongPeak = new Uint8Array(32).fill(0x99);
+    const result = await createReceiptInProcess(
+      chainArgs({ json: true }),
+      rpcFetch([wrongPeak], 3n),
+    );
+    expect(result.exitCode).toBe(4);
+    const report = JSON.parse(result.stdout) as CreateReceiptChainReport;
+    expect(report.ok).toBe(false);
+    expect(report.outcome).toBe("peak_mismatch");
+    expect(report.peakCheck!.matched).toBe(false);
+    expect(report.peakCheck!.computedPeakHex).not.toBe(
+      report.peakCheck!.onchainPeakHex,
+    );
+  });
+
+  test("peak_mismatch: a tampered massif blob computes the wrong peak, exit 4", async () => {
+    // Honest on-chain accumulator [n2]; the LOCAL blob's sibling is flipped,
+    // so the computed peak diverges from the anchored one.
+    const result = await createReceiptInProcess(
+      chainArgs({ massif: file("massif-tampered.log"), json: true }),
+      rpcFetch([fx.n2], 3n),
+    );
+    expect(result.exitCode).toBe(4);
+    const report = JSON.parse(result.stdout) as CreateReceiptChainReport;
+    expect(report.outcome).toBe("peak_mismatch");
+    expect(report.peakCheck!.matched).toBe(false);
+  });
+
+  test("human mode: narrates on-chain size, computed peak and PASS", async () => {
+    const result = await createReceiptInProcess(
+      chainArgs(),
+      rpcFetch([fx.n2], 3n),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("PASS");
+    expect(result.stdout).toContain("no receipt needed");
+    expect(result.stderr).toContain("size 3");
+    expect(result.stderr).toContain("on-chain");
+    // No .cbor receipt is emitted in report-only mode.
+  });
+
+  test("human mode: non-verified outcome prints FAIL with the reason", async () => {
+    const result = await createReceiptInProcess(
+      chainArgs({ "mmr-index": "3" }),
+      rpcFetch([fx.n2], 3n),
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout).toContain("FAIL: not_yet_anchored");
+  });
+
+  test("RPC transport failure: structured chain error, exit 1", async () => {
+    const refusedFetch = (async () => {
+      throw new TypeError("fetch failed: connect ECONNREFUSED 127.0.0.1:8545");
+    }) as unknown as typeof fetch;
+    const result = await createReceiptInProcess(
+      chainArgs({ json: true }),
+      refusedFetch,
+    );
     expect(result.exitCode).toBe(1);
     const report = JSON.parse(
       result.stdout,
-    ) as CreateReceiptNotImplementedReport;
-    expect(report.error).toBe("not_implemented");
-    expect(report.command).toBe("create-receipt");
-    expect(report.mode).toBe("chain");
-    expect(report.issue).toBe("FOR-345");
-    expect(report.message).toContain("plan-2607-15 phase 2");
+    ) as CreateReceiptChainErrorReport;
+    expect(report.error).toBe("create_receipt_chain_failed");
+    expect(report.stage).toBe("chain");
+    expect(report.message).toContain("ECONNREFUSED");
   });
 
-  test("human mode: warning on stderr", async () => {
-    const result = await createReceiptInProcess({ ...chainArgs });
+  test("garbage massif: parse-stage chain error, exit 1", async () => {
+    writeFileSync(file("chain-garbage.log"), new Uint8Array([1, 2, 3]));
+    const result = await createReceiptInProcess(
+      chainArgs({ massif: file("chain-garbage.log"), json: true }),
+      // fetch is never reached — the massif fails to open first.
+      forbiddenFetch,
+    );
     expect(result.exitCode).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("plan-2607-15 phase 2");
+    const report = JSON.parse(
+      result.stdout,
+    ) as CreateReceiptChainErrorReport;
+    expect(report.error).toBe("create_receipt_chain_failed");
+    expect(report.stage).toBe("parse");
+    expect(report.reason).toBe("massif_parse_failed");
   });
 });
 
