@@ -11,18 +11,26 @@ import {
  *
  * Two anchor modes:
  * - `checkpoint`: attach the locally-rebuilt leaf→peak path to the
- *   pre-signed peak receipt from a format-v3 checkpoint — bytes identical
- *   to an API-issued receipt, no operator call.
+ *   pre-signed peak receipt from a format-v3 checkpoint —
+ *   verify-equivalent with an API-issued receipt, no operator call.
  * - `chain`: verify the computed peak against the on-chain accumulator
  *   (`--univocity` + `--log-id` + `--rpc-url`) — no operator, only the
- *   contract (FOR-334 variant B).
+ *   contract (FOR-334 variant B; plan-2607-15 phase 2).
+ *
+ * Leaf addressing (exactly one):
+ * - `--mmr-index`: the leaf's MMR index directly;
+ * - `--entry-id`: the permanent SCRAPI entry id (32 hex chars =
+ *   idtimestamp_be8 || mmrIndex_be8) — the mmrIndex is decoded from its
+ *   second half, no index-region lookup needed.
  */
 export type CreateReceiptOptions = ForestrieCommonOptions & {
   anchor: "checkpoint" | "chain";
   /** Massif .log blob holding the leaf and its proof nodes. */
   massif: string;
-  /** MMR index of the leaf to prove. */
-  mmrIndex: number;
+  /** MMR index of the leaf to prove (`--mmr-index` addressing). */
+  mmrIndex: bigint | undefined;
+  /** Permanent SCRAPI entry id (`--entry-id` addressing). */
+  entryId: string | undefined;
   /** Checkpoint (.sth) with pre-signed peak receipts (checkpoint mode). */
   checkpoint: string | undefined;
   /** ImutableUnivocity contract address (chain mode). */
@@ -35,16 +43,28 @@ export type CreateReceiptOptions = ForestrieCommonOptions & {
   out: string | undefined;
 };
 
-export function parseCreateReceiptOptions(
-  args: LooseParsedArgs,
-): CreateReceiptOptions {
-  const raw = requiredStringOption(args, "mmr-index");
-  const mmrIndex = Number(raw);
-  if (!Number.isInteger(mmrIndex) || mmrIndex < 0) {
+function parseMMRIndex(raw: string): bigint {
+  if (!/^\d+$/.test(raw)) {
     throw new Error(
       `invalid --mmr-index '${raw}' (expected a non-negative integer)`,
     );
   }
+  return BigInt(raw);
+}
+
+export function parseCreateReceiptOptions(
+  args: LooseParsedArgs,
+): CreateReceiptOptions {
+  const rawMMRIndex = optionalStringOption(args, "mmr-index");
+  const entryId = optionalStringOption(args, "entry-id");
+  if ((rawMMRIndex === undefined) === (entryId === undefined)) {
+    throw new Error(
+      "exactly one of --mmr-index or --entry-id is required to address the leaf",
+    );
+  }
+  const mmrIndex =
+    rawMMRIndex !== undefined ? parseMMRIndex(rawMMRIndex) : undefined;
+
   const checkpoint = optionalStringOption(args, "checkpoint");
   const univocity = optionalStringOption(args, "univocity");
   const logId = optionalStringOption(args, "log-id");
@@ -71,6 +91,7 @@ export function parseCreateReceiptOptions(
     anchor,
     massif: requiredStringOption(args, "massif"),
     mmrIndex,
+    entryId,
     checkpoint,
     univocity,
     logId,

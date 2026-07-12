@@ -269,6 +269,28 @@ export type VerifyFixture = {
   rootKeyPair: CryptoKeyPair;
 };
 
+/** Forest genesis CBOR with `bootstrapKey` (ES256 x||y) as the trust root. */
+export function buildGenesisCbor(bootstrapKey: Uint8Array): Uint8Array {
+  return cborBytes(
+    new Map<number, unknown>([
+      [LABEL_GENESIS_VERSION, GENESIS_SCHEMA_V2],
+      [LABEL_GENESIS_ALG, COSE_ALG_ES256],
+      [LABEL_BOOTSTRAP_KEY, bootstrapKey],
+      [LABEL_UNIVOCITY_ADDR, new Uint8Array(20).fill(0xab)],
+      [LABEL_CHAIN_ID, "84532"],
+      [LABEL_LOG_ID, toPaddedWire32(uuidToBytes(FIXTURE_LOG_ID))],
+    ]),
+  );
+}
+
+/** Permanent SCRAPI entry id: idtimestamp_be8 || mmrIndex_be8, hex. */
+export function entryIdHexFor(
+  idtimestampBe8: Uint8Array,
+  mmrIndex: bigint,
+): string {
+  return bytesToHex(idtimestampBe8) + bytesToHex(u64Be(mmrIndex));
+}
+
 /**
  * Two-leaf MMR: leaf 0 is an unrelated grant, leaf 1 (mmrIndex 1) is the
  * grant under test. The checkpoint peak is their parent; the genesis trust
@@ -284,7 +306,7 @@ export async function buildVerifyFixture(): Promise<VerifyFixture> {
   const grant = grantWithData(FIXTURE_LOG_ID, bootstrapKey);
   const idtimestampBe8 = new Uint8Array(8).fill(0x02);
   const mmrIndex = 1n;
-  const entryIdHex = bytesToHex(idtimestampBe8) + bytesToHex(u64Be(mmrIndex));
+  const entryIdHex = entryIdHexFor(idtimestampBe8, mmrIndex);
 
   const inner0 = await grantCommitmentHash(
     grantWithData(FIXTURE_LOG_ID, new Uint8Array(64).fill(0xaa)),
@@ -322,16 +344,7 @@ export async function buildVerifyFixture(): Promise<VerifyFixture> {
     proofPathOverride: badPath,
   });
 
-  const genesisCbor = cborBytes(
-    new Map<number, unknown>([
-      [LABEL_GENESIS_VERSION, GENESIS_SCHEMA_V2],
-      [LABEL_GENESIS_ALG, COSE_ALG_ES256],
-      [LABEL_BOOTSTRAP_KEY, bootstrapKey],
-      [LABEL_UNIVOCITY_ADDR, new Uint8Array(20).fill(0xab)],
-      [LABEL_CHAIN_ID, "84532"],
-      [LABEL_LOG_ID, toPaddedWire32(uuidToBytes(FIXTURE_LOG_ID))],
-    ]),
-  );
+  const genesisCbor = buildGenesisCbor(bootstrapKey);
   const ks256GenesisCbor = cborBytes(
     new Map<number, unknown>([
       [LABEL_GENESIS_VERSION, GENESIS_SCHEMA_V2],

@@ -100,7 +100,32 @@ describe("parseCreateReceiptOptions", () => {
       checkpoint: "c.sth",
     });
     expect(options.anchor).toBe("checkpoint");
-    expect(options.mmrIndex).toBe(0);
+    expect(options.mmrIndex).toBe(0n);
+    expect(options.entryId).toBeUndefined();
+  });
+
+  test("entry-id is the other leaf address", () => {
+    const options = parseCreateReceiptOptions({
+      massif: "m.log",
+      "entry-id": "02".repeat(16),
+      checkpoint: "c.sth",
+    });
+    expect(options.entryId).toBe("02".repeat(16));
+    expect(options.mmrIndex).toBeUndefined();
+  });
+
+  test("exactly one of mmr-index / entry-id is required", () => {
+    expect(() =>
+      parseCreateReceiptOptions({ massif: "m.log", checkpoint: "c.sth" }),
+    ).toThrow(/--mmr-index or --entry-id/);
+    expect(() =>
+      parseCreateReceiptOptions({
+        massif: "m.log",
+        checkpoint: "c.sth",
+        "mmr-index": "0",
+        "entry-id": "02".repeat(16),
+      }),
+    ).toThrow(/--mmr-index or --entry-id/);
   });
 
   test("univocity selects chain mode and requires log-id + rpc-url", () => {
