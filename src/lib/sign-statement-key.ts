@@ -18,6 +18,7 @@ import {
   type webcrypto,
 } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { parsePemResilient } from "./openssl-error-queue.js";
 
 /** kid length: first 32 bytes of `x||y` (i.e. the x coordinate). */
 export const ES256_KID_BYTES = 32;
@@ -107,7 +108,11 @@ export async function es256SigningKeyFromText(
 function importPrivateKeyObject(text: string, source: string): KeyObject {
   if (text.includes("-----BEGIN")) {
     try {
-      return createPrivateKey({ key: text, format: "pem" });
+      // `parsePemResilient` retries once so a valid key is never rejected
+      // because the OpenSSL error queue was poisoned elsewhere (FOR-343).
+      return parsePemResilient(() =>
+        createPrivateKey({ key: text, format: "pem" }),
+      );
     } catch (err) {
       throw new Error(
         `${source}: not a readable EC private key PEM: ${errorMessage(err)}`,

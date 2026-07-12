@@ -6,9 +6,13 @@ import { parseRegisterGrantOptions } from "../src/options/register-grant.js";
 import { parseSignStatementOptions } from "../src/options/sign-statement.js";
 import { parseVerifyOptions } from "../src/options/verify.js";
 
-const SAVED = ["FORESTRIE_BASE_URL", "RPC_URL", "GRANT_B64"].map(
-  (name) => [name, process.env[name]] as const,
-);
+const SAVED = [
+  "FORESTRIE_BASE_URL",
+  "RPC_URL",
+  "GRANT_B64",
+  "DEPLOYER_KEY",
+  "OWNER_ADDRESS",
+].map((name) => [name, process.env[name]] as const);
 
 afterEach(() => {
   for (const [name, value] of SAVED) {
@@ -21,25 +25,89 @@ afterEach(() => {
 });
 
 describe("parseDeployOptions", () => {
+  const DEPLOYER_KEY =
+    "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+  /** Minimal valid argv (generate mode). */
+  const base = {
+    "rpc-url": "http://x",
+    "deployer-key": DEPLOYER_KEY,
+    "bootstrap-es256-generate": true,
+    "bootstrap-es256-pem-out": "bootstrap.es256.pem",
+  };
+
   test("es256 is the default bootstrap alg (paved path)", () => {
-    const options = parseDeployOptions({ "rpc-url": "http://x" });
+    const options = parseDeployOptions({ ...base });
     expect(options.bootstrapAlg).toBe("es256");
+    expect(options.releaseTag).toBe("latest");
+    expect(options.deployerKey).toBe(DEPLOYER_KEY);
   });
 
   test("rejects unknown bootstrap alg", () => {
     expect(() =>
-      parseDeployOptions({ "rpc-url": "http://x", "bootstrap-alg": "rsa" }),
+      parseDeployOptions({ ...base, "bootstrap-alg": "rsa" }),
     ).toThrow(/bootstrap-alg/);
   });
 
-  test("rpc-url falls back to RPC_URL env", () => {
+  test("rpc-url and deployer-key fall back to env", () => {
     process.env["RPC_URL"] = "http://from-env";
-    expect(parseDeployOptions({}).rpcUrl).toBe("http://from-env");
+    process.env["DEPLOYER_KEY"] = DEPLOYER_KEY.slice(2).toUpperCase();
+    const options = parseDeployOptions({
+      "bootstrap-es256-pem": "bootstrap.es256.pem",
+    });
+    expect(options.rpcUrl).toBe("http://from-env");
+    // Normalized: 0x-prefixed, lowercase.
+    expect(options.deployerKey).toBe(DEPLOYER_KEY);
   });
 
   test("missing rpc-url is a usage error", () => {
     delete process.env["RPC_URL"];
-    expect(() => parseDeployOptions({})).toThrow(/--rpc-url.*RPC_URL/);
+    const args: Record<string, string | boolean> = { ...base };
+    delete args["rpc-url"];
+    expect(() => parseDeployOptions(args)).toThrow(/--rpc-url.*RPC_URL/);
+  });
+
+  test("missing deployer-key is a usage error", () => {
+    delete process.env["DEPLOYER_KEY"];
+    const args: Record<string, string | boolean> = { ...base };
+    delete args["deployer-key"];
+    expect(() => parseDeployOptions(args)).toThrow(
+      /--deployer-key.*DEPLOYER_KEY/,
+    );
+  });
+
+  test("malformed deployer-key is a usage error", () => {
+    expect(() =>
+      parseDeployOptions({ ...base, "deployer-key": "0xnothex" }),
+    ).toThrow(/32-byte hex/);
+  });
+
+  test("es256 requires a key source (generate or pem)", () => {
+    expect(() =>
+      parseDeployOptions({ "rpc-url": "http://x", "deployer-key": DEPLOYER_KEY }),
+    ).toThrow(/--bootstrap-es256-generate .* or --bootstrap-es256-pem/);
+  });
+
+  test("generate and pem are mutually exclusive", () => {
+    expect(() =>
+      parseDeployOptions({ ...base, "bootstrap-es256-pem": "k.pem" }),
+    ).toThrow(/mutually exclusive/);
+  });
+
+  test("generate requires pem-out (key must be kept)", () => {
+    const args: Record<string, string | boolean> = { ...base };
+    delete args["bootstrap-es256-pem-out"];
+    expect(() => parseDeployOptions(args)).toThrow(/--bootstrap-es256-pem-out/);
+  });
+
+  test("pem-out without generate is a usage error", () => {
+    expect(() =>
+      parseDeployOptions({
+        "rpc-url": "http://x",
+        "deployer-key": DEPLOYER_KEY,
+        "bootstrap-es256-pem": "k.pem",
+        "bootstrap-es256-pem-out": "out.pem",
+      }),
+    ).toThrow(/only meaningful with --bootstrap-es256-generate/);
   });
 });
 

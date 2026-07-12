@@ -15,6 +15,7 @@ const CLI_ENV_VARS = [
   "RPC_URL",
   "GRANT_B64",
   "OWNER_ADDRESS",
+  "DEPLOYER_KEY",
 ];
 
 /** Run the CLI from source (`bun src/cli.ts …`) with a scrubbed env. */
@@ -46,6 +47,39 @@ export function runCli(
 }
 
 /**
+ * As `runCli`, but asynchronous — required when the CLI must talk to a
+ * server hosted by the test process itself (`spawnSync` blocks the
+ * event loop, deadlocking in-process mock servers).
+ */
+export async function runCliAsync(
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<CliResult> {
+  const spawnEnv: Record<string, string | undefined> = {
+    ...process.env,
+    ...env,
+  };
+  for (const name of CLI_ENV_VARS) {
+    if (!(name in env)) {
+      delete spawnEnv[name];
+    }
+  }
+  const proc = Bun.spawn({
+    cmd: ["bun", path.join(ROOT, "src/cli.ts"), ...args],
+    cwd: ROOT,
+    env: spawnEnv,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  return { exitCode, stdout, stderr };
+}
+
+/**
  * Minimal valid argv per subcommand (parse succeeds). `implemented`
  * commands have real behaviour — the not-implemented stub contract
  * no longer applies to them (they have their own test files).
@@ -56,7 +90,16 @@ export const SUBCOMMANDS: Record<
 > = {
   deploy: {
     issue: "FOR-340",
-    args: ["--rpc-url", "http://localhost:8545"],
+    args: [
+      "--rpc-url",
+      "http://localhost:8545",
+      "--deployer-key",
+      "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+      "--bootstrap-es256-generate",
+      "--bootstrap-es256-pem-out",
+      "bootstrap.es256.pem",
+    ],
+    implemented: true,
   },
   "sign-statement": {
     issue: "FOR-341",
