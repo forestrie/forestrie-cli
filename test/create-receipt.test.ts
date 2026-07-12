@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { decode as decodeCbor } from "cbor-x";
 import { createCaptureOut } from "@forestrie/cli-kit/reporting";
 import { encodeGrantPayload } from "@forestrie/encoding";
 import { verifyGrantReceiptOffline } from "@forestrie/receipt-verify";
@@ -11,12 +12,15 @@ import type {
   CreateReceiptReport,
 } from "../src/main/create-receipt.js";
 import { runCreateReceipt } from "../src/main/create-receipt.js";
+import { deriveCheckpointReceipt } from "../src/lib/create-receipt-derive.js";
 import { parseCreateReceiptOptions } from "../src/options/create-receipt.js";
 import {
   buildCreateReceiptFixture,
+  buildMultiPeakFixture,
   buildV2CheckpointBytes,
   tamperMassifSibling,
   type CreateReceiptFixture,
+  type MultiPeakFixture,
 } from "./create-receipt-fixture.js";
 import { runCli } from "./support.js";
 
@@ -242,6 +246,68 @@ describe("create-receipt (checkpoint mode)", () => {
     });
     expect(verified.ok).toBe(false);
     expect(verified.stage).toBe("signature");
+  });
+});
+
+describe("create-receipt peak narration pins to the attached receipt (R1, plan-2607-16 W1)", () => {
+  let mp: MultiPeakFixture;
+
+  beforeAll(async () => {
+    mp = await buildMultiPeakFixture();
+  });
+
+  /** Detached signature (COSE Sign1 element 3) of a receipt or peak receipt. */
+  const sigOf = (cbor: Uint8Array): Uint8Array => {
+    const sign1 = decodeCbor(cbor) as unknown[];
+    return sign1[3] as Uint8Array;
+  };
+
+  /**
+   * The invariant: the narrated peak identifies the SAME peak whose
+   * pre-signed receipt buildReceiptOffline actually attached. We prove it by
+   * matching the derived receipt's detached signature against the -65931
+   * entry at the reported peakIndex, and asserting the reported peakMMRIndex
+   * is that entry's peak. Peaks are ordered ascending by mmr index (the
+   * sealer's descending-height order), so peakIndex must NOT be inverted.
+   */
+  const assertPinned = async (mmrIndex: bigint, expectedPeakMMRIndex: bigint) => {
+    const derived = await deriveCheckpointReceipt({
+      massifBytes: mp.massifBytes,
+      checkpointBytes: mp.checkpoint,
+      mmrIndex,
+    });
+    expect(derived.details.peakCount).toBe(3);
+    // The narrated peak is the peak the builder actually signed over.
+    expect(derived.details.peakMMRIndex).toBe(expectedPeakMMRIndex);
+    expect(mp.peakMMRIndexes[derived.details.peakIndex]).toBe(
+      expectedPeakMMRIndex,
+    );
+    // Cross-check against the crypto: the derived receipt carries the exact
+    // signature of the -65931 entry at the reported peakIndex.
+    const peakReceipts = (decodeCbor(mp.checkpoint) as unknown[])[1] as Map<
+      number,
+      unknown
+    >;
+    const presigned = peakReceipts.get(-65931) as Uint8Array[];
+    const attached = presigned[derived.details.peakIndex]!;
+    expect(Buffer.from(sigOf(derived.receiptCbor))).toEqual(
+      Buffer.from(sigOf(attached)),
+    );
+  };
+
+  test("size-11 leaf 0 (under the leftmost, non-top peak) narrates mmr index 6, not 10", async () => {
+    // Regression for the inversion R1 warned about: pre-fix reasoning would
+    // report the top peak (10); the peak actually signed is n6 (mmr 6).
+    await assertPinned(0n, 6n);
+  });
+
+  test("size-11 leaf 7 (mmr) under the middle peak narrates mmr index 9", async () => {
+    // Asymmetric second case: a leaf under the interior peak n9.
+    await assertPinned(7n, 9n);
+  });
+
+  test("size-11 leaf 10 (mmr) is its own top peak — narrates mmr index 10", async () => {
+    await assertPinned(10n, 10n);
   });
 });
 

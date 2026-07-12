@@ -280,6 +280,99 @@ export async function buildCreateReceiptFixture(): Promise<CreateReceiptFixture>
   };
 }
 
+export type MultiPeakLeaf = {
+  grant: Grant;
+  idtimestampBe8: Uint8Array;
+  mmrIndex: bigint;
+  entryIdHex: string;
+};
+
+export type MultiPeakFixture = {
+  rootKeyPair: CryptoKeyPair;
+  genesisCbor: Uint8Array;
+  massifBytes: Uint8Array;
+  /** Sealed size 11 — three peaks at mmr indexes 6, 9, 10. */
+  checkpoint: Uint8Array;
+  /** Peak mmr indexes in the checkpoint's -65931 order (ascending). */
+  peakMMRIndexes: bigint[];
+  leaves: MultiPeakLeaf[];
+};
+
+/**
+ * A size-11 (7-leaf, height-4) multi-peak fixture: the case that pins
+ * create-receipt's peak narration for a leaf under a *non-top* peak.
+ *
+ * MMR layout (index = content):
+ *   0=leaf0 1=leaf1 2=H(0,1) 3=leaf2 4=leaf3 5=H(3,4) 6=H(2,5)
+ *   7=leaf4 8=leaf5 9=H(7,8) 10=leaf6
+ * Peaks at size 11: [6, 9, 10] — descending height / ascending mmr index,
+ * the order the sealer (go-merklelog PeakHashes) writes the -65931 array in.
+ * leaf 0 lives under the leftmost, tallest peak (n6), so its correctly
+ * narrated peak is mmr index 6, NOT the top peak 10.
+ */
+export async function buildMultiPeakFixture(): Promise<MultiPeakFixture> {
+  const rootKeyPair = await generateP256KeyPair();
+  const rootRaw = new Uint8Array(
+    (await crypto.subtle.exportKey(
+      "raw",
+      rootKeyPair.publicKey,
+    )) as ArrayBuffer,
+  );
+  const bootstrapKey = rootRaw.slice(1);
+  const genesisCbor = buildGenesisCbor(bootstrapKey);
+
+  // 7 leaves at mmr indexes 0, 1, 3, 4, 7, 8, 10.
+  const leafMMRIndexes = [0n, 1n, 3n, 4n, 7n, 8n, 10n];
+  const leaves: MultiPeakLeaf[] = [];
+  const leafHashes: Uint8Array[] = [];
+  for (let i = 0; i < leafMMRIndexes.length; i++) {
+    const idFill = 0x10 + i;
+    const leaf = await fixtureLeaf(
+      new Uint8Array(64).fill(idFill),
+      idFill,
+      leafMMRIndexes[i]!,
+    );
+    leaves.push({
+      grant: leaf.grant,
+      idtimestampBe8: leaf.idtimestampBe8,
+      mmrIndex: leaf.mmrIndex,
+      entryIdHex: leaf.entryIdHex,
+    });
+    leafHashes.push(leaf.leafHash);
+  }
+  const [n0, n1, n3, n4, n7, n8, n10] = leafHashes as [
+    Uint8Array, Uint8Array, Uint8Array, Uint8Array, Uint8Array, Uint8Array,
+    Uint8Array,
+  ];
+  // Interior nodes keyed by 1-based position (index + 1).
+  const n2 = await positionCommittedInteriorHash(3n, n0, n1);
+  const n5 = await positionCommittedInteriorHash(6n, n3, n4);
+  const n6 = await positionCommittedInteriorHash(7n, n2, n5);
+  const n9 = await positionCommittedInteriorHash(10n, n7, n8);
+
+  const massifBytes = buildV2MassifBytes({
+    massifHeight: 4,
+    massifIndex: 0,
+    logHashes: [n0, n1, n2, n3, n4, n5, n6, n7, n8, n9, n10],
+  });
+
+  // Peak receipts in the sealer's order: peaks 6, 9, 10 (ascending mmr index).
+  const peakReceipts = [
+    await signDetachedPeakReceipt(rootKeyPair, n6),
+    await signDetachedPeakReceipt(rootKeyPair, n9),
+    await signDetachedPeakReceipt(rootKeyPair, n10),
+  ];
+
+  return {
+    rootKeyPair,
+    genesisCbor,
+    massifBytes,
+    checkpoint: buildV2CheckpointBytes({ mmrSize: 11n, peakReceipts }),
+    peakMMRIndexes: [6n, 9n, 10n],
+    leaves,
+  };
+}
+
 /** Flip a bit in the sibling node (n0) log data — last 4 fields are nodes. */
 export function tamperMassifSibling(massifBytes: Uint8Array): Uint8Array {
   const tampered = massifBytes.slice();

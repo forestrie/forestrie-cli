@@ -1,5 +1,6 @@
 import {
   buildReceiptOffline,
+  computeAccumulatorPeak,
   openMassifNodeStore,
   parseCheckpoint,
   parseReceipt,
@@ -90,11 +91,11 @@ function errorMessage(err: unknown): string {
  * leaf-not-in-massif, checkpoint-doesn't-cover-leaf — are classified
  * before derivation, and the checkpoint parse feeds the narration.
  */
-export function deriveCheckpointReceipt(input: {
+export async function deriveCheckpointReceipt(input: {
   massifBytes: Uint8Array;
   checkpointBytes: Uint8Array;
   mmrIndex: bigint;
-}): DerivedReceipt {
+}): Promise<DerivedReceipt> {
   const { massifBytes, checkpointBytes, mmrIndex } = input;
 
   let checkpoint: ParsedCheckpoint;
@@ -159,15 +160,32 @@ export function deriveCheckpointReceipt(input: {
     fail("derive", "derive_failed", errorMessage(err));
   }
 
-  // Narration facts. The proof length comes from the assembled receipt;
-  // the selected peak is the first accumulator peak at or after the leaf
-  // (peaks ascend by MMR index), matching the slot buildReceiptOffline
-  // committed to via peak-index-for-leaf-proof.
+  // Narration facts. The proof length comes from the assembled receipt.
+  //
+  // The reported peak MUST identify the exact same accumulator peak whose
+  // pre-signed receipt buildReceiptOffline attached — this narration is the
+  // demo's proof of *which* peak was signed, so it cannot drift from the
+  // builder. We therefore reuse the builder's own selection rather than
+  // recomputing it independently: computeAccumulatorPeak returns the same
+  // `peakIndex` (peakIndexForLeafProof(mmrSize, proofLen)) buildReceiptOffline
+  // indexes the -65931 array with, plus the peak hash it commits to. The
+  // -65931 array and peakMMRIndexes share the sealer's descending-height /
+  // ascending-mmr-index order (go-merklelog PeakHashes), so peakIndex maps
+  // straight into peakMMRIndexes — no inversion.
   const proofLength = parseReceipt(receiptCbor).proof.path.length;
   const peaks = peakMMRIndexes(sealedSize - 1n);
-  const peakIndex = peaks.findIndex((p) => p >= mmrIndex);
+  let peakIndex: number;
+  try {
+    ({ peakIndex } = await computeAccumulatorPeak({
+      massifBytes,
+      mmrIndex,
+      mmrSize: sealedSize,
+    }));
+  } catch (err) {
+    fail("derive", "derive_failed", errorMessage(err));
+  }
   const peakMMRIndex = peaks[peakIndex];
-  if (peakIndex === -1 || peakMMRIndex === undefined) {
+  if (peakMMRIndex === undefined) {
     // Unreachable given mmrIndex < sealedSize; keep the failure typed.
     fail("derive", "derive_failed", "no accumulator peak covers the leaf");
   }

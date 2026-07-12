@@ -163,7 +163,7 @@ export async function runCreateReceipt(
 
   let derived: DerivedReceipt;
   try {
-    derived = deriveCheckpointReceipt({
+    derived = await deriveCheckpointReceipt({
       massifBytes: artifacts.massifBytes,
       // Checkpoint mode: options parsing guarantees --checkpoint.
       checkpointBytes: artifacts.checkpointBytes!,
