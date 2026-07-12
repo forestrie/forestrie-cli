@@ -14,6 +14,7 @@ import {
   resolveBootstrapKey,
   type BootstrapKey,
 } from "@forestrie/deploy-core";
+import { drainOpenSslErrorQueue } from "./openssl-error-queue.js";
 import { errorMessage } from "./sign-statement-key.js";
 
 /** Resolved ES256 bootstrap key ready for constructor encoding. */
@@ -85,6 +86,11 @@ export async function resolveDeployBootstrapKey(
   try {
     bootstrap = await resolveBootstrapKey({ alg: "es256", pem });
   } catch (err) {
+    // deploy-core parses via `crypto.subtle.importKey`; on bun a failed
+    // import over malformed DER leaves a stale entry on the OpenSSL error
+    // queue that would poison the next node:crypto PEM parse (FOR-343).
+    // Drain it here so the failure stays contained to this call.
+    drainOpenSslErrorQueue();
     throw new Error(
       `${input.pemPath}: not a usable ES256 (P-256) key PEM: ${errorMessage(err)}`,
     );

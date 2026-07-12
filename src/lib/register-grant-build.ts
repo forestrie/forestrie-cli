@@ -23,6 +23,7 @@
  * Node-only module (node:crypto PEM handling); no HTTP, no env.
  */
 import { createPublicKey } from "node:crypto";
+import { parsePemResilient } from "./openssl-error-queue.js";
 import {
   authLogBootstrapShapedFlags,
   bytesToForestrieGrantBase64,
@@ -59,7 +60,11 @@ function base64UrlToBytes(b64url: string): Uint8Array {
 export function es256PublicKeyXyFromPem(pem: string): Uint8Array {
   let jwk: { crv?: string; x?: unknown; y?: unknown };
   try {
-    jwk = createPublicKey({ key: pem, format: "pem" }).export({
+    // `parsePemResilient` retries once so a valid key is never rejected
+    // because the OpenSSL error queue was poisoned elsewhere (FOR-343).
+    jwk = parsePemResilient(() =>
+      createPublicKey({ key: pem, format: "pem" }),
+    ).export({
       format: "jwk",
     });
   } catch (err) {
