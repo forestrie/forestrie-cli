@@ -11,6 +11,13 @@ import {
   loadCreateReceiptArtifacts,
   type CreateReceiptArtifacts,
 } from "../lib/create-receipt-inputs.js";
+import {
+  ChainVerifyFailure,
+  verifyChainAnchored,
+  type ChainVerifyOutcome,
+  type ChainVerifyReason,
+  type ChainVerifyResult,
+} from "../lib/create-receipt-chain-verify.js";
 
 /** Where an operational error broke the run. */
 export type CreateReceiptErrorStage = "input" | "parse" | "derive";
@@ -31,12 +38,70 @@ export type CreateReceiptErrorReport = {
   message: string;
 };
 
-/** `--json` chain-mode stub shape — phase 2 of plan-2607-15. */
-export type CreateReceiptNotImplementedReport = {
-  error: "not_implemented";
+/**
+ * Exit codes for chain-anchored (`--univocity`) mode — one code per
+ * verification outcome so scripts can branch without parsing text. Operational
+ * errors (bad input / RPC) stay on the shared exit 1.
+ */
+export const CHAIN_EXIT_CODE: Record<ChainVerifyOutcome, number> = {
+  verified: 0,
+  not_yet_anchored: 2,
+  coverage: 3,
+  peak_mismatch: 4,
+  // plan-2607-18 W3: `wrong_massif` (V2/V3) and `accumulator_short` (V4) split
+  // out of the coverage / peak_mismatch buckets; next free codes in the 2/3/4
+  // scheme. No collision with `verify`, which only uses 0/1.
+  wrong_massif: 5,
+  accumulator_short: 6,
+};
+
+/**
+ * `--json` chain-mode success/verdict shape (report-only — NO signed
+ * receipt; the selling point is receipt-free, on-chain verification). The
+ * shape is a contract: `outcome` + the on-chain size, computed peak, matched
+ * slot, and PASS/FAIL.
+ */
+export type CreateReceiptChainReport = {
   command: "create-receipt";
-  mode: "chain";
-  issue: "FOR-345";
+  anchor: "chain";
+  /** True only when `outcome === "verified"`. */
+  ok: boolean;
+  outcome: ChainVerifyOutcome;
+  univocity: string;
+  logId: string;
+  leaf: {
+    mmrIndex: string;
+    source: "mmr-index" | "entry-id";
+    entryId?: string;
+    idtimestamp?: string;
+  };
+  massif: {
+    massifIndex: string;
+    massifHeight: number;
+    firstIndex: string;
+    lastIndex: string;
+  };
+  onchain: {
+    size: string;
+    peakCount: number;
+  };
+  peakCheck?: {
+    proofLength: number;
+    peakIndex: number;
+    peakMMRIndex: string;
+    computedPeakHex: string;
+    onchainPeakHex: string;
+    matched: boolean;
+  };
+};
+
+/** `--json` chain-mode operational-error shape (bad massif / RPC). */
+export type CreateReceiptChainErrorReport = {
+  error: "create_receipt_chain_failed";
+  command: "create-receipt";
+  anchor: "chain";
+  stage: "parse" | "chain";
+  reason?: ChainVerifyReason;
   message: string;
 };
 
@@ -106,58 +171,197 @@ function reportRunError(
   process.exitCode = 1;
 }
 
+/** One-line human explanation for each non-verified outcome. */
+const CHAIN_OUTCOME_NARRATION: Record<ChainVerifyOutcome, string> = {
+  verified: "computed peak matches the on-chain accumulator",
+  not_yet_anchored:
+    "leaf postdates the last on-chain anchor (mmrIndex >= on-chain size) — anchor lag",
+  wrong_massif:
+    "the massif blob is for a different massif than the leaf",
+  coverage:
+    "local massif blob does not hold nodes up to the on-chain size — fetch the covering massif",
+  accumulator_short:
+    "the on-chain accumulator holds fewer peaks than the leaf's proof selects — chain state is behind or truncated",
+  peak_mismatch:
+    "computed peak differs from the anchored peak — local node data does not match the chain",
+};
+
 /**
- * Chain-anchored mode is phase 2 of plan-2607-15 (report-only peak check
- * against the on-chain accumulator via `computeAccumulatorPeak` + the
- * verify-anchored logState plumbing). The arg surface is real; the
- * behaviour is a structured stub until then.
+ * FOR-345 (phase 2, plan-2607-15 §3/§6): chain-anchored, REPORT-ONLY
+ * verification. No `.sth`, no signed receipt — the selling point is
+ * receipt-free verification, because the checkpoint signature was already
+ * enforced on-chain at publish. Reads `logState(bytes32)`, rebuilds the
+ * leaf's inclusion path at the on-chain size, and compares the computed peak
+ * with `accumulator[peakIndex]`. There is NO exact-size constraint: any
+ * `mmrIndex < size` works given local node data to that size.
  */
-function reportChainModeNotImplemented(
+async function runChainAnchored(
   out: Out,
   options: CreateReceiptOptions,
-): void {
-  const message =
-    "forestrie create-receipt: chain-anchored mode (--univocity) is not " +
-    "implemented yet — lands with plan-2607-15 phase 2 (FOR-345); use " +
-    "--checkpoint for offline receipt derivation";
+  artifacts: CreateReceiptArtifacts,
+): Promise<void> {
+  let result: ChainVerifyResult;
+  try {
+    result = await verifyChainAnchored({
+      massifBytes: artifacts.massifBytes,
+      mmrIndex: artifacts.leaf.mmrIndex,
+      // Options parsing guarantees these in chain mode.
+      univocity: options.univocity!,
+      logId: options.logId!,
+      rpcUrl: options.rpcUrl!,
+    });
+  } catch (err) {
+    reportChainRunError(out, options, err);
+    return;
+  }
+
+  const leaf = artifacts.leaf;
+  const ok = result.outcome === "verified";
+
   if (options.json) {
-    const report: CreateReceiptNotImplementedReport = {
-      error: "not_implemented",
+    const report: CreateReceiptChainReport = {
       command: "create-receipt",
-      mode: "chain",
-      issue: "FOR-345",
+      anchor: "chain",
+      ok,
+      outcome: result.outcome,
+      univocity: options.univocity!,
+      logId: options.logId!,
+      leaf: {
+        mmrIndex: leaf.mmrIndex.toString(10),
+        source: leaf.source,
+        ...(leaf.entryId !== undefined ? { entryId: leaf.entryId } : {}),
+        ...(leaf.idtimestamp !== undefined
+          ? { idtimestamp: leaf.idtimestamp.toString(10) }
+          : {}),
+      },
+      massif: {
+        massifIndex: result.massif.massifIndex.toString(10),
+        massifHeight: result.massif.massifHeight,
+        firstIndex: result.massif.firstIndex.toString(10),
+        lastIndex: result.massif.lastIndex.toString(10),
+      },
+      onchain: {
+        size: result.onchain.size.toString(10),
+        peakCount: result.onchain.peakCount,
+      },
+      ...(result.peakCheck !== undefined
+        ? {
+            peakCheck: {
+              proofLength: result.peakCheck.proofLength,
+              peakIndex: result.peakCheck.peakIndex,
+              peakMMRIndex: result.peakCheck.peakMMRIndex.toString(10),
+              computedPeakHex: result.peakCheck.computedPeakHex,
+              onchainPeakHex: result.peakCheck.onchainPeakHex,
+              matched: result.peakCheck.matched,
+            },
+          }
+        : {}),
+    };
+    out.out(JSON.stringify(report, null, 2));
+    process.exitCode = CHAIN_EXIT_CODE[result.outcome];
+    return;
+  }
+
+  // Human narration: on-chain size, computed peak, matched slot, PASS/FAIL.
+  out.print(
+    "create-receipt: on-chain   — %s @ log %s: size %s, %d peak(s)",
+    options.univocity,
+    options.logId,
+    result.onchain.size.toString(10),
+    result.onchain.peakCount,
+  );
+  out.print(
+    "create-receipt: leaf       — mmrIndex %s (from --%s)",
+    leaf.mmrIndex.toString(10),
+    leaf.source,
+  );
+  if (result.peakCheck !== undefined) {
+    out.print(
+      "create-receipt: proof      — %d node(s) to peak %d/%d (mmrIndex %s)",
+      result.peakCheck.proofLength,
+      result.peakCheck.peakIndex + 1,
+      result.onchain.peakCount,
+      result.peakCheck.peakMMRIndex.toString(10),
+    );
+    out.print(
+      "create-receipt: computed   — %s",
+      result.peakCheck.computedPeakHex,
+    );
+    out.print(
+      "create-receipt: on-chain   — %s (slot %d)",
+      result.peakCheck.onchainPeakHex,
+      result.peakCheck.peakIndex,
+    );
+  }
+  if (ok) {
+    out.out(
+      `PASS: leaf verified against the on-chain accumulator (size ${result.onchain.size}, peak slot ${result.peakCheck!.peakIndex}) — no receipt needed`,
+    );
+  } else {
+    // `wrong_massif` names the concrete mmrIndex the caller must supply the
+    // massif for (plan-2607-18 W3: "supply the massif containing mmrIndex N").
+    const detail =
+      result.outcome === "wrong_massif"
+        ? `${CHAIN_OUTCOME_NARRATION.wrong_massif} (supply the massif containing mmrIndex ${leaf.mmrIndex})`
+        : CHAIN_OUTCOME_NARRATION[result.outcome];
+    out.out(`FAIL: ${result.outcome} — ${detail}`);
+  }
+  process.exitCode = CHAIN_EXIT_CODE[result.outcome];
+}
+
+/** Structured envelope for chain-mode operational errors (input / RPC). */
+function reportChainRunError(
+  out: Out,
+  options: CreateReceiptOptions,
+  err: unknown,
+): void {
+  const message = err instanceof Error ? err.message : String(err);
+  const stage = err instanceof ChainVerifyFailure ? err.stage : "chain";
+  const reason = err instanceof ChainVerifyFailure ? err.reason : undefined;
+  if (options.json) {
+    const report: CreateReceiptChainErrorReport = {
+      error: "create_receipt_chain_failed",
+      command: "create-receipt",
+      anchor: "chain",
+      stage,
+      ...(reason !== undefined ? { reason } : {}),
       message,
     };
     out.out(JSON.stringify(report, null, 2));
   } else {
-    out.warn(message);
+    out.warn("forestrie create-receipt: %s: %s", stage, message);
   }
   process.exitCode = 1;
 }
 
 /**
- * FOR-345 (phase 1, plan-2607-15 §6): self-serve COSE receipt from local
- * artifacts — rebuild the leaf→peak inclusion path from the massif blob
- * and attach it to the checkpoint's pre-signed peak receipt
- * (`buildReceiptOffline`). No network, no key, no operator API call; the
- * result is verify-equivalent with an API-issued receipt. Receipt bytes
- * go to `--out`, or raw to stdout — except under `--json` without
- * `--out`, where they ride base64 inside the report (JSON owns stdout).
+ * FOR-345 self-serve receipt derivation, two anchor modes:
+ *
+ * - `checkpoint` (phase 1, plan-2607-15 §6): rebuild the leaf→peak inclusion
+ *   path from the massif blob and attach it to the checkpoint's pre-signed
+ *   peak receipt (`buildReceiptOffline`). No network, no key, no operator
+ *   API call; the result is verify-equivalent with an API-issued receipt.
+ *   Receipt bytes go to `--out`, or raw to stdout — except under `--json`
+ *   without `--out`, where they ride base64 inside the report.
+ * - `chain` (phase 2, plan-2607-15 §3): REPORT-ONLY verification of the
+ *   computed peak against the on-chain accumulator (`--univocity`). No
+ *   `.sth`, no signed receipt — its selling point is receipt-free
+ *   verification. Distinct exit codes per outcome (see `CHAIN_EXIT_CODE`).
  */
 export async function runCreateReceipt(
   out: Out,
   options: CreateReceiptOptions,
 ): Promise<void> {
-  if (options.anchor === "chain") {
-    reportChainModeNotImplemented(out, options);
-    return;
-  }
-
   let artifacts: CreateReceiptArtifacts;
   try {
     artifacts = loadCreateReceiptArtifacts(options);
   } catch (err) {
     reportRunError(out, options, "input", err);
+    return;
+  }
+
+  if (options.anchor === "chain") {
+    await runChainAnchored(out, options, artifacts);
     return;
   }
 
