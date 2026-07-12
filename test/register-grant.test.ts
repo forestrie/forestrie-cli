@@ -2,7 +2,6 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { decode as decodeCbor } from "cbor-x";
 import { createCaptureOut } from "@forestrie/cli-kit/reporting";
 import {
   assertRootGrantTransparentStatement,
@@ -18,6 +17,7 @@ import {
   grantDataToBytes,
   verifyCoseSign1WithParsedKey,
 } from "@forestrie/encoding";
+import { decodeCborDeterministic } from "@forestrie/encoding";
 import {
   RegisterGrantBuildError,
   buildGrantStatement,
@@ -421,8 +421,9 @@ describe("runRegisterGrantFlow", () => {
     );
     expect(postContentType).toBe("application/cbor");
     expect(postBody).toBeDefined();
-    const evidence = decodeCbor(postBody!) as { parentGrant: Uint8Array };
-    expect(new Uint8Array(evidence.parentGrant)).toEqual(
+    // decodeCborDeterministic returns a Map (string keys) for CBOR maps.
+    const evidence = decodeCborDeterministic(postBody!) as Map<string, Uint8Array>;
+    expect(new Uint8Array(evidence.get("parentGrant")!)).toEqual(
       new Uint8Array(Buffer.from(PARENT_B64, "base64")),
     );
   });
@@ -717,8 +718,8 @@ describe("forestrie register-grant (binary smoke, mock SCRAPI server)", () => {
         }
         if (req.headers.get("content-type") === "application/cbor") {
           const body = new Uint8Array(await req.arrayBuffer());
-          const evidence = decodeCbor(body) as { parentGrant?: Uint8Array };
-          sawParentEvidence = evidence.parentGrant !== undefined;
+          const evidence = decodeCborDeterministic(body) as Map<string, unknown>;
+          sawParentEvidence = evidence.get("parentGrant") !== undefined;
         }
         return new Response(null, {
           status: 303,

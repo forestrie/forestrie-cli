@@ -8,7 +8,6 @@
  * `cbor-x` is imported as a transitive dependency of
  * `@forestrie/receipt-verify` (test-only convenience; not a package dep).
  */
-import { encode as encodeCbor } from "cbor-x";
 import {
   encodeGrantPayload,
   encodeSigStructure,
@@ -17,6 +16,7 @@ import {
   uuidToBytes,
   type Grant,
 } from "@forestrie/encoding";
+import { encodeCborDeterministic } from "@forestrie/encoding";
 import {
   calculateRoot,
   createSyncHasher,
@@ -43,7 +43,7 @@ const VDS_COSE_RECEIPT_PROOFS_TAG = 396;
 export const FIXTURE_LOG_ID = "660e8400-e29b-41d4-a716-446655440001";
 
 function cborBytes(value: unknown): Uint8Array {
-  const encoded = encodeCbor(value);
+  const encoded = encodeCborDeterministic(value);
   return encoded instanceof Uint8Array
     ? encoded
     : new Uint8Array(encoded as ArrayLike<number>);

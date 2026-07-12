@@ -3,9 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-// `cbor-x` is a transitive dependency of `@forestrie/encoding` (see
 // test/verify-fixture.ts for the same pattern).
-import { decode as decodeCbor } from "cbor-x";
 import {
   COSE_ALG_ES256,
   coseUnprotectedToMap,
@@ -14,6 +12,7 @@ import {
   extractAlgFromProtected,
   verifyCoseSign1WithParsedKey,
 } from "@forestrie/encoding";
+import { decodeCborDeterministic } from "@forestrie/encoding";
 import {
   buildSignedStatement,
   COSE_CONTENT_TYPE,
@@ -71,7 +70,7 @@ function expectedKid(): Uint8Array {
 
 /** Decode a COSE protected-header bstr into a label -> value map. */
 function protectedToMap(protectedBstr: Uint8Array): Map<number, unknown> {
-  const decoded = decodeCbor(protectedBstr) as unknown;
+  const decoded = decodeCborDeterministic(protectedBstr) as unknown;
   if (decoded instanceof Map) return decoded as Map<number, unknown>;
   const out = new Map<number, unknown>();
   for (const [k, v] of Object.entries(

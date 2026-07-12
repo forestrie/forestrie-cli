@@ -2,9 +2,9 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { decode as decodeCbor } from "cbor-x";
 import { createCaptureOut } from "@forestrie/cli-kit/reporting";
 import { encodeGrantPayload } from "@forestrie/encoding";
+import { decodeCborUnwrapCose } from "@forestrie/encoding";
 import { verifyGrantReceiptOffline } from "@forestrie/receipt-verify";
 import type {
   CreateReceiptChainErrorReport,
@@ -274,7 +274,7 @@ describe("create-receipt peak narration pins to the attached receipt (R1, plan-2
 
   /** Detached signature (COSE Sign1 element 3) of a receipt or peak receipt. */
   const sigOf = (cbor: Uint8Array): Uint8Array => {
-    const sign1 = decodeCbor(cbor) as unknown[];
+    const sign1 = decodeCborUnwrapCose(cbor) as unknown[];
     return sign1[3] as Uint8Array;
   };
 
@@ -300,7 +300,7 @@ describe("create-receipt peak narration pins to the attached receipt (R1, plan-2
     );
     // Cross-check against the crypto: the derived receipt carries the exact
     // signature of the -65931 entry at the reported peakIndex.
-    const peakReceipts = (decodeCbor(mp.checkpoint) as unknown[])[1] as Map<
+    const peakReceipts = (decodeCborUnwrapCose(mp.checkpoint) as unknown[])[1] as Map<
       number,
       unknown
     >;
