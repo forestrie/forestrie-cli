@@ -45,13 +45,9 @@ jobs:
           run_expect_1() {
             "$@" && exit 1 || test $? -eq 1
           }
-          run_expect_1 ./dist/forestrie-linux-x64 deploy --rpc-url http://localhost:8545
           run_expect_1 ./dist/forestrie-linux-x64 register-grant --base-url https://x --owner-log A --data-log B --sign-with k.pem --self-referential
           run_expect_1 ./dist/forestrie-linux-x64 complete-grant --grant g.b64 --checkpoint c.sth
           run_expect_1 ./dist/forestrie-linux-x64 create-receipt --massif m.log --mmr-index 0 --checkpoint c.sth
-          # --json output must parse as JSON with the structured envelope
-          ./dist/forestrie-linux-x64 deploy --json --rpc-url http://localhost:8545 > deploy.json || test $? -eq 1
-          jq -e '.error == "not_implemented" and .issue == "FOR-340"' deploy.json
 
       - name: Smoke test implemented commands
         # Implemented commands: --help must render (exit 0) and a
@@ -64,10 +60,12 @@ jobs:
           run_expect_fail() {
             "$@" && exit 1 || test $? -ne 0
           }
+          ./dist/forestrie-linux-x64 deploy --help
           ./dist/forestrie-linux-x64 sign-statement --help
           ./dist/forestrie-linux-x64 register --help
           ./dist/forestrie-linux-x64 decode-receipt --help
           ./dist/forestrie-linux-x64 verify --help
+          run_expect_fail ./dist/forestrie-linux-x64 deploy --rpc-url http://localhost:8545
           run_expect_fail ./dist/forestrie-linux-x64 sign-statement --key missing.pem --payload missing.json
           run_expect_fail ./dist/forestrie-linux-x64 register --base-url https://x --log-id L --statement missing.cose --grant-b64 AAAA
           run_expect_fail ./dist/forestrie-linux-x64 decode-receipt missing.cbor
