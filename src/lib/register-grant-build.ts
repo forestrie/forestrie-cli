@@ -1,33 +1,30 @@
 /**
- * FOR-343 grant statement assembly: deterministic Forestrie-Grant v0
+ * FOR-343 writer-grant statement assembly: deterministic Forestrie-Grant v0
  * construction on top of `@forestrie/grant-builder` / `@forestrie/encoding`.
  *
- * A grant binds exactly ONE signer (`grantData` = the signer's ES256
- * `x||y`); several signers on one data log means several grants, each
- * naming that log. The grant leaf is sequenced into the OWNER (auth) log
- * (`ownerLogId`); the target/data log holds only statements. Flag shapes
- * follow grants.md §5:
+ * This module is now WRITER-ONLY (ADR-0052 / plan-2607-21): it authorizes one
+ * statement signer on an existing data log, emitting an EXTEND-ONLY grant
+ * (byte 3 = `GF_EXTEND`, byte 7 = `GF_DATA_LOG`). Log creation and the
+ * bootstrap self-referential / auth-log shapes moved to `create-log`
+ * (`create-log-build.ts`).
  *
- * - `--auth-log` / `--self-referential` → `GF_CREATE|GF_EXTEND` +
- *   `GF_AUTH_LOG` (`authLogBootstrapShapedFlags`).
- * - default (data log) → `GF_CREATE|GF_EXTEND` + `GF_DATA_LOG`
- *   (`dataLogCreateExtendFlags`).
+ * A grant binds exactly ONE signer (`grantData` = the signer's ES256 `x||y`);
+ * several signers on one data log means several grants, each naming that log.
+ * The grant leaf is sequenced into the OWNER (auth) log (`ownerLogId`); the
+ * target/data log holds only statements. Flag shape follows grants.md §5:
+ * writer grant → `GF_EXTEND` + `GF_DATA_LOG` (`dataLogExtendFlags`, the local
+ * bridge in `grant-flags-local.ts`).
  *
  * ES256 is the paved path (mirrors grant-builder's node-only
  * `es256-pem-grant` profile: COSE Sign1 with a 32-byte digest payload and
- * the full grant v0 CBOR in unprotected -65538). KS256 wallet grants need
- * the univocity chain-binding material (`signGrantWithKs256WalletKey`
- * takes the on-chain delegation context), so they are a follow-up, not a
- * flag here.
+ * the full grant v0 CBOR in unprotected -65538).
  *
  * Node-only module (node:crypto PEM handling); no HTTP, no env.
  */
 import { createPublicKey } from "node:crypto";
 import { parsePemResilient } from "./openssl-error-queue.js";
 import {
-  authLogBootstrapShapedFlags,
   bytesToForestrieGrantBase64,
-  dataLogCreateExtendFlags,
   signGrantPayloadWithEs256Pem,
 } from "@forestrie/grant-builder";
 import {
@@ -35,6 +32,7 @@ import {
   uuidToBytes,
   type Grant,
 } from "@forestrie/encoding";
+import { dataLogExtendFlags } from "./grant-flags-local.js";
 
 /** Grant construction failure (bad key material / inconsistent shape). */
 export class RegisterGrantBuildError extends Error {
@@ -93,22 +91,14 @@ export function es256PublicKeyXyFromPem(pem: string): Uint8Array {
 }
 
 export type BuildGrantStatementParams = {
-  /** Target log the grant authorizes (`grant.logId`, UUID). */
+  /** Target data log the grant authorizes (`grant.logId`, UUID). */
   targetLog: string;
   /** Owner (auth) log the grant leaf is sequenced into (`grant.ownerLogId`, UUID). */
   ownerLog: string;
   /** PKCS#8/SEC1 ES256 PEM that signs the grant envelope (the granting authority). */
   signWithPem: string;
-  /**
-   * PEM of the ONE signer being authorized (`grantData` = ES256 x||y).
-   * Public or private PEM; when absent the grant is a self grant binding
-   * the signing key itself.
-   */
-  signerPem?: string | undefined;
-  /** Bootstrap-shaped root grant: first leaf of the root log, logId == ownerLogId. */
-  selfReferential: boolean;
-  /** Child auth log (auth-log flag class) rather than a data log. */
-  authLog: boolean;
+  /** PEM of the ONE signer being authorized (`grantData` = ES256 x||y). */
+  signerPem: string;
 };
 
 export type BuiltGrantStatement = {
@@ -123,10 +113,11 @@ export type BuiltGrantStatement = {
 };
 
 /**
- * Build and sign the grant transparent statement:
- * canonical grant v0 CBOR (`encodeGrantPayloadV0Canonical`) signed via the
- * Custodian ES256 PEM profile (`signGrantPayloadWithEs256Pem`), returned
- * as `Authorization: Forestrie-Grant` base64.
+ * Build and sign the writer grant transparent statement:
+ * canonical grant v0 CBOR (`encodeGrantPayloadV0Canonical`) with EXTEND-ONLY
+ * data-log flags, signed via the Custodian ES256 PEM profile
+ * (`signGrantPayloadWithEs256Pem`), returned as `Authorization:
+ * Forestrie-Grant` base64.
  */
 export function buildGrantStatement(
   params: BuildGrantStatementParams,
@@ -148,32 +139,11 @@ export function buildGrantStatement(
     );
   }
 
-  if (params.selfReferential) {
-    // Root bootstrap shape: the grant is its own authority (first leaf of
-    // the root log), so the target IS the owner and grantData IS the
-    // envelope signer (arbor's root-grant check compares them).
-    if (params.targetLog.toLowerCase() !== params.ownerLog.toLowerCase()) {
-      throw new RegisterGrantBuildError(
-        "--self-referential requires --data-log and --owner-log to be the same log (logId == ownerLogId)",
-      );
-    }
-    if (params.signerPem !== undefined) {
-      throw new RegisterGrantBuildError(
-        "--self-referential grants bind the --sign-with key itself; omit --signer-pem",
-      );
-    }
-  }
-
   // One grant, ONE signer: the authorized signer's public key is the
-  // committed grantData; self grants bind the granting key.
-  const grantData = es256PublicKeyXyFromPem(
-    params.signerPem ?? params.signWithPem,
-  );
+  // committed grantData. Writer grants always name an explicit signer.
+  const grantData = es256PublicKeyXyFromPem(params.signerPem);
 
-  const flags =
-    params.authLog || params.selfReferential
-      ? authLogBootstrapShapedFlags()
-      : dataLogCreateExtendFlags();
+  const flags = dataLogExtendFlags();
 
   const grant: Grant = {
     logId,

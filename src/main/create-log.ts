@@ -1,10 +1,10 @@
 import type { Out } from "@forestrie/cli-kit/reporting";
-import type { RegisterGrantOptions } from "../options/register-grant.js";
+import type { CreateLogOptions } from "../options/create-log.js";
 import {
   RegisterGrantBuildError,
-  buildGrantStatement,
-  type BuiltGrantStatement,
-} from "../lib/register-grant-build.js";
+  buildCreateLogGrant,
+  type BuiltCreateLogGrant,
+} from "../lib/create-log-build.js";
 import { completeGrantBase64 } from "../lib/register-grant-complete.js";
 import {
   RegisterFlowError,
@@ -14,26 +14,24 @@ import {
 } from "../lib/register-grant-flow.js";
 
 /**
- * FOR-343: register a grant statement authorizing use of a child/data log.
- * One grant binds exactly ONE signer; several signers on one data log =
- * several grants naming that log, all sequenced into the OWNER (auth)
- * log. Build the signed grant (`@forestrie/grant-builder` ES256 profile),
- * POST it to `/register/{bootstrap}/grants` with the parent grant as CBOR
- * body evidence (`@forestrie/scrapi-client`), follow the 303 to the
- * receipt, then emit the COMPLETED grant (receipt + idtimestamp attached)
- * — the bearer credential `forestrie register` consumes.
+ * FOR-390 / ADR-0052: create a log and set its owner (K(L)). Build the signed
+ * create grant (`@forestrie/grant-builder` ES256 profile) with
+ * `GF_CREATE|GF_EXTEND` flags, POST it to `/register/{bootstrap}/grants` with
+ * the parent grant as CBOR body evidence, follow the 303 to the receipt, then
+ * emit the COMPLETED grant. The flow is identical to register-grant's; only the
+ * grant shape and the reporter labels differ (newLog / owner).
  */
 
 /** `--json` success shape. */
-export type RegisterGrantReport = {
-  command: "register-grant";
+export type CreateLogReport = {
+  command: "create-log";
   status: "receipt";
-  /** Owner (auth) log the grant leaf was sequenced into. */
+  /** Parent/auth log the create grant was sequenced into. */
   ownerLog: string;
-  /** Target child/data log the grant authorizes. */
-  dataLog: string;
-  /** The ONE authorized signer (ES256 x||y, hex) committed as grantData. */
-  grantDataHex: string;
+  /** The log that was created. */
+  newLog: string;
+  /** The new log owner (ES256 x||y, hex) committed as grantData. */
+  ownerHex: string;
   entryId: string;
   statusUrl: string;
   receiptUrl: string;
@@ -45,7 +43,7 @@ export type RegisterGrantReport = {
 };
 
 /** `--json` failure shape (problem = CBOR problem-details passthrough). */
-export type RegisterGrantErrorReport = {
+export type CreateLogErrorReport = {
   error:
     | "key_read_failed"
     | "grant_build_failed"
@@ -54,7 +52,7 @@ export type RegisterGrantErrorReport = {
     | "receipt_failed"
     | "network_failed"
     | "timeout";
-  command: "register-grant";
+  command: "create-log";
   message: string;
   httpStatus?: number;
   detail?: string;
@@ -63,8 +61,8 @@ export type RegisterGrantErrorReport = {
   receiptUrl?: string;
 };
 
-/** Test seam: effects injected by the register-grant tests (real by default). */
-export type RegisterGrantRunDeps = RegisterGrantFlowDeps;
+/** Test seam: effects injected by the create-log tests (real by default). */
+export type CreateLogRunDeps = RegisterGrantFlowDeps;
 
 const FLOW_ERROR_CODES = {
   register: "registration_failed",
@@ -84,13 +82,13 @@ async function readPemFile(path: string, flag: string): Promise<string> {
 
 function reportError(
   out: Out,
-  options: RegisterGrantOptions,
-  report: RegisterGrantErrorReport,
+  options: CreateLogOptions,
+  report: CreateLogErrorReport,
 ): void {
   if (options.json) {
     out.out(JSON.stringify(report, null, 2));
   } else {
-    out.warn("forestrie register-grant: %s", report.message);
+    out.warn("forestrie create-log: %s", report.message);
     if (report.detail !== undefined && !report.message.includes(report.detail)) {
       out.warn("  detail: %s", report.detail);
     }
@@ -107,10 +105,10 @@ function reportError(
   process.exitCode = 1;
 }
 
-function flowErrorReport(err: RegisterFlowError): RegisterGrantErrorReport {
-  const report: RegisterGrantErrorReport = {
+function flowErrorReport(err: RegisterFlowError): CreateLogErrorReport {
+  const report: CreateLogErrorReport = {
     error: FLOW_ERROR_CODES[err.stage],
-    command: "register-grant",
+    command: "create-log",
     message: err.message,
   };
   if (err.httpStatus !== undefined) report.httpStatus = err.httpStatus;
@@ -123,22 +121,22 @@ function flowErrorReport(err: RegisterFlowError): RegisterGrantErrorReport {
 
 async function reportCompletedGrant(
   out: Out,
-  options: RegisterGrantOptions,
-  built: BuiltGrantStatement,
+  options: CreateLogOptions,
+  built: BuiltCreateLogGrant,
   result: RegisterGrantFlowResult,
   completedB64: string,
 ): Promise<void> {
-  const grantDataHex = Buffer.from(built.grantData).toString("hex");
+  const ownerHex = Buffer.from(built.grantData).toString("hex");
   if (options.outB64 !== undefined) {
     await Bun.write(options.outB64, completedB64);
   }
   if (options.json) {
-    const report: RegisterGrantReport = {
-      command: "register-grant",
+    const report: CreateLogReport = {
+      command: "create-log",
       status: "receipt",
       ownerLog: options.ownerLog,
-      dataLog: options.dataLog,
-      grantDataHex,
+      newLog: options.newLog,
+      ownerHex,
       entryId: result.entryIdHex,
       statusUrl: result.statusUrl,
       receiptUrl: result.receiptUrl,
@@ -152,13 +150,13 @@ async function reportCompletedGrant(
     out.out(JSON.stringify(report, null, 2));
     return;
   }
-  // Human mode: without --out-b64 the completed grant base64 is the
-  // pipeable product on stdout; the summary narrates on stderr. With
-  // --out-b64 the summary is the stdout product (mirrors register).
+  // Human mode: without --out-b64 the completed grant base64 is the pipeable
+  // product on stdout; the summary narrates on stderr. With --out-b64 the
+  // summary is the stdout product (mirrors register / register-grant).
   const emit = options.outB64 === undefined ? out.print : out.out;
   emit("ownerLog: %s (grant leaf)", options.ownerLog);
-  emit("dataLog: %s (authorized)", options.dataLog);
-  emit("signer: %s", grantDataHex);
+  emit("newLog: %s (created)", options.newLog);
+  emit("owner: %s", ownerHex);
   emit("entryId: %s", result.entryIdHex);
   emit("statusUrl: %s", result.statusUrl);
   emit("receiptUrl: %s", result.receiptUrl);
@@ -169,40 +167,45 @@ async function reportCompletedGrant(
   }
 }
 
-export async function runRegisterGrant(
+export async function runCreateLog(
   out: Out,
-  options: RegisterGrantOptions,
-  deps: RegisterGrantRunDeps = {},
+  options: CreateLogOptions,
+  deps: CreateLogRunDeps = {},
 ): Promise<void> {
   // 1. Key material.
   let signWithPem: string;
-  let signerPem: string;
+  let signerPem: string | undefined;
   try {
     signWithPem = await readPemFile(options.signWith, "--sign-with");
-    signerPem = await readPemFile(options.signerPem, "--signer-pem");
+    signerPem =
+      options.signerPem !== undefined
+        ? await readPemFile(options.signerPem, "--signer-pem")
+        : undefined;
   } catch (err) {
     reportError(out, options, {
       error: "key_read_failed",
-      command: "register-grant",
+      command: "create-log",
       message: err instanceof Error ? err.message : String(err),
     });
     return;
   }
 
-  // 2. Build + sign the grant transparent statement (one grant, ONE signer).
-  let built: BuiltGrantStatement;
+  // 2. Build + sign the create grant transparent statement.
+  let built: BuiltCreateLogGrant;
   try {
-    built = buildGrantStatement({
-      targetLog: options.dataLog,
+    built = buildCreateLogGrant({
+      newLog: options.newLog,
       ownerLog: options.ownerLog,
       signWithPem,
       signerPem,
+      selfReferential: options.selfReferential,
+      authLog: options.authLog,
     });
   } catch (err) {
     if (err instanceof RegisterGrantBuildError) {
       reportError(out, options, {
         error: "grant_build_failed",
-        command: "register-grant",
+        command: "create-log",
         message: err.message,
       });
       return;
@@ -217,7 +220,7 @@ export async function runRegisterGrant(
       ((progress) => {
         switch (progress.phase) {
           case "registered":
-            out.print("grant registered; status: %s", progress.statusUrl);
+            out.print("create grant registered; status: %s", progress.statusUrl);
             break;
           case "status-pending":
             out.log(
@@ -244,7 +247,7 @@ export async function runRegisterGrant(
       }),
   };
 
-  // 3. Register the grant, follow to the receipt, complete the grant.
+  // 3. Register the create grant, follow to the receipt, complete the grant.
   try {
     const result = await runRegisterGrantFlow(
       {
