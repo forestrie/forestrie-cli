@@ -6,9 +6,9 @@ import { createCaptureOut } from "@forestrie/cli-kit/reporting";
 import {
   assertRootGrantTransparentStatement,
   base64ToBytes,
-  hasAuthLogClass,
   hasCreateAndExtend,
   hasDataLogClass,
+  hasExtendCapability,
 } from "@forestrie/grant-builder";
 import {
   coseUnprotectedToMap,
@@ -19,7 +19,6 @@ import {
 } from "@forestrie/encoding";
 import { decodeCborDeterministic } from "@forestrie/encoding";
 import {
-  RegisterGrantBuildError,
   buildGrantStatement,
   es256PublicKeyXyFromPem,
 } from "../src/lib/register-grant-build.js";
@@ -71,20 +70,20 @@ const OWNER_LOG = "22222222-2222-2222-2222-222222222222";
 const BOOT_LOG = "00000000-0000-0000-0000-000000000000";
 
 /**
- * Golden canonical grant v0 payload CBOR (grant-builder 0.1.1 /
- * encoding `encodeGrantPayloadV0Canonical`) for
- * `{logId: DATA_LOG, ownerLogId: OWNER_LOG, dataLogCreateExtendFlags,
+ * Golden canonical grant v0 payload CBOR (encoding
+ * `encodeGrantPayloadV0Canonical`) for the WRITER grant
+ * `{logId: DATA_LOG, ownerLogId: OWNER_LOG, dataLogExtendFlags,
  * maxHeight: 0, minGrowth: 0, grantData: SIGNER_XY}`. Structure
  * hand-verified: map(6), keys 1/2 = 32-byte padded log ids, key 3 =
- * 8-byte flags (byte 3 = GF_CREATE|GF_EXTEND = 0x03, byte 7 =
- * GF_DATA_LOG = 0x02), keys 4/5 = 0, key 6 = 64-byte grantData.
+ * 8-byte flags (byte 3 = GF_EXTEND = 0x02 — extend-only, NOT GF_CREATE;
+ * byte 7 = GF_DATA_LOG = 0x02), keys 4/5 = 0, key 6 = 64-byte grantData.
  */
 const GOLDEN_DATA_GRANT_PAYLOAD_HEX =
   "a601582000000000000000000000000000000000" +
   "11111111111111111111111111111111" +
   "02582000000000000000000000000000000000" +
   "22222222222222222222222222222222" +
-  "0348000000030000000204000500065840" +
+  "0348000000020000000204000500065840" +
   SIGNER_XY_HEX;
 
 const HEADER_RECEIPT = 396;
@@ -102,19 +101,20 @@ function xyKey(pem: string): { x: Uint8Array; y: Uint8Array; curve: "P-256" } {
 
 // --- grant construction -------------------------------------------------
 
-describe("buildGrantStatement", () => {
-  test("data-log grant payload matches the grant-builder golden vector", () => {
+describe("buildGrantStatement (writer-only)", () => {
+  test("data-log writer grant payload is EXTEND-ONLY and matches the golden vector", () => {
     const built = buildGrantStatement({
       targetLog: DATA_LOG,
       ownerLog: OWNER_LOG,
       signWithPem: OWNER_PRIV_PEM,
       signerPem: SIGNER_PRIV_PEM,
-      selfReferential: false,
-      authLog: false,
     });
     expect(hex(built.grantPayloadBytes)).toBe(GOLDEN_DATA_GRANT_PAYLOAD_HEX);
     expect(hex(built.grantData)).toBe(SIGNER_XY_HEX);
-    expect(hasCreateAndExtend(built.flags)).toBe(true);
+    // Extend-only: byte 3 === 0x02 (GF_EXTEND), NOT GF_CREATE|GF_EXTEND (0x03).
+    expect(built.flags[3]).toBe(0x02);
+    expect(hasCreateAndExtend(built.flags)).toBe(false);
+    expect(hasExtendCapability(built.flags)).toBe(true);
     expect(hasDataLogClass(built.flags)).toBe(true);
   });
 
@@ -124,8 +124,6 @@ describe("buildGrantStatement", () => {
       ownerLog: OWNER_LOG,
       signWithPem: OWNER_PRIV_PEM,
       signerPem: SIGNER_PUB_PEM, // public PEM works for --signer-pem
-      selfReferential: false,
-      authLog: false,
     });
     // grant-builder's own transparent-statement shape assertion.
     assertRootGrantTransparentStatement(built.grantBase64);
@@ -149,70 +147,6 @@ describe("buildGrantStatement", () => {
     expect(hex(grantDataToBytes(grant.grantData))).toBe(SIGNER_XY_HEX);
   });
 
-  test("--auth-log selects the bootstrap-shaped auth flag class", () => {
-    const built = buildGrantStatement({
-      targetLog: DATA_LOG,
-      ownerLog: OWNER_LOG,
-      signWithPem: OWNER_PRIV_PEM,
-      signerPem: SIGNER_PRIV_PEM,
-      selfReferential: false,
-      authLog: true,
-    });
-    expect(hasAuthLogClass(built.flags)).toBe(true);
-    expect(hasCreateAndExtend(built.flags)).toBe(true);
-  });
-
-  test("omitting --signer-pem binds the signing key itself (self grant)", () => {
-    const built = buildGrantStatement({
-      targetLog: DATA_LOG,
-      ownerLog: OWNER_LOG,
-      signWithPem: OWNER_PRIV_PEM,
-      signerPem: undefined,
-      selfReferential: false,
-      authLog: false,
-    });
-    expect(hex(built.grantData)).toBe(hex(es256PublicKeyXyFromPem(OWNER_PRIV_PEM)));
-  });
-
-  test("self-referential: logId == ownerLogId, auth-shaped, grantData == envelope signer", () => {
-    const built = buildGrantStatement({
-      targetLog: BOOT_LOG,
-      ownerLog: BOOT_LOG,
-      signWithPem: OWNER_PRIV_PEM,
-      signerPem: undefined,
-      selfReferential: true,
-      authLog: false,
-    });
-    expect(hasAuthLogClass(built.flags)).toBe(true);
-    expect(hex(built.grantData)).toBe(hex(es256PublicKeyXyFromPem(OWNER_PRIV_PEM)));
-  });
-
-  test("self-referential with differing logs is rejected", () => {
-    expect(() =>
-      buildGrantStatement({
-        targetLog: DATA_LOG,
-        ownerLog: OWNER_LOG,
-        signWithPem: OWNER_PRIV_PEM,
-        signerPem: undefined,
-        selfReferential: true,
-        authLog: false,
-      }),
-    ).toThrow(RegisterGrantBuildError);
-  });
-
-  test("self-referential with --signer-pem is rejected (binds the signing key)", () => {
-    expect(() =>
-      buildGrantStatement({
-        targetLog: BOOT_LOG,
-        ownerLog: BOOT_LOG,
-        signWithPem: OWNER_PRIV_PEM,
-        signerPem: SIGNER_PRIV_PEM,
-        selfReferential: true,
-        authLog: false,
-      }),
-    ).toThrow(/omit --signer-pem/);
-  });
-
   test("non-P-256 signer key is rejected", () => {
     // Ed25519 PEM — valid key, wrong curve for ES256.
     const ed25519 = `-----BEGIN PUBLIC KEY-----
@@ -224,8 +158,6 @@ MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=
         ownerLog: OWNER_LOG,
         signWithPem: OWNER_PRIV_PEM,
         signerPem: ed25519,
-        selfReferential: false,
-        authLog: false,
       }),
     ).toThrow(/P-256/);
   });
@@ -236,9 +168,7 @@ MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=
         targetLog: "not-a-uuid",
         ownerLog: OWNER_LOG,
         signWithPem: OWNER_PRIV_PEM,
-        signerPem: undefined,
-        selfReferential: false,
-        authLog: false,
+        signerPem: SIGNER_PRIV_PEM,
       }),
     ).toThrow(/--data-log/);
     expect(() =>
@@ -246,9 +176,7 @@ MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=
         targetLog: DATA_LOG,
         ownerLog: "nope",
         signWithPem: OWNER_PRIV_PEM,
-        signerPem: undefined,
-        selfReferential: false,
-        authLog: false,
+        signerPem: SIGNER_PRIV_PEM,
       }),
     ).toThrow(/--owner-log/);
   });
@@ -271,8 +199,6 @@ describe("completeGrantBase64", () => {
       ownerLog: OWNER_LOG,
       signWithPem: OWNER_PRIV_PEM,
       signerPem: SIGNER_PRIV_PEM,
-      selfReferential: false,
-      authLog: false,
     });
     const completedB64 = completeGrantBase64(built.grantBase64, RECEIPT, ENTRY_ID);
     const completed = base64ToBytes(completedB64);
@@ -550,8 +476,6 @@ describe("runRegisterGrant (main)", () => {
     dataLog: DATA_LOG,
     signWith: OWNER_PEM_PATH,
     signerPem: SIGNER_PEM_PATH,
-    selfReferential: false,
-    authLog: false,
     parentGrantB64: PARENT_B64,
     outB64: undefined,
     bootstrapLog: BOOT_LOG,
@@ -788,12 +712,17 @@ describe("forestrie register-grant (binary smoke, mock SCRAPI server)", () => {
       "--base-url",
       baseUrl,
       "--owner-log",
-      BOOT_LOG,
+      OWNER_LOG,
       "--data-log",
+      DATA_LOG,
+      "--bootstrap-log",
       BOOT_LOG,
-      "--self-referential",
       "--sign-with",
       OWNER_PEM_PATH,
+      "--signer-pem",
+      SIGNER_PEM_PATH,
+      "--parent-grant-b64",
+      PARENT_B64,
       "--timeout",
       "10",
       "--poll-interval",
@@ -811,7 +740,7 @@ describe("forestrie register-grant (binary smoke, mock SCRAPI server)", () => {
     ).toBe(true);
   });
 
-  test("self-referential shape violation exits 1 with grant_build_failed", async () => {
+  test("bad grant shape exits 1 with grant_build_failed", async () => {
     const result = await runCliAsync([
       "register-grant",
       "--json",
@@ -820,14 +749,19 @@ describe("forestrie register-grant (binary smoke, mock SCRAPI server)", () => {
       "--owner-log",
       OWNER_LOG,
       "--data-log",
-      DATA_LOG,
-      "--self-referential",
+      "not-a-uuid",
+      "--bootstrap-log",
+      BOOT_LOG,
       "--sign-with",
       OWNER_PEM_PATH,
+      "--signer-pem",
+      SIGNER_PEM_PATH,
+      "--parent-grant-b64",
+      PARENT_B64,
     ]);
     expect(result.exitCode).toBe(1);
     const report = JSON.parse(result.stdout) as Record<string, unknown>;
     expect(report["error"]).toBe("grant_build_failed");
-    expect(String(report["message"])).toContain("logId == ownerLogId");
+    expect(String(report["message"])).toContain("--data-log");
   });
 });

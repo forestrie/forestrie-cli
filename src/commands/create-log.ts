@@ -1,43 +1,53 @@
 import { defineCommandRunner, defineForestrieCommand } from "../commoncli.js";
-import { runRegisterGrant } from "../main/register-grant.js";
-import { parseRegisterGrantOptions } from "../options/register-grant.js";
+import { runCreateLog } from "../main/create-log.js";
+import { parseCreateLogOptions } from "../options/create-log.js";
 
 export default defineForestrieCommand({
   meta: {
-    name: "register-grant",
+    name: "create-log",
     description:
-      "Authorize a statement writer on a data log (extend-only; grant recorded in the parent auth log) [FOR-343]",
+      "Create a log and set its owner (K(L)) — data, child auth, or self-referential root bootstrap [FOR-390]",
   },
   args: {
     "base-url": {
       type: "string",
-      description:
-        "SCRAPI origin, no trailing slash (env FORESTRIE_BASE_URL)",
+      description: "SCRAPI origin, no trailing slash (env FORESTRIE_BASE_URL)",
       valueHint: "url",
     },
     "owner-log": {
       type: "string",
-      description: "Owner (auth) log the grant leaf is sequenced into",
-      valueHint: "uuid",
-      required: true,
-    },
-    "data-log": {
-      type: "string",
-      description: "Child/data log the grant authorizes",
-      valueHint: "uuid",
-      required: true,
-    },
-    "sign-with": {
-      type: "string",
       description:
-        "PKCS#8 PEM key that signs the grant statement (the granting authority)",
-      valueHint: "path",
+        "Parent/auth log the create grant is sequenced into",
+      valueHint: "uuid",
       required: true,
+    },
+    "new-log": {
+      type: "string",
+      description: "The log being created",
+      valueHint: "uuid",
+      required: true,
+    },
+    "auth-log": {
+      type: "boolean",
+      description: "Create a child auth log rather than a data log",
+      default: false,
+    },
+    "self-referential": {
+      type: "boolean",
+      description:
+        "Root bootstrap grant (--new-log == --owner-log; binds --sign-with itself, forbids --signer-pem)",
+      default: false,
     },
     "signer-pem": {
       type: "string",
       description:
-        "PEM of the signer being authorized (grantData = ES256 x||y)",
+        "PEM of the new log's owner (grantData = ES256 x||y); required unless --self-referential",
+      valueHint: "path",
+    },
+    "sign-with": {
+      type: "string",
+      description:
+        "Granting authority PEM (the parent log's K(L)) that signs the grant",
       valueHint: "path",
       required: true,
     },
@@ -45,7 +55,6 @@ export default defineForestrieCommand({
       type: "string",
       description: "Parent grant credential authorizing this registration",
       valueHint: "base64",
-      required: true,
     },
     "out-b64": {
       type: "string",
@@ -70,5 +79,5 @@ export default defineForestrieCommand({
       valueHint: "seconds",
     },
   },
-  run: defineCommandRunner(parseRegisterGrantOptions, runRegisterGrant),
+  run: defineCommandRunner(parseCreateLogOptions, runCreateLog),
 });

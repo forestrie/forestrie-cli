@@ -17,8 +17,11 @@ export default defineForestrieCommand({
     "sign-statement": () =>
       import("./commands/sign-statement.js").then((m) => m.default),
     register: () => import("./commands/register.js").then((m) => m.default),
+    "create-log": () =>
+      import("./commands/create-log.js").then((m) => m.default),
     "register-grant": () =>
       import("./commands/register-grant.js").then((m) => m.default),
+    delegate: () => import("./commands/delegate.js").then((m) => m.default),
     "complete-grant": () =>
       import("./commands/complete-grant.js").then((m) => m.default),
     "create-receipt": () =>

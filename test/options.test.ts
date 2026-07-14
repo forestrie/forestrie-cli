@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { parseCreateReceiptOptions } from "../src/options/create-receipt.js";
 import { parseDeployOptions } from "../src/options/deploy.js";
+import { parseCreateLogOptions } from "../src/options/create-log.js";
+import { parseDelegateOptions } from "../src/options/delegate.js";
 import { parseRegisterOptions } from "../src/options/register.js";
 import { parseRegisterGrantOptions } from "../src/options/register-grant.js";
 import { parseSignStatementOptions } from "../src/options/sign-statement.js";
@@ -12,6 +14,8 @@ const SAVED = [
   "GRANT_B64",
   "DEPLOYER_KEY",
   "OWNER_ADDRESS",
+  "DELEGATION_COORDINATOR_URL",
+  "PINNED_REGISTRAR_KEY",
 ].map((name) => [name, process.env[name]] as const);
 
 afterEach(() => {
@@ -135,28 +139,102 @@ describe("parseRegisterOptions", () => {
   });
 });
 
-describe("parseRegisterGrantOptions", () => {
+describe("parseRegisterGrantOptions (writer-only)", () => {
   const base = {
     "base-url": "https://x",
     "owner-log": "A",
     "data-log": "B",
     "sign-with": "k.pem",
+    "signer-pem": "signer.pem",
+    "parent-grant-b64": "AAAA",
+  };
+
+  test("parses the full writer-grant option set", () => {
+    const options = parseRegisterGrantOptions({ ...base });
+    expect(options.signerPem).toBe("signer.pem");
+    expect(options.parentGrantB64).toBe("AAAA");
+    expect(options.bootstrapLog).toBe("A"); // defaults to --owner-log
+  });
+
+  test("requires --signer-pem (writers always name a signer)", () => {
+    const { "signer-pem": _omit, ...rest } = base;
+    expect(() => parseRegisterGrantOptions(rest)).toThrow(/--signer-pem/);
+  });
+
+  test("requires --parent-grant-b64 (no self grants here)", () => {
+    const { "parent-grant-b64": _omit, ...rest } = base;
+    expect(() => parseRegisterGrantOptions(rest)).toThrow(/--parent-grant-b64/);
+  });
+});
+
+describe("parseCreateLogOptions", () => {
+  const base = {
+    "base-url": "https://x",
+    "owner-log": "A",
+    "new-log": "B",
+    "sign-with": "k.pem",
   };
 
   test("requires a parent grant unless self-referential", () => {
-    expect(() => parseRegisterGrantOptions({ ...base })).toThrow(
-      /--parent-grant-b64 or --self-referential/,
-    );
+    expect(() =>
+      parseCreateLogOptions({ ...base, "signer-pem": "s.pem" }),
+    ).toThrow(/--parent-grant-b64 or --self-referential/);
   });
 
   test("self-referential and parent grant are mutually exclusive", () => {
     expect(() =>
-      parseRegisterGrantOptions({
+      parseCreateLogOptions({
         ...base,
         "self-referential": true,
         "parent-grant-b64": "AAAA",
       }),
     ).toThrow(/mutually exclusive/);
+  });
+
+  test("self-referential parses without a signer pem or parent grant", () => {
+    const options = parseCreateLogOptions({
+      ...base,
+      "self-referential": true,
+    });
+    expect(options.selfReferential).toBe(true);
+    expect(options.signerPem).toBeUndefined();
+    expect(options.parentGrantB64).toBeUndefined();
+  });
+});
+
+describe("parseDelegateOptions", () => {
+  const base = {
+    "coordinator-url": "https://coord",
+    "log-id": "L",
+    "sign-with": "root.pem",
+    "pinned-registrar-key": "AAAA",
+  };
+
+  test("horizon-mmr-end defaults to Number.MAX_SAFE_INTEGER; mmr start is fixed 0", () => {
+    const options = parseDelegateOptions({ ...base });
+    expect(options.horizonMmrEnd).toBe(Number.MAX_SAFE_INTEGER);
+    expect(options.ttlSeconds).toBeUndefined();
+  });
+
+  test("parses numeric horizon and ttl overrides", () => {
+    const options = parseDelegateOptions({
+      ...base,
+      "horizon-mmr-end": "500",
+      "ttl-seconds": "120",
+    });
+    expect(options.horizonMmrEnd).toBe(500);
+    expect(options.ttlSeconds).toBe(120);
+  });
+
+  test("coordinator-url and pinned-registrar-key fall back to env", () => {
+    process.env["DELEGATION_COORDINATOR_URL"] = "https://env-coord";
+    process.env["PINNED_REGISTRAR_KEY"] = "ZW52";
+    const options = parseDelegateOptions({
+      "log-id": "L",
+      "sign-with": "root.pem",
+    });
+    expect(options.coordinatorUrl).toBe("https://env-coord");
+    expect(options.pinnedRegistrarKey).toBe("ZW52");
   });
 });
 
