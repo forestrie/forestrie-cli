@@ -55,6 +55,21 @@ export function parseDelegateOptions(args: LooseParsedArgs): DelegateOptions {
     "horizon-mmr-end",
     DEFAULT_HORIZON_MMR_END,
   ) as number;
+  // The horizon binds a durable on-chain delegation scope [0, mmrEnd) — reject
+  // non-integer / out-of-range values before they flow into cert + on-chain
+  // encoding (ADR-0050 V4). MMR indices are non-negative safe integers.
+  if (!Number.isSafeInteger(horizonMmrEnd) || horizonMmrEnd <= 0) {
+    throw new Error(
+      "--horizon-mmr-end must be a positive integer no larger than 2^53-1",
+    );
+  }
+  const ttlSeconds = numberOption(args, "ttl-seconds", undefined);
+  if (
+    ttlSeconds !== undefined &&
+    (!Number.isSafeInteger(ttlSeconds) || ttlSeconds <= 0)
+  ) {
+    throw new Error("--ttl-seconds must be a positive integer");
+  }
   const options: DelegateOptions = {
     ...parseForestrieCommonOptions(args),
     coordinatorUrl: requiredStringOption(
@@ -70,7 +85,7 @@ export function parseDelegateOptions(args: LooseParsedArgs): DelegateOptions {
       "PINNED_REGISTRAR_KEY",
     ),
     horizonMmrEnd,
-    ttlSeconds: numberOption(args, "ttl-seconds", undefined),
+    ttlSeconds,
     outB64: optionalStringOption(args, "out-b64"),
   };
   return options;

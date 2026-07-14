@@ -129,7 +129,7 @@ export async function runDelegate(
     if (err instanceof DelegateFlowError) {
       const report: DelegateErrorReport = {
         command: "delegate",
-        error: "delegation_failed",
+        error: err.code ?? "delegation_failed",
         message: err.message,
       };
       if (err.httpStatus !== undefined) report.httpStatus = err.httpStatus;

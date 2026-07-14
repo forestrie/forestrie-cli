@@ -195,6 +195,50 @@ describe("verifyDelegateKeyVoucher", () => {
     );
     expect(res).toEqual({ ok: false, reason: "epoch" });
   });
+
+  test("fails closed on a sealerId mismatch (reason sealerId)", async () => {
+    const pinned = parseRegistrarKeyXY(
+      new Uint8Array(Buffer.from(PINNED_KEY_B64, "base64")),
+    )!;
+    const res = await verifyDelegateKeyVoucher(
+      new Uint8Array(Buffer.from(VOUCHER_B64, "base64")),
+      pinned,
+      { sealerId: "sealer-evil", epoch: EPOCH, publicKey: DELEGATED_KEY },
+    );
+    expect(res).toEqual({ ok: false, reason: "sealerId" });
+  });
+
+  test("fails closed on a delegated-key (claim 3) mismatch (reason publicKey)", async () => {
+    const pinned = parseRegistrarKeyXY(
+      new Uint8Array(Buffer.from(PINNED_KEY_B64, "base64")),
+    )!;
+    // Signature + sealerId + epoch all match; only the bound delegate key differs.
+    const res = await verifyDelegateKeyVoucher(
+      new Uint8Array(Buffer.from(VOUCHER_B64, "base64")),
+      pinned,
+      { sealerId: SEALER_ID, epoch: EPOCH, publicKey: new Uint8Array([9, 9, 9]) },
+    );
+    expect(res).toEqual({ ok: false, reason: "publicKey" });
+  });
+
+  test("fails closed on a non-map (garbage) payload (reason decode)", async () => {
+    const pinned = parseRegistrarKeyXY(
+      new Uint8Array(Buffer.from(PINNED_KEY_B64, "base64")),
+    )!;
+    // Validly signed by the registrar, but the payload is not a CBOR claims map.
+    const garbage = await signCoseSign1Statement(
+      encodeCborDeterministic("not a claims map"),
+      new Uint8Array(0),
+      registrar.privateKey,
+      { alg: -7 },
+    );
+    const res = await verifyDelegateKeyVoucher(garbage, pinned, {
+      sealerId: SEALER_ID,
+      epoch: EPOCH,
+      publicKey: DELEGATED_KEY,
+    });
+    expect(res).toEqual({ ok: false, reason: "decode" });
+  });
 });
 
 // --- delegation flow -----------------------------------------------------
@@ -231,6 +275,25 @@ describe("runDelegateFlow", () => {
     expect(Buffer.from(String(body["onchainSignature"]), "base64").length).toBe(
       64,
     );
+  });
+
+  test("a malformed root PEM fails closed as key_read_failed (no unhandled throw)", async () => {
+    const captured: Captured[] = [];
+    const err = await runDelegateFlow(
+      {
+        ...baseParams,
+        rootPem:
+          "-----BEGIN PRIVATE KEY-----\nbm90LWEta2V5\n-----END PRIVATE KEY-----",
+      },
+      { fetchImpl: mockCoordinator([STANDING], captured) },
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(DelegateFlowError);
+    expect((err as DelegateFlowError).code).toBe("key_read_failed");
+    // Failed before any coordinator round-trip; message does not leak a path.
+    expect((err as Error).message).not.toContain("/");
   });
 
   test("fails closed when the standing entry has no voucher", async () => {

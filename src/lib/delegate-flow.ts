@@ -67,10 +67,17 @@ export type StandingDelegationEntry = {
 /** Failure raised by the delegation flow (submit / verify / precondition). */
 export class DelegateFlowError extends Error {
   readonly httpStatus?: number;
-  constructor(message: string, httpStatus?: number) {
+  /** Structured error code for `--json` reporting (default: delegation_failed). */
+  readonly code?: "key_read_failed" | "delegation_failed";
+  constructor(
+    message: string,
+    httpStatus?: number,
+    code?: "key_read_failed" | "delegation_failed",
+  ) {
     super(message);
     this.name = "DelegateFlowError";
     if (httpStatus !== undefined) this.httpStatus = httpStatus;
+    if (code !== undefined) this.code = code;
   }
 }
 
@@ -146,8 +153,18 @@ export async function runDelegateFlow(
 ): Promise<DelegateFlowResult> {
   const fetchImpl = deps.fetchImpl ?? fetch;
 
-  // 1. Root key pair (K(L)).
-  const rootKeyPair = await importEs256PemKeyPair(params.rootPem);
+  // 1. Root key pair (K(L)). A malformed or wrong-curve PEM must surface as a
+  // structured error (not an unhandled throw that leaks the key path / stack).
+  let rootKeyPair: CryptoKeyPair;
+  try {
+    rootKeyPair = await importEs256PemKeyPair(params.rootPem);
+  } catch {
+    throw new DelegateFlowError(
+      "--sign-with is not a usable ES256 (P-256) root PEM (K(L))",
+      undefined,
+      "key_read_failed",
+    );
+  }
 
   // 2. Fetch pending delegation entries and find the standing entry.
   const pendingUrl = `${params.coordinatorUrl}/api/logs/${params.logId}/pending-delegation`;
