@@ -29,5 +29,7 @@ export default defineForestrieCommand({
     "decode-receipt": () =>
       import("./commands/decode-receipt.js").then((m) => m.default),
     verify: () => import("./commands/verify.js").then((m) => m.default),
+    "verify-grant": () =>
+      import("./commands/verify-grant.js").then((m) => m.default),
   },
 });

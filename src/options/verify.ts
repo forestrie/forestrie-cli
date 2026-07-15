@@ -7,48 +7,35 @@ import {
 } from "./common.js";
 
 /**
- * `forestrie verify` — FOR-347.
+ * `forestrie verify` / `verify-grant` — FOR-347.
  *
- * Offline verification against a cached checkpoint — no network access
- * during the core verify. The SAME verify command closes every demo step.
- * ES256 only (`@forestrie/receipt-verify`; error `no_es256_trust_key`).
+ * Offline verification against a cached checkpoint — no network during the core
+ * verify. Every receipt is a standard COSE Receipt (MMR profile); the two
+ * commands differ only in how the leaf ContentHash payload is obtained:
  *
- * Two anchor modes:
- * - `offline` (default): pure over bytes — genesis trust root, receipt,
- *   grant. Strictly no network.
- * - `chain`: additionally read the on-chain `logState(bytes32)`
- *   accumulator (`--univocity` + `--log-id` + `--rpc-url`) and assert the
- *   receipt's peak is anchored there. Network only in this explicit mode.
+ * - `verify` (this file, {@link VerifyOptions}): the generic, SCITT-compatible
+ *   path. The caller supplies the EXACT registered payload (`--payload`, e.g. a
+ *   signed statement COSE); the leaf commits `SHA-256(idtimestamp ‖ SHA-256(payload))`.
+ * - `verify-grant` ({@link VerifyGrantOptions}): a thin wrapper for forestrie
+ *   authority grants — it derives the grant commitment preimage from a
+ *   structured grant and verifies it as the payload.
  *
- * Acceptance (ex FOR-282): exit 0 on a valid receipt, non-zero on a
- * tampered one.
+ * Both add `--univocity --log-id --rpc-url` for the chain-anchored check (the
+ * only networked path).
  */
-export type VerifyOptions = ForestrieCommonOptions & {
+
+type AnchorFields = {
   anchor: "offline" | "chain";
-  /** Cached public genesis (genesis.cbor) — the offline trust root. */
-  genesis: string;
-  /** COSE receipt file to verify. */
-  receipt: string;
-  /** Completed grant credential, base64 (or file via --committed-grant-file + --entry-id). */
-  committedGrant: string | undefined;
-  /** Grant CBOR file (alternative to --committed-grant). */
-  committedGrantFile: string | undefined;
-  /** Entry id within the grant CBOR (used with --committed-grant-file). */
-  entryId: string | undefined;
-  /** ImutableUnivocity contract address (chain mode). */
   univocity: string | undefined;
-  /** Log id for the on-chain accumulator read (chain mode). */
   logId: string | undefined;
-  /** JSON-RPC endpoint (`RPC_URL`, chain mode). */
   rpcUrl: string | undefined;
 };
 
-export function parseVerifyOptions(args: LooseParsedArgs): VerifyOptions {
+function parseAnchorFields(args: LooseParsedArgs): AnchorFields {
   const univocity = optionalStringOption(args, "univocity");
   const logId = optionalStringOption(args, "log-id");
   const rpcUrl = optionalStringOption(args, "rpc-url", "RPC_URL");
-
-  let anchor: VerifyOptions["anchor"] = "offline";
+  let anchor: AnchorFields["anchor"] = "offline";
   if (univocity !== undefined) {
     if (logId === undefined || rpcUrl === undefined) {
       throw new Error(
@@ -57,18 +44,64 @@ export function parseVerifyOptions(args: LooseParsedArgs): VerifyOptions {
     }
     anchor = "chain";
   }
+  return { anchor, univocity, logId, rpcUrl };
+}
 
+// ---------------------------------------------------------------------------
+// verify (generic, payload)
+// ---------------------------------------------------------------------------
+
+export type VerifyOptions = ForestrieCommonOptions &
+  AnchorFields & {
+    /** Cached public genesis (genesis.cbor) — the offline trust root. */
+    genesis: string;
+    /** COSE receipt file to verify. */
+    receipt: string;
+    /** The EXACT registered payload (leaf commits SHA-256 of these bytes). */
+    payload: string;
+    /** SCRAPI entry id — supplies the leaf idtimestamp. */
+    entryId: string;
+  };
+
+export function parseVerifyOptions(args: LooseParsedArgs): VerifyOptions {
   const options: VerifyOptions = {
     ...parseForestrieCommonOptions(args),
-    anchor,
+    ...parseAnchorFields(args),
+    genesis: requiredStringOption(args, "genesis"),
+    receipt: requiredStringOption(args, "receipt"),
+    payload: requiredStringOption(args, "payload"),
+    entryId: requiredStringOption(args, "entry-id"),
+  };
+  return options;
+}
+
+// ---------------------------------------------------------------------------
+// verify-grant (wraps: derives the grant commitment payload)
+// ---------------------------------------------------------------------------
+
+export type VerifyGrantOptions = ForestrieCommonOptions &
+  AnchorFields & {
+    genesis: string;
+    receipt: string;
+    /** Completed grant credential, base64 (env GRANT_B64). */
+    committedGrant: string | undefined;
+    /** Grant CBOR file (alternative to --committed-grant). */
+    committedGrantFile: string | undefined;
+    /** Entry id within the grant CBOR (used with --committed-grant-file). */
+    entryId: string | undefined;
+  };
+
+export function parseVerifyGrantOptions(
+  args: LooseParsedArgs,
+): VerifyGrantOptions {
+  const options: VerifyGrantOptions = {
+    ...parseForestrieCommonOptions(args),
+    ...parseAnchorFields(args),
     genesis: requiredStringOption(args, "genesis"),
     receipt: requiredStringOption(args, "receipt"),
     committedGrant: optionalStringOption(args, "committed-grant", "GRANT_B64"),
     committedGrantFile: optionalStringOption(args, "committed-grant-file"),
     entryId: optionalStringOption(args, "entry-id"),
-    univocity,
-    logId,
-    rpcUrl,
   };
   if (
     options.committedGrant === undefined &&

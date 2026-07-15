@@ -4,7 +4,28 @@ import {
   decodeGrantPayload,
   entryIdHexToIdtimestampBe8,
   type VerifyGrantReceiptOfflineInput,
+  type VerifyReceiptOfflineInput,
 } from "@forestrie/receipt-verify";
+
+/** `verify` (generic): the exact registered payload + its SCRAPI entry id. */
+export type PayloadVerifyInputOptions = {
+  genesis: string;
+  receipt: string;
+  payload: string;
+  entryId: string;
+};
+
+/** Load genesis/receipt/payload for the generic (SCITT-compatible) verify. */
+export function loadPayloadVerifyArtifacts(
+  options: PayloadVerifyInputOptions,
+): VerifyReceiptOfflineInput {
+  return {
+    genesisCbor: readBytes(options.genesis, "--genesis"),
+    receiptCbor: readBytes(options.receipt, "--receipt"),
+    payload: readBytes(options.payload, "--payload"),
+    idtimestampBe8: entryIdHexToIdtimestampBe8(options.entryId),
+  };
+}
 
 /**
  * Load and decode `forestrie verify` inputs into the exact

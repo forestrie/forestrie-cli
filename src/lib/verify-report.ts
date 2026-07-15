@@ -22,7 +22,7 @@ export const STAGE_NARRATION: Record<ReceiptVerifyStage, string> = {
   parse: "receipt COSE decodes; genesis trust root loads (ES256)",
   signature: "checkpoint signature verifies under the genesis trust key",
   inclusion: "proof path recomputes the checkpoint peak",
-  binding: "leaf binds the grant commitment at the receipt idtimestamp",
+  binding: "leaf commits the payload (SHA-256) at the receipt idtimestamp",
 };
 
 export type StageStatus = "ok" | "failed" | "skipped";
