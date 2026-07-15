@@ -221,6 +221,7 @@ describe("runCreateLog (main)", () => {
     selfReferential: false,
     signerPem: SIGNER_PEM_PATH,
     signWith: OWNER_PEM_PATH,
+    prepare: false,
     parentGrantB64: PARENT_B64,
     outB64: undefined,
     bootstrapLog: BOOT_LOG,
@@ -259,6 +260,43 @@ describe("runCreateLog (main)", () => {
     expect(await verifyCoseSign1WithParsedKey(completed, xyKey(OWNER_PRIV_PEM))).toBe(
       true,
     );
+  });
+
+  test("--prepare pre-registers the child root via /prepare (Forestrie-Grant header, no sequencing)", async () => {
+    const out = createCaptureOut();
+    process.exitCode = 0;
+    let sawAuth: string | null = null;
+    let sawUrl = "";
+    const prepareFetch = fakeFetch(({ method, url, headers }) => {
+      if (method === "POST" && url.pathname === `/api/forest/${NEW_LOG}/prepare`) {
+        sawAuth = headers.get("Authorization");
+        sawUrl = url.pathname;
+        return Response.json({ publicRoot: "ok", webhook: "ok" }, { status: 200 });
+      }
+      return undefined; // any /register/ call would be an error (no sequencing)
+    });
+    await runCreateLog(
+      out,
+      { ...baseOptions, prepare: true },
+      { fetchImpl: prepareFetch, ...fakeClock() },
+    );
+    expect(process.exitCode).toBe(0);
+    expect(sawUrl).toBe(`/api/forest/${NEW_LOG}/prepare`);
+    expect(String(sawAuth).startsWith("Forestrie-Grant ")).toBe(true);
+    const report = JSON.parse(
+      out.lines.filter((l) => l.stream === "stdout").map((l) => l.text).join("\n"),
+    ) as Record<string, unknown>;
+    expect(report["command"]).toBe("create-log");
+    expect(report["status"]).toBe("prepared");
+    expect(report["newLog"]).toBe(NEW_LOG);
+    expect(report["publicRoot"]).toBe("ok");
+    // The emitted grant is the create grant (parent-signed), not a completed one.
+    expect(
+      await verifyCoseSign1WithParsedKey(
+        base64ToBytes(String(report["grantB64"])),
+        xyKey(OWNER_PRIV_PEM),
+      ),
+    ).toBe(true);
   });
 
   test("self-referential success has no parent evidence and binds --sign-with", async () => {

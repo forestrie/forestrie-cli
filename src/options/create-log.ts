@@ -34,6 +34,13 @@ export type CreateLogOptions = ForestrieCommonOptions & {
   signerPem: string | undefined;
   /** Granting authority PEM (the parent log's K(L)) that signs the grant. */
   signWith: string;
+  /**
+   * Pre-register the child log's public root with the delegation coordinator
+   * (parent-authorized, ADR-0053) WITHOUT sequencing the create leaf, so the
+   * owner can `delegate` (pre-sign) before the log exists. Emits the create
+   * grant to `--out-b64` for the later real `create-log`.
+   */
+  prepare: boolean;
   /** Parent grant credential authorizing this registration. */
   parentGrantB64: string | undefined;
   /** Completed grant base64 output path (default: stdout). */
@@ -60,6 +67,7 @@ export function parseCreateLogOptions(args: LooseParsedArgs): CreateLogOptions {
     selfReferential: args["self-referential"] === true,
     signerPem: optionalStringOption(args, "signer-pem"),
     signWith: requiredStringOption(args, "sign-with"),
+    prepare: args["prepare"] === true,
     parentGrantB64: optionalStringOption(args, "parent-grant-b64"),
     outB64: optionalStringOption(args, "out-b64"),
     bootstrapLog: optionalStringOption(args, "bootstrap-log") ?? ownerLog,

@@ -51,6 +51,12 @@ export default defineForestrieCommand({
       valueHint: "path",
       required: true,
     },
+    prepare: {
+      type: "boolean",
+      description:
+        "Pre-register the child's public root with the coordinator (parent-authorized, no operator token) WITHOUT sequencing, so you can `delegate` before the log exists; emits the create grant to --out-b64 [FOR-390]",
+      default: false,
+    },
     "parent-grant-b64": {
       type: "string",
       description: "Parent grant credential authorizing this registration",
