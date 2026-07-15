@@ -7,6 +7,10 @@ import {
 } from "../lib/create-log-build.js";
 import { completeGrantBase64 } from "../lib/register-grant-complete.js";
 import {
+  PrepareLogError,
+  prepareChildLog,
+} from "../lib/create-log-prepare.js";
+import {
   RegisterFlowError,
   runRegisterGrantFlow,
   type RegisterGrantFlowDeps,
@@ -211,6 +215,75 @@ export async function runCreateLog(
       return;
     }
     throw err;
+  }
+
+  // 2b. --prepare: pre-register the child public root with the coordinator under
+  // parent authority (ADR-0053), WITHOUT sequencing. Emits the create grant so a
+  // later plain `create-log` sequences it. Enables `delegate` before the log
+  // exists.
+  if (options.prepare) {
+    if (options.selfReferential) {
+      reportError(out, options, {
+        error: "grant_build_failed",
+        command: "create-log",
+        message:
+          "--prepare is for child logs; the root/bootstrap log is onboarded via genesis, not prepare",
+      });
+      return;
+    }
+    try {
+      const prepared = await prepareChildLog(
+        {
+          baseUrl: options.baseUrl,
+          childLogId: options.newLog,
+          grantBase64: built.grantBase64,
+        },
+        { fetchImpl: deps.fetchImpl },
+      );
+      if (options.outB64 !== undefined) {
+        await Bun.write(options.outB64, built.grantBase64);
+      }
+      if (options.json) {
+        const report = {
+          command: "create-log" as const,
+          status: "prepared" as const,
+          ownerLog: options.ownerLog,
+          newLog: options.newLog,
+          publicRoot: prepared.publicRoot,
+          ...(prepared.webhook !== undefined
+            ? { webhook: prepared.webhook }
+            : {}),
+          ...(options.outB64 !== undefined ? { outB64: options.outB64 } : {}),
+          grantB64: options.outB64 === undefined ? built.grantBase64 : undefined,
+        };
+        out.out(JSON.stringify(report, null, 2));
+        return;
+      }
+      const emit = options.outB64 === undefined ? out.print : out.out;
+      emit("prepared child log %s (owner %s)", options.newLog, options.ownerLog);
+      emit(
+        "coordinator: public-root %s%s",
+        prepared.publicRoot,
+        prepared.webhook !== undefined ? `, webhook ${prepared.webhook}` : "",
+      );
+      emit("owner: %s", Buffer.from(built.grantData).toString("hex"));
+      if (options.outB64 !== undefined) {
+        emit("wrote create grant (base64) to %s", options.outB64);
+      } else {
+        out.out("%s", built.grantBase64);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      reportError(out, options, {
+        error: "registration_failed",
+        command: "create-log",
+        message,
+        ...(err instanceof PrepareLogError && err.httpStatus !== undefined
+          ? { httpStatus: err.httpStatus }
+          : {}),
+      });
+    }
+    return;
   }
 
   const flowDeps: RegisterGrantFlowDeps = {
