@@ -1,11 +1,18 @@
 import type { Out } from "@forestrie/cli-kit/reporting";
-import { verifyGrantReceiptOffline } from "@forestrie/receipt-verify";
-import type { VerifyOptions } from "../options/verify.js";
+import {
+  verifyGrantReceiptOffline,
+  verifyReceiptOffline,
+  type ReceiptVerifyResult,
+} from "@forestrie/receipt-verify";
+import type { VerifyGrantOptions, VerifyOptions } from "../options/verify.js";
 import {
   checkReceiptAnchored,
   type AnchorCheck,
 } from "../lib/verify-anchored.js";
-import { loadVerifyArtifacts } from "../lib/verify-inputs.js";
+import {
+  loadPayloadVerifyArtifacts,
+  loadVerifyArtifacts,
+} from "../lib/verify-inputs.js";
 import {
   buildVerifyReport,
   STAGE_NARRATION,
@@ -16,12 +23,6 @@ import {
  * FAIL, which is the structured `VerifyReport` with `ok: false`). */
 export type VerifyErrorStage = "input" | "verify" | "anchor";
 
-/**
- * `--json` operational-error shape on stdout — the demo's scripted closer
- * owns stdout in EVERY failure branch (F3, plan-2607-14 W1.3): input
- * load/decode errors, unexpected core-verify errors, and chain-mode RPC
- * failures all land here rather than escaping as stack traces.
- */
 export type VerifyErrorReport = {
   error: "verify_input_failed" | "verify_failed" | "anchor_check_failed";
   command: "verify";
@@ -38,15 +39,24 @@ const VERIFY_ERROR_CODES: Record<
   anchor: "anchor_check_failed",
 };
 
+/** Fields both verify commands share for reporting + the chain-anchor check. */
+type VerifyReportContext = {
+  json?: boolean;
+  anchor: "offline" | "chain";
+  univocity: string | undefined;
+  logId: string | undefined;
+  rpcUrl: string | undefined;
+};
+
 /** Structured envelope under `--json`; one clean line on stderr otherwise. */
 function reportRunError(
   out: Out,
-  options: VerifyOptions,
+  ctx: { json?: boolean },
   stage: VerifyErrorStage,
   err: unknown,
 ): void {
   const message = err instanceof Error ? err.message : String(err);
-  if (options.json) {
+  if (ctx.json) {
     const report: VerifyErrorReport = {
       error: VERIFY_ERROR_CODES[stage],
       command: "verify",
@@ -61,64 +71,41 @@ function reportRunError(
 }
 
 /**
- * FOR-347: verify a receipt offline against the cached checkpoint /
- * on-chain accumulator trust root (`@forestrie/receipt-verify`, ES256
- * only). No network access during the core verify; exit 0 iff the receipt
- * is valid. With `--univocity --log-id --rpc-url` the receipt's peak is
- * additionally checked against the on-chain `logState` accumulator — the
- * only networked path.
+ * Shared tail: optional chain-anchor check, then render the stage report and
+ * set the exit code. Used by both `verify` (payload) and `verify-grant`.
  */
-export async function runVerify(
+async function finishVerify(
   out: Out,
-  options: VerifyOptions,
+  ctx: VerifyReportContext,
+  artifacts: { genesisCbor: Uint8Array; receiptCbor: Uint8Array },
+  result: ReceiptVerifyResult,
 ): Promise<void> {
-  let artifacts: ReturnType<typeof loadVerifyArtifacts>;
-  try {
-    artifacts = loadVerifyArtifacts(options);
-  } catch (err) {
-    reportRunError(out, options, "input", err);
-    return;
-  }
-
-  // Core verify: pure over bytes — strictly no network (ADR-0045). A
-  // tampered receipt is a structured FAIL result, not a throw; anything
-  // thrown here is an operational error and still owns stdout.
-  let result: Awaited<ReturnType<typeof verifyGrantReceiptOffline>>;
-  try {
-    result = await verifyGrantReceiptOffline(artifacts);
-  } catch (err) {
-    reportRunError(out, options, "verify", err);
-    return;
-  }
-
   let anchor: AnchorCheck | undefined;
-  if (options.anchor === "chain" && result.ok) {
+  if (ctx.anchor === "chain" && result.ok) {
     try {
       anchor = await checkReceiptAnchored({
         genesisCbor: artifacts.genesisCbor,
         receiptCbor: artifacts.receiptCbor,
-        univocity: options.univocity!,
-        logId: options.logId!,
-        rpcUrl: options.rpcUrl!,
+        univocity: ctx.univocity!,
+        logId: ctx.logId!,
+        rpcUrl: ctx.rpcUrl!,
       });
     } catch (err) {
-      // RPC transport/decode failures (the only networked path).
-      reportRunError(out, options, "anchor", err);
+      reportRunError(out, ctx, "anchor", err);
       return;
     }
   }
 
-  const ok =
-    result.ok && (options.anchor !== "chain" || anchor?.anchored === true);
+  const ok = result.ok && (ctx.anchor !== "chain" || anchor?.anchored === true);
 
-  if (options.json) {
+  if (ctx.json) {
     const report = buildVerifyReport({
       ok,
       result,
-      mode: options.anchor === "chain" ? "chain-anchored" : "offline",
+      mode: ctx.anchor === "chain" ? "chain-anchored" : "offline",
       anchor,
-      univocity: options.univocity,
-      logId: options.logId,
+      univocity: ctx.univocity,
+      logId: ctx.logId,
     });
     out.out(JSON.stringify(report, null, 2));
   } else {
@@ -169,4 +156,64 @@ export async function runVerify(
   }
 
   process.exitCode = ok ? 0 : 1;
+}
+
+/**
+ * `forestrie verify` (FOR-347): the generic, SCITT-compatible offline verify.
+ * The leaf commits `SHA-256(idtimestamp ‖ SHA-256(payload))`; the caller passes
+ * the EXACT registered payload (`--payload`, e.g. a signed statement COSE). No
+ * network during the core verify; add `--univocity/--log-id/--rpc-url` to also
+ * check the on-chain accumulator.
+ */
+export async function runVerify(
+  out: Out,
+  options: VerifyOptions,
+): Promise<void> {
+  let artifacts: ReturnType<typeof loadPayloadVerifyArtifacts>;
+  try {
+    artifacts = loadPayloadVerifyArtifacts(options);
+  } catch (err) {
+    reportRunError(out, options, "input", err);
+    return;
+  }
+
+  let result: ReceiptVerifyResult;
+  try {
+    result = await verifyReceiptOffline(artifacts);
+  } catch (err) {
+    reportRunError(out, options, "verify", err);
+    return;
+  }
+
+  await finishVerify(out, options, artifacts, result);
+}
+
+/**
+ * `forestrie verify-grant` (FOR-347): verify a forestrie authority/grant
+ * receipt. A thin wrapper over the same core — it derives the grant commitment
+ * preimage from a structured grant and verifies it as the leaf payload. The
+ * receipt is a standard COSE Receipt; only the payload is forestrie-specific
+ * (chosen to match the on-chain univocity accumulator).
+ */
+export async function runVerifyGrant(
+  out: Out,
+  options: VerifyGrantOptions,
+): Promise<void> {
+  let artifacts: ReturnType<typeof loadVerifyArtifacts>;
+  try {
+    artifacts = loadVerifyArtifacts(options);
+  } catch (err) {
+    reportRunError(out, options, "input", err);
+    return;
+  }
+
+  let result: ReceiptVerifyResult;
+  try {
+    result = await verifyGrantReceiptOffline(artifacts);
+  } catch (err) {
+    reportRunError(out, options, "verify", err);
+    return;
+  }
+
+  await finishVerify(out, options, artifacts, result);
 }

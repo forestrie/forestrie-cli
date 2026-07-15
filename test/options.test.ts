@@ -6,7 +6,10 @@ import { parseDelegateOptions } from "../src/options/delegate.js";
 import { parseRegisterOptions } from "../src/options/register.js";
 import { parseRegisterGrantOptions } from "../src/options/register-grant.js";
 import { parseSignStatementOptions } from "../src/options/sign-statement.js";
-import { parseVerifyOptions } from "../src/options/verify.js";
+import {
+  parseVerifyGrantOptions,
+  parseVerifyOptions,
+} from "../src/options/verify.js";
 
 const SAVED = [
   "FORESTRIE_BASE_URL",
@@ -315,17 +318,38 @@ describe("parseCreateReceiptOptions", () => {
   });
 });
 
-describe("parseVerifyOptions", () => {
+describe("parseVerifyOptions (generic/payload)", () => {
+  test("requires --payload and --entry-id", () => {
+    expect(() =>
+      parseVerifyOptions({ genesis: "g.cbor", receipt: "r.cbor" }),
+    ).toThrow(/payload/);
+  });
+
+  test("accepts payload + entry-id, defaults to offline anchor", () => {
+    delete process.env["RPC_URL"];
+    const options = parseVerifyOptions({
+      genesis: "g.cbor",
+      receipt: "r.cbor",
+      payload: "s.cose",
+      "entry-id": "abcd",
+    });
+    expect(options.payload).toBe("s.cose");
+    expect(options.entryId).toBe("abcd");
+    expect(options.anchor).toBe("offline");
+  });
+});
+
+describe("parseVerifyGrantOptions", () => {
   test("requires committed-grant or committed-grant-file", () => {
     delete process.env["GRANT_B64"];
     expect(() =>
-      parseVerifyOptions({ genesis: "g.cbor", receipt: "r.cbor" }),
+      parseVerifyGrantOptions({ genesis: "g.cbor", receipt: "r.cbor" }),
     ).toThrow(/--committed-grant or --committed-grant-file/);
   });
 
   test("committed-grant-file requires entry-id", () => {
     expect(() =>
-      parseVerifyOptions({
+      parseVerifyGrantOptions({
         genesis: "g.cbor",
         receipt: "r.cbor",
         "committed-grant-file": "grant.cbor",
@@ -340,15 +364,15 @@ describe("parseVerifyOptions", () => {
   };
 
   test("defaults to the offline anchor (no network)", () => {
-    expect(parseVerifyOptions({ ...base }).anchor).toBe("offline");
+    expect(parseVerifyGrantOptions({ ...base }).anchor).toBe("offline");
   });
 
   test("univocity selects chain mode and requires log-id + rpc-url", () => {
     delete process.env["RPC_URL"];
     expect(() =>
-      parseVerifyOptions({ ...base, univocity: "0xabc" }),
+      parseVerifyGrantOptions({ ...base, univocity: "0xabc" }),
     ).toThrow(/--univocity, --log-id and --rpc-url/);
-    const options = parseVerifyOptions({
+    const options = parseVerifyGrantOptions({
       ...base,
       univocity: "0xabc",
       "log-id": "L",
@@ -359,7 +383,7 @@ describe("parseVerifyOptions", () => {
 
   test("chain mode rpc-url falls back to RPC_URL env", () => {
     process.env["RPC_URL"] = "http://from-env";
-    const options = parseVerifyOptions({
+    const options = parseVerifyGrantOptions({
       ...base,
       univocity: "0xabc",
       "log-id": "L",

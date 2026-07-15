@@ -54,8 +54,8 @@ jobs:
           # Stub commands parse their full argument surface, then exit 1
           # with a structured not_implemented report; --json must be
           # machine-readable on stdout.
-          ./dist/forestrie-linux-x64 verify --json --genesis g.cbor --receipt r.cbor --committed-grant AAAA > verify.json || test $? -eq 1
-          jq -e '.error == "not_implemented" and .issue == "FOR-347"' verify.json
+          ./dist/forestrie-linux-x64 verify-grant --json --genesis g.cbor --receipt r.cbor --committed-grant AAAA > verify.json || test $? -eq 1
+          jq -e '.error == "verify_input_failed" and .command == "verify" and .stage == "input"' verify.json
 
       - name: Write sha256 sidecar
         run: |
@@ -105,8 +105,8 @@ jobs:
         run: |
           set -euo pipefail
           ./dist/forestrie-darwin-arm64 --help
-          ./dist/forestrie-darwin-arm64 verify --json --genesis g.cbor --receipt r.cbor --committed-grant AAAA > verify.json || test $? -eq 1
-          jq -e '.error == "not_implemented" and .issue == "FOR-347"' verify.json
+          ./dist/forestrie-darwin-arm64 verify-grant --json --genesis g.cbor --receipt r.cbor --committed-grant AAAA > verify.json || test $? -eq 1
+          jq -e '.error == "verify_input_failed" and .command == "verify" and .stage == "input"' verify.json
 
       - name: Write sha256 sidecar
         run: |

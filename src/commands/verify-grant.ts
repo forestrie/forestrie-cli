@@ -1,12 +1,12 @@
 import { defineCommandRunner, defineForestrieCommand } from "../commoncli.js";
-import { runVerify } from "../main/verify.js";
-import { parseVerifyOptions } from "../options/verify.js";
+import { runVerifyGrant } from "../main/verify.js";
+import { parseVerifyGrantOptions } from "../options/verify.js";
 
 export default defineForestrieCommand({
   meta: {
-    name: "verify",
+    name: "verify-grant",
     description:
-      "Verify a receipt offline against the cached checkpoint (ES256; no network) — the standard, SCITT-compatible closer. Give the EXACT registered payload (--payload, e.g. the signed statement) + its --entry-id. Add --univocity/--log-id/--rpc-url to also check the on-chain accumulator [FOR-347]",
+      "Verify a forestrie authority/grant receipt offline. A thin wrapper over `verify`: it derives the grant commitment preimage from a structured grant and verifies it as the leaf payload. The receipt is a standard COSE Receipt; only the payload is forestrie-specific (matches the on-chain univocity accumulator) [FOR-347]",
   },
   args: {
     genesis: {
@@ -21,18 +21,21 @@ export default defineForestrieCommand({
       valueHint: "path",
       required: true,
     },
-    payload: {
+    "committed-grant": {
       type: "string",
       description:
-        "The EXACT registered payload whose SHA-256 the leaf commits (e.g. the signed statement COSE). A standard COSE Receipt proves leaf = SHA-256(idtimestamp || SHA-256(payload))",
+        "Grant committed at the receipt's leaf, base64 (env GRANT_B64); or use --committed-grant-file + --entry-id",
+      valueHint: "base64",
+    },
+    "committed-grant-file": {
+      type: "string",
+      description: "Grant CBOR file (alternative to --committed-grant)",
       valueHint: "path",
-      required: true,
     },
     "entry-id": {
       type: "string",
-      description: "SCRAPI entry id — supplies the leaf idtimestamp",
+      description: "Entry id within the grant CBOR (with --committed-grant-file)",
       valueHint: "id",
-      required: true,
     },
     univocity: {
       type: "string",
@@ -52,5 +55,5 @@ export default defineForestrieCommand({
       valueHint: "url",
     },
   },
-  run: defineCommandRunner(parseVerifyOptions, runVerify),
+  run: defineCommandRunner(parseVerifyGrantOptions, runVerifyGrant),
 });

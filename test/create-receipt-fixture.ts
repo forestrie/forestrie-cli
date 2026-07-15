@@ -270,9 +270,10 @@ export async function buildCreateReceiptFixture(): Promise<CreateReceiptFixture>
 
   const peakReceiptN2 = await signDetachedPeakReceipt(rootKeyPair, n2);
   const peakReceiptN3 = await signDetachedPeakReceipt(rootKeyPair, n3);
-  // Stand-in cert bstr: create-receipt copies label 1000 verbatim; the
-  // offline verify trust root still resolves from genesis (FOR-297 wires
-  // cert consumption later).
+  // Stand-in cert bstr: create-receipt copies label 1000 verbatim. This is NOT
+  // a real root-signed delegation, so FOR-297's cert consumption rejects it as
+  // delegation_invalid on verify (a present cert that does not chain to the
+  // genesis root is a hard failure — see create-receipt.test.ts).
   const delegationCert = new Uint8Array(48).fill(0xcd);
 
   return {

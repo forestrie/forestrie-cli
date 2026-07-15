@@ -203,13 +203,21 @@ describe("create-receipt (checkpoint mode)", () => {
     const receiptCbor = new Uint8Array(
       Buffer.from(report.receiptB64!, "base64"),
     );
+    // The fixture cert is a stand-in (not a real root-signed delegation), so
+    // FOR-297 correctly rejects it: a label-1000 cert that does not chain to the
+    // genesis root is a hard `delegation_invalid` — verify does NOT silently
+    // fall back to the root key. (create-receipt still copies it verbatim.)
     const verified = await verifyGrantReceiptOffline({
       genesisCbor: fx.genesisCbor,
       receiptCbor,
       grant: fx.leaf1.grant,
       idtimestampBe8: fx.leaf1.idtimestampBe8,
     });
-    expect(verified).toEqual({ ok: true, stage: "binding" });
+    expect(verified).toEqual({
+      ok: false,
+      stage: "signature",
+      reason: "delegation_invalid",
+    });
   });
 
   test("selects the right pre-signed peak in a multi-peak accumulator", async () => {
@@ -689,7 +697,7 @@ describe("create-receipt | verify (CLI end-to-end)", () => {
     expect(created.stderr).toContain("create-receipt: receipt");
 
     const verified = runCli([
-      "verify",
+      "verify-grant",
       "--genesis",
       file("genesis.cbor"),
       "--receipt",
@@ -719,7 +727,7 @@ describe("create-receipt | verify (CLI end-to-end)", () => {
     expect(created.exitCode).toBe(0);
 
     const verified = runCli([
-      "verify",
+      "verify-grant",
       "--genesis",
       file("genesis.cbor"),
       "--receipt",

@@ -12,8 +12,8 @@ import {
   type StageRow,
   type VerifyReport,
 } from "../src/lib/verify-report.js";
-import { runVerify, type VerifyErrorReport } from "../src/main/verify.js";
-import { parseVerifyOptions } from "../src/options/verify.js";
+import { runVerifyGrant, type VerifyErrorReport } from "../src/main/verify.js";
+import { parseVerifyGrantOptions } from "../src/options/verify.js";
 import { runCli } from "./support.js";
 import {
   buildVerifyFixture,
@@ -51,20 +51,20 @@ const forbiddenFetch = (() => {
   throw new Error("network forbidden during offline verify");
 }) as unknown as typeof fetch;
 
-type LooseArgs = Parameters<typeof parseVerifyOptions>[0];
+type LooseArgs = Parameters<typeof parseVerifyGrantOptions>[0];
 
 async function verifyInProcess(
   args: LooseArgs,
   fetchImpl: typeof fetch = forbiddenFetch,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const out = createCaptureOut(0);
-  const options = parseVerifyOptions(args);
+  const options = parseVerifyGrantOptions(args);
   const realFetch = globalThis.fetch;
   const savedExitCode = process.exitCode;
   process.exitCode = 0;
   globalThis.fetch = fetchImpl;
   try {
-    await runVerify(out, options);
+    await runVerifyGrant(out, options);
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -412,7 +412,7 @@ describe("verify-report stageRows", () => {
 describe("forestrie verify — CLI surface", () => {
   test("binary-equivalent CLI run: golden pass exits 0", () => {
     const result = runCli([
-      "verify",
+      "verify-grant",
       "--genesis",
       file("genesis.cbor"),
       "--receipt",
@@ -426,7 +426,7 @@ describe("forestrie verify — CLI surface", () => {
 
   test("CLI run: tampered receipt exits non-zero with --json report", () => {
     const result = runCli([
-      "verify",
+      "verify-grant",
       "--json",
       "--genesis",
       file("genesis.cbor"),
@@ -444,7 +444,7 @@ describe("forestrie verify — CLI surface", () => {
   test("CLI run: bogus input under --json emits parseable JSON, exit non-zero, no stack (F3)", () => {
     // The CI implemented-smoke jq assertion mirrors this exact shape.
     const result = runCli([
-      "verify",
+      "verify-grant",
       "--json",
       "--genesis",
       "missing.cbor",
@@ -465,7 +465,7 @@ describe("forestrie verify — CLI surface", () => {
   test("CLI run: GRANT_B64 env fallback works", () => {
     const result = runCli(
       [
-        "verify",
+        "verify-grant",
         "--genesis",
         file("genesis.cbor"),
         "--receipt",
