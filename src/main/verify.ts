@@ -1,5 +1,6 @@
 import type { Out } from "@forestrie/cli-kit/reporting";
 import {
+  grantCommitmentHashFromGrant,
   verifyGrantReceiptOffline,
   verifyReceiptOffline,
   type ReceiptVerifyResult,
@@ -7,6 +8,7 @@ import {
 import type { VerifyGrantOptions, VerifyOptions } from "../options/verify.js";
 import {
   checkReceiptAnchored,
+  recomputeReceiptPeak,
   type AnchorCheck,
 } from "../lib/verify-anchored.js";
 import {
@@ -14,6 +16,7 @@ import {
   loadVerifyArtifacts,
 } from "../lib/verify-inputs.js";
 import {
+  anchorOnlyStageRows,
   buildVerifyReport,
   STAGE_NARRATION,
   stageRows,
@@ -71,6 +74,101 @@ function reportRunError(
 }
 
 /**
+ * Anchor-only leaf material (FOR-297 approach C): what `finishVerify` needs
+ * to recompute the receipt's peak without any signature — the sequenced
+ * idtimestamp plus a supplier for the leaf ContentHash (`SHA-256(payload)`
+ * for `verify`, the grant commitment hash for `verify-grant`).
+ */
+type AnchorLeaf = {
+  idtimestampBe8: Uint8Array;
+  inner: () => Promise<Uint8Array>;
+};
+
+/**
+ * Chain-anchored fallback for delegated seals the offline verifier cannot
+ * resolve (a child log's per-log delegation does not chain to the root
+ * genesis — FOR-297). Recompute the peak from leaf + proof (no signature)
+ * and match it against the on-chain accumulator: an anchored match proves
+ * binding + inclusion under the contract's consistency-gated state, which is
+ * exactly the split-view trust model. Returns true when it handled the
+ * verdict (either way); false to fall through to the normal failure path.
+ */
+async function tryAnchorOnlyVerify(
+  out: Out,
+  ctx: VerifyReportContext,
+  artifacts: { genesisCbor: Uint8Array; receiptCbor: Uint8Array },
+  result: ReceiptVerifyResult,
+  anchorLeaf: AnchorLeaf,
+): Promise<boolean> {
+  let recomputed: Awaited<ReturnType<typeof recomputeReceiptPeak>>;
+  try {
+    const inner = await anchorLeaf.inner();
+    recomputed = await recomputeReceiptPeak({
+      receiptCbor: artifacts.receiptCbor,
+      idtimestampBe8: anchorLeaf.idtimestampBe8,
+      inner,
+    });
+  } catch {
+    return false; // unparsable leaf material — report the offline failure
+  }
+  if (!recomputed.inclusionOk) return false;
+
+  let anchor: AnchorCheck;
+  try {
+    anchor = await checkReceiptAnchored({
+      genesisCbor: artifacts.genesisCbor,
+      receiptCbor: artifacts.receiptCbor,
+      univocity: ctx.univocity!,
+      logId: ctx.logId!,
+      rpcUrl: ctx.rpcUrl!,
+      recomputedPeak: recomputed.peak,
+    });
+  } catch (err) {
+    reportRunError(out, ctx, "anchor", err);
+    return true;
+  }
+  if (!anchor.anchored) return false; // not on-chain — offline failure stands
+
+  const okResult: ReceiptVerifyResult = { ok: true, stage: "binding" };
+  if (ctx.json) {
+    const report = buildVerifyReport({
+      ok: true,
+      result: okResult,
+      mode: "chain-anchored",
+      anchor,
+      univocity: ctx.univocity,
+      logId: ctx.logId,
+      stagesOverride: anchorOnlyStageRows(),
+    });
+    out.out(JSON.stringify(report, null, 2));
+  } else {
+    for (const row of anchorOnlyStageRows()) {
+      const detail =
+        row.status === "skipped"
+          ? (row.reason ?? "not evaluated")
+          : STAGE_NARRATION[row.stage];
+      out.print(
+        "verify: %s %s — %s",
+        row.stage.padEnd(9),
+        row.status.padEnd(7),
+        detail,
+      );
+    }
+    out.print(
+      "verify: anchor    ok      — recomputed peak matches on-chain accumulator peak %d/%d at anchored size %s",
+      anchor.matchedPeak! + 1,
+      anchor.accumulator.length,
+      anchor.size.toString(),
+    );
+    out.out(
+      `PASS: receipt verified against the on-chain accumulator (anchored size ${anchor.size}; checkpoint signature externalised to univocity)`,
+    );
+  }
+  process.exitCode = 0;
+  return true;
+}
+
+/**
  * Shared tail: optional chain-anchor check, then render the stage report and
  * set the exit code. Used by both `verify` (payload) and `verify-grant`.
  */
@@ -79,7 +177,28 @@ async function finishVerify(
   ctx: VerifyReportContext,
   artifacts: { genesisCbor: Uint8Array; receiptCbor: Uint8Array },
   result: ReceiptVerifyResult,
+  anchorLeaf?: AnchorLeaf,
 ): Promise<void> {
+  // FOR-297 approach C: in chain-anchored mode, a delegation the offline
+  // verifier cannot resolve is not the end — the on-chain accumulator IS the
+  // split-view authority, so verify against it without the signature.
+  if (
+    ctx.anchor === "chain" &&
+    !result.ok &&
+    result.stage === "signature" &&
+    result.reason === "delegation_invalid" &&
+    anchorLeaf !== undefined
+  ) {
+    const handled = await tryAnchorOnlyVerify(
+      out,
+      ctx,
+      artifacts,
+      result,
+      anchorLeaf,
+    );
+    if (handled) return;
+  }
+
   let anchor: AnchorCheck | undefined;
   if (ctx.anchor === "chain" && result.ok) {
     try {
@@ -185,7 +304,14 @@ export async function runVerify(
     return;
   }
 
-  await finishVerify(out, options, artifacts, result);
+  await finishVerify(out, options, artifacts, result, {
+    idtimestampBe8: artifacts.idtimestampBe8,
+    inner: async () =>
+      new Uint8Array(
+        // Copy pins the generic to ArrayBuffer for the dom BufferSource type.
+        await crypto.subtle.digest("SHA-256", new Uint8Array(artifacts.payload)),
+      ),
+  });
 }
 
 /**
@@ -215,5 +341,8 @@ export async function runVerifyGrant(
     return;
   }
 
-  await finishVerify(out, options, artifacts, result);
+  await finishVerify(out, options, artifacts, result, {
+    idtimestampBe8: artifacts.idtimestampBe8,
+    inner: () => grantCommitmentHashFromGrant(artifacts.grant),
+  });
 }

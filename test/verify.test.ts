@@ -44,6 +44,7 @@ beforeAll(async () => {
   writeFileSync(file("receipt-bad-sig.cbor"), tamperSignature(fx.receiptCbor));
   writeFileSync(file("receipt-garbage.cbor"), new Uint8Array([1, 2, 3]));
   writeFileSync(file("grant.cbor"), fx.grantPayloadCbor);
+  writeFileSync(file("receipt-child.cbor"), fx.delegatedChildReceiptCbor);
 });
 
 /** Throws if the offline path ever touches the network. */
@@ -474,5 +475,115 @@ describe("forestrie verify — CLI surface", () => {
       { GRANT_B64: fx.grantCoseB64 },
     );
     expect(result.exitCode).toBe(0);
+  });
+});
+
+describe("forestrie verify — anchor-only child-log fallback (FOR-297 approach C)", () => {
+  function rpcFetch(resultHex: string): typeof fetch {
+    return (async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { method: string };
+      expect(body.method).toBe("eth_call");
+      return new Response(
+        JSON.stringify({ jsonrpc: "2.0", id: 1, result: resultHex }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+  }
+
+  const childChainArgs = (overrides: LooseArgs = {}) =>
+    baseArgs({
+      receipt: file("receipt-child.cbor"),
+      univocity: UNIVOCITY,
+      "log-id": FIXTURE_LOG_ID,
+      "rpc-url": "http://rpc.mock",
+      json: true,
+      ...overrides,
+    });
+
+  test("offline mode still hard-fails delegation_invalid (unchanged)", async () => {
+    const r = await verifyInProcess(
+      baseArgs({ receipt: file("receipt-child.cbor"), json: true }),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = jsonReport(r.stdout);
+    expect(report.stage).toBe("signature");
+    expect(report.reason).toBe("delegation_invalid");
+  });
+
+  test("chain mode: recomputed peak anchored on-chain → PASS with signature skipped", async () => {
+    const otherPeak = new Uint8Array(32).fill(0x77);
+    const r = await verifyInProcess(
+      childChainArgs(),
+      rpcFetch(encodeLogStateResult([otherPeak, fx.peak], 2n)),
+    );
+    expect(r.exitCode).toBe(0);
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(true);
+    expect(report.mode).toBe("chain-anchored");
+    const sig = report.stages.find((s: StageRow) => s.stage === "signature");
+    expect(sig?.status).toBe("skipped");
+    expect(sig?.reason).toContain("externalised to the on-chain accumulator");
+    expect(report.stages.find((s: StageRow) => s.stage === "inclusion")?.status).toBe("ok");
+    expect(report.stages.find((s: StageRow) => s.stage === "binding")?.status).toBe("ok");
+    expect(report.anchor).toMatchObject({
+      anchored: true,
+      matchedPeak: 1,
+      anchoredSize: "2",
+    });
+  });
+
+  test("chain mode, human narration: PASS names the on-chain accumulator", async () => {
+    const r = await verifyInProcess(
+      childChainArgs({ json: undefined }),
+      rpcFetch(encodeLogStateResult([fx.peak], 2n)),
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toContain("signature skipped");
+    expect(r.stdout).toContain(
+      "PASS: receipt verified against the on-chain accumulator",
+    );
+    expect(r.stdout).toContain("signature externalised to univocity");
+  });
+
+  test("chain mode: peak NOT anchored → original delegation_invalid failure stands", async () => {
+    const otherPeak = new Uint8Array(32).fill(0x77);
+    const r = await verifyInProcess(
+      childChainArgs(),
+      rpcFetch(encodeLogStateResult([otherPeak], 2n)),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(false);
+    expect(report.stage).toBe("signature");
+    expect(report.reason).toBe("delegation_invalid");
+  });
+
+  test("chain mode: wrong grant (leaf mismatch) cannot anchor — fails", async () => {
+    const wrongGrantB64 = Buffer.from(fx.grantPayloadCbor.slice())
+      .toString("base64");
+    // raw payload grant with a tampered byte → different commitment → different
+    // recomputed peak → no accumulator match even when the true peak is on-chain.
+    const tampered = new Uint8Array(fx.grantPayloadCbor);
+    tampered[tampered.length - 1]! ^= 0xff;
+    const r = await verifyInProcess(
+      childChainArgs({
+        "committed-grant": Buffer.from(tampered).toString("base64"),
+        "entry-id": fx.entryIdHex,
+      }),
+      rpcFetch(encodeLogStateResult([fx.peak], 2n)),
+    );
+    expect(r.exitCode).toBe(1);
+    void wrongGrantB64;
+  });
+
+  test("chain mode: RPC failure during fallback is a structured anchor error", async () => {
+    const refusedFetch = (async () => {
+      throw new TypeError("fetch failed: connect ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const r = await verifyInProcess(childChainArgs(), refusedFetch);
+    expect(r.exitCode).toBe(1);
+    const report = JSON.parse(r.stdout) as VerifyErrorReport;
+    expect(report.error).toBe("anchor_check_failed");
+    expect(report.stage).toBe("anchor");
   });
 });

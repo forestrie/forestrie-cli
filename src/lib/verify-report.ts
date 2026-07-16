@@ -34,6 +34,31 @@ export type StageRow = {
 };
 
 /**
+ * Anchor-only chain verification (FOR-297 approach C): the checkpoint was
+ * sealed under a delegation the offline verifier cannot resolve (a child
+ * log's per-log delegation does not chain to the root genesis), so the
+ * signature stage is deliberately NOT evaluated — trust is externalised to
+ * the on-chain accumulator. Inclusion and binding hold by construction: the
+ * peak is recomputed locally from `leaf(payload, idtimestamp)` + the
+ * receipt's proof path, so an on-chain match proves both.
+ */
+export const SIGNATURE_EXTERNALISED_REASON =
+  "delegated seal not root-resolvable offline; trust externalised to the on-chain accumulator";
+
+export function anchorOnlyStageRows(): StageRow[] {
+  return [
+    { stage: "parse", status: "ok" },
+    {
+      stage: "signature",
+      status: "skipped",
+      reason: SIGNATURE_EXTERNALISED_REASON,
+    },
+    { stage: "inclusion", status: "ok" },
+    { stage: "binding", status: "ok" },
+  ];
+}
+
+/**
  * Expand the library's `{ok, stage, reason}` into one row per stage:
  * on success all four pass; on failure the reported stage failed, earlier
  * stages passed, later stages were not reached.
@@ -105,13 +130,15 @@ export function buildVerifyReport(opts: {
   anchor?: AnchorCheck | undefined;
   univocity?: string | undefined;
   logId?: string | undefined;
+  /** Anchor-only mode: rows that reflect the skipped signature stage. */
+  stagesOverride?: StageRow[] | undefined;
 }): VerifyReport {
   const report: VerifyReport = {
     command: "verify",
     mode: opts.mode,
     ok: opts.ok,
     stage: opts.result.stage,
-    stages: stageRows(opts.result),
+    stages: opts.stagesOverride ?? stageRows(opts.result),
   };
   if (opts.result.reason !== undefined) {
     report.reason = opts.result.reason;

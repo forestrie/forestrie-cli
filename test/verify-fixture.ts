@@ -205,6 +205,8 @@ export async function buildPeakReceipt(opts: {
   proof: Proof;
   attachPeak?: boolean;
   proofPathOverride?: Uint8Array[];
+  /** Label-1000 delegation certificate bytes (FOR-297). */
+  delegationCert?: Uint8Array;
 }): Promise<Uint8Array> {
   const protectedInner = cborBytes(new Map<number, unknown>([[1, -7]]));
   const sig = await signPeak(opts.signer, protectedInner, opts.peak);
@@ -213,11 +215,55 @@ export async function buildPeakReceipt(opts: {
     [1, mmrIndex],
     [2, opts.proofPathOverride ?? opts.proof.path],
   ]);
-  const unprot = new Map<number, unknown>([
+  const unprotEntries: [number, unknown][] = [
     [VDS_COSE_RECEIPT_PROOFS_TAG, new Map<number, unknown>([[-1, [inclusionProofEntry]]])],
-  ]);
+  ];
+  if (opts.delegationCert !== undefined) {
+    unprotEntries.push([1000, opts.delegationCert]);
+  }
+  const unprot = new Map<number, unknown>(unprotEntries);
   const payload = opts.attachPeak ? opts.peak : null;
   return cborBytes([protectedInner, unprot, payload, sig]);
+}
+
+/**
+ * Delegation certificate: COSE Sign1 (attached payload) whose payload carries
+ * the delegated sealer's COSE key at label 5, signed by `certSigner`. Signed
+ * by the ROOT key it models a root-log delegation; signed by any other key it
+ * models a CHILD log's per-log delegation, which does NOT chain to the
+ * genesis root offline (FOR-297) → `delegation_invalid`.
+ */
+export async function buildDelegationCert(
+  certSigner: CryptoKeyPair,
+  delegatedPublic: CryptoKey,
+): Promise<Uint8Array> {
+  const raw = new Uint8Array(
+    (await crypto.subtle.exportKey("raw", delegatedPublic)) as ArrayBuffer,
+  );
+  const coseKey = new Map<number, unknown>([
+    [1, 2], // kty EC2
+    [-1, 1], // crv P-256
+    [-2, raw.slice(1, 33)], // x
+    [-3, raw.slice(33, 65)], // y
+  ]);
+  const payload = cborBytes(new Map<number, unknown>([[5, coseKey]]));
+  const protectedInner = cborBytes(new Map<number, unknown>([[1, -7]]));
+  const sigStructure = encodeSigStructure(
+    protectedInner,
+    new Uint8Array(0),
+    payload,
+  );
+  const sig = new Uint8Array(
+    await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      certSigner.privateKey,
+      sigStructure.buffer.slice(
+        sigStructure.byteOffset,
+        sigStructure.byteOffset + sigStructure.byteLength,
+      ) as ArrayBuffer,
+    ),
+  );
+  return cborBytes([protectedInner, new Map(), payload, sig]);
 }
 
 export function grantWithData(logId: string, grantData: Uint8Array): Grant {
@@ -259,6 +305,12 @@ export type VerifyFixture = {
   receiptCbor: Uint8Array;
   attachedPeakReceiptCbor: Uint8Array;
   tamperedPathReceiptCbor: Uint8Array;
+  /**
+   * Child-log shaped receipt (FOR-297): sealed by a delegated key whose
+   * label-1000 cert is signed by a NON-root "child owner" key — offline
+   * verify fails `delegation_invalid`; chain-anchored may still pass.
+   */
+  delegatedChildReceiptCbor: Uint8Array;
   grant: Grant;
   grantPayloadCbor: Uint8Array;
   grantCoseCbor: Uint8Array;
@@ -344,6 +396,20 @@ export async function buildVerifyFixture(): Promise<VerifyFixture> {
     proofPathOverride: badPath,
   });
 
+  // Child-log shape: the seal is by a delegated sealer key, and the cert is
+  // signed by the CHILD owner (not the genesis root) — never root-resolvable.
+  const childOwnerKeyPair = await generateP256KeyPair();
+  const childSealerKeyPair = await generateP256KeyPair();
+  const delegatedChildReceiptCbor = await buildPeakReceipt({
+    signer: childSealerKeyPair,
+    peak,
+    proof,
+    delegationCert: await buildDelegationCert(
+      childOwnerKeyPair,
+      childSealerKeyPair.publicKey,
+    ),
+  });
+
   const genesisCbor = buildGenesisCbor(bootstrapKey);
   const ks256GenesisCbor = cborBytes(
     new Map<number, unknown>([
@@ -365,6 +431,7 @@ export async function buildVerifyFixture(): Promise<VerifyFixture> {
     receiptCbor,
     attachedPeakReceiptCbor,
     tamperedPathReceiptCbor,
+    delegatedChildReceiptCbor,
     grant,
     grantPayloadCbor,
     grantCoseCbor,
