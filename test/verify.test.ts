@@ -510,7 +510,7 @@ describe("forestrie verify — anchor-only child-log fallback (FOR-297 approach 
     expect(report.reason).toBe("delegation_invalid");
   });
 
-  test("chain mode: recomputed peak anchored on-chain → PASS with signature skipped", async () => {
+  test("chain mode: recomputed peak anchored on-chain → PASS, signature ok via the anchor", async () => {
     const otherPeak = new Uint8Array(32).fill(0x77);
     const r = await verifyInProcess(
       childChainArgs(),
@@ -521,8 +521,8 @@ describe("forestrie verify — anchor-only child-log fallback (FOR-297 approach 
     expect(report.ok).toBe(true);
     expect(report.mode).toBe("chain-anchored");
     const sig = report.stages.find((s: StageRow) => s.stage === "signature");
-    expect(sig?.status).toBe("skipped");
-    expect(sig?.reason).toContain("externalised to the on-chain accumulator");
+    expect(sig?.status).toBe("ok");
+    expect(sig?.reason).toContain("verified against accumulator from chain");
     expect(report.stages.find((s: StageRow) => s.stage === "inclusion")?.status).toBe("ok");
     expect(report.stages.find((s: StageRow) => s.stage === "binding")?.status).toBe("ok");
     expect(report.anchor).toMatchObject({
@@ -538,11 +538,11 @@ describe("forestrie verify — anchor-only child-log fallback (FOR-297 approach 
       rpcFetch(encodeLogStateResult([fx.peak], 2n)),
     );
     expect(r.exitCode).toBe(0);
-    expect(r.stderr).toContain("signature skipped");
+    expect(r.stderr).toContain("verified against accumulator from chain");
     expect(r.stdout).toContain(
       "PASS: receipt verified against the on-chain accumulator",
     );
-    expect(r.stdout).toContain("signature externalised to univocity");
+    expect(r.stdout).toContain("signature enforced by univocity at publish");
   });
 
   test("chain mode: peak NOT anchored → original delegation_invalid failure stands", async () => {

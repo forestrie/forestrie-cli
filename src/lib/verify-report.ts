@@ -36,22 +36,39 @@ export type StageRow = {
 /**
  * Anchor-only chain verification (FOR-297 approach C): the checkpoint was
  * sealed under a delegation the offline verifier cannot resolve (a child
- * log's per-log delegation does not chain to the root genesis), so the
- * signature stage is deliberately NOT evaluated — trust is externalised to
- * the on-chain accumulator. Inclusion and binding hold by construction: the
- * peak is recomputed locally from `leaf(payload, idtimestamp)` + the
- * receipt's proof path, so an on-chain match proves both.
+ * log's per-log delegation does not chain to the root genesis). The
+ * signature stage still reports **ok** — not because the COSE check re-ran
+ * locally, but because a match against the on-chain accumulator *implies*
+ * it: univocity only accepts a checkpoint whose signature verifies under
+ * the log's live delegation, whose publish grant's inclusion is re-proven
+ * against the parent's on-chain state on EVERY publish, and whose
+ * accumulator is consistency-gated against the previously published state.
+ * So if the locally-recomputed peak (from `leaf(payload, idtimestamp)` +
+ * the receipt's proof path) appears in the accumulator, the publishing
+ * signature was valid and a fresh grant chain to the bootstrap existed at
+ * publish time — the anchor match combines inclusion, binding, signature
+ * validity AND a split-view check (status-2607-09 D2).
+ *
+ * Enforcement cited from `_Univocity.sol publishCheckpoint` @ univocity
+ * ea410d5a90e4c2337fc1dec288d660551daf36ab:
+ * - signature under the live delegation: `_verifyCheckpointSignature`,
+ *   src/contracts/_Univocity.sol#L199-L208 (reverts on failure)
+ * - grant inclusion re-verified each publish (rules 1–3):
+ *   `_applyInclusionGrant`, src/contracts/_Univocity.sol#L211-L219
+ * - grant bounds (rule 4): src/contracts/_Univocity.sol#L181-L188
+ * - consistency gating: `verifyConsistencyProofChain`,
+ *   src/contracts/_Univocity.sol#L189-L193
  */
-export const SIGNATURE_EXTERNALISED_REASON =
-  "delegated seal not root-resolvable offline; trust externalised to the on-chain accumulator";
+export const SIGNATURE_ANCHORED_REASON =
+  "verified against accumulator from chain — signature enforced by univocity at publish";
 
 export function anchorOnlyStageRows(): StageRow[] {
   return [
     { stage: "parse", status: "ok" },
     {
       stage: "signature",
-      status: "skipped",
-      reason: SIGNATURE_EXTERNALISED_REASON,
+      status: "ok",
+      reason: SIGNATURE_ANCHORED_REASON,
     },
     { stage: "inclusion", status: "ok" },
     { stage: "binding", status: "ok" },

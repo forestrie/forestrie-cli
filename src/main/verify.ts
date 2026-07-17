@@ -143,10 +143,7 @@ async function tryAnchorOnlyVerify(
     out.out(JSON.stringify(report, null, 2));
   } else {
     for (const row of anchorOnlyStageRows()) {
-      const detail =
-        row.status === "skipped"
-          ? (row.reason ?? "not evaluated")
-          : STAGE_NARRATION[row.stage];
+      const detail = row.reason ?? STAGE_NARRATION[row.stage];
       out.print(
         "verify: %s %s — %s",
         row.stage.padEnd(9),
@@ -161,7 +158,7 @@ async function tryAnchorOnlyVerify(
       anchor.size.toString(),
     );
     out.out(
-      `PASS: receipt verified against the on-chain accumulator (anchored size ${anchor.size}; checkpoint signature externalised to univocity)`,
+      `PASS: receipt verified against the on-chain accumulator (anchored size ${anchor.size}; signature enforced by univocity at publish)`,
     );
   }
   process.exitCode = 0;
