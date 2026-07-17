@@ -11,7 +11,7 @@ import {
  * FOR-390 / ADR-0052: authorize a custodian-vouched sealer to publish
  * checkpoints for a log the caller owns (K(L)). Reads the ES256 root PEM, runs
  * the public delegation flow (`delegate-flow.ts`) — which verifies the
- * registrar voucher against the operator-pinned registrar key before binding —
+ * registrar voucher against the caller-known registrar key before binding —
  * and reports the bound lease. Public coordinator endpoints only.
  */
 
@@ -85,7 +85,7 @@ async function reportResult(
     return;
   }
   out.print("standing: sealerId %s epoch %s", result.sealerId, String(result.epoch));
-  out.print("voucher: ok — verifies against pinned registrar key");
+  out.print("voucher: ok — verifies against the known sealer-voucher key");
   out.print("horizon: mmr %d..%d", result.mmrStart, result.mmrEnd);
   out.print("submit: ok");
   if (options.outB64 !== undefined) {
@@ -118,7 +118,7 @@ export async function runDelegate(
         coordinatorUrl: options.coordinatorUrl,
         logId: options.logId,
         rootPem,
-        pinnedRegistrarKey: options.pinnedRegistrarKey,
+        knownSealerKey: options.knownSealerKey,
         horizonMmrEnd: options.horizonMmrEnd,
         ttlSeconds: options.ttlSeconds,
       },

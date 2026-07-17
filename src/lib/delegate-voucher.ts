@@ -2,11 +2,11 @@
  * FOR-390 / ADR-0052 registrar delegate-key voucher verification, composed
  * from published `@forestrie/encoding` primitives.
  *
- * A voucher is a COSE Sign1 signed by the pinned registrar key over a CBOR
+ * A voucher is a COSE Sign1 signed by the known registrar key over a CBOR
  * claims map `{1: sealerId, 2: epoch, 3: publicKey}`. It binds a sealer's
  * delegated checkpoint-signing key to a registrar-attested identity; the CLI
  * refuses to bind a delegation certificate to a delegate key whose voucher
- * does not verify against the operator-pinned registrar key.
+ * does not verify against the caller-known registrar key.
  *
  * This mirrors canopy `@forestrie/encoding`'s `verify-delegate-key-voucher.ts`.
  * The published encoding v0.3.0 does NOT yet export
@@ -74,7 +74,7 @@ function toBigIntOrNull(value: unknown): bigint | null {
 
 /**
  * Verify a registrar delegate-key voucher:
- *   1. COSE Sign1 signature verifies against the pinned registrar key.
+ *   1. COSE Sign1 signature verifies against the known registrar key.
  *   2. The payload decodes to a CBOR claims map.
  *   3. Claims 1/2/3 (sealerId / epoch / publicKey) match {@link expect}, with a
  *      constant-time compare on the public key bytes.
@@ -86,7 +86,7 @@ export async function verifyDelegateKeyVoucher(
   pinnedKey: ParsedEcPublicKey,
   expect: VoucherExpectation,
 ): Promise<VoucherResult> {
-  // 1. Signature against the pinned registrar key.
+  // 1. Signature against the known registrar key.
   const sigOk = await verifyCoseSign1WithParsedKey(voucherBytes, pinnedKey);
   if (!sigOk) return { ok: false, reason: "signature" };
 

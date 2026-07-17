@@ -148,7 +148,7 @@ const baseParams = {
   coordinatorUrl: COORD,
   logId: LOG_ID,
   rootPem: ROOT_PEM,
-  pinnedRegistrarKey: PINNED_KEY_B64,
+  knownSealerKey: PINNED_KEY_B64,
   horizonMmrEnd: 1000,
 };
 
@@ -360,7 +360,7 @@ describe("runDelegate (main)", () => {
     coordinatorUrl: COORD,
     logId: LOG_ID,
     signWith: ROOT_PEM_PATH,
-    pinnedRegistrarKey: PINNED_KEY_B64,
+    knownSealerKey: PINNED_KEY_B64,
     horizonMmrEnd: 1000,
     ttlSeconds: undefined,
     outB64: undefined,

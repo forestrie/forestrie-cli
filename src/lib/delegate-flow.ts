@@ -9,7 +9,7 @@
  *   1. Import the ES256 root PEM (K(L)) as a WebCrypto CryptoKeyPair.
  *   2. GET the coordinator's pending-delegation entries; find the STANDING
  *      delegate-key entry (has `suggestedTtlSeconds`, no `mmrStart`).
- *   3. Verify the registrar voucher against the operator-pinned registrar key
+ *   3. Verify the registrar voucher against the caller-known registrar key
  *      (mandatory — fail closed).
  *   4. Build the delegation certificate + on-chain delegation proof over the
  *      horizon `mmr 0..end`.
@@ -89,7 +89,7 @@ export type DelegateFlowParams = {
   /** ES256 log-root PEM (K(L)) that authorizes the delegation. */
   rootPem: string;
   /** Pinned registrar key, base64 `x||y` (64 bytes). */
-  pinnedRegistrarKey: string;
+  knownSealerKey: string;
   /** Exclusive MMR end of the horizon lease (mmrStart is fixed 0). */
   horizonMmrEnd: number;
   /** Lease TTL seconds; defaults to the standing entry's suggestedTtlSeconds. */
@@ -199,10 +199,10 @@ export async function runDelegateFlow(
       "standing entry is missing its registrar voucher — refusing to bind",
     );
   }
-  const pinned = parseRegistrarKeyXY(b64ToBytes(params.pinnedRegistrarKey));
+  const pinned = parseRegistrarKeyXY(b64ToBytes(params.knownSealerKey));
   if (pinned === null) {
     throw new DelegateFlowError(
-      "pinned-registrar-key must be base64 x||y (64 bytes)",
+      "known-sealer-key must be base64 x||y (64 bytes)",
     );
   }
   const voucherResult = await verifyDelegateKeyVoucher(

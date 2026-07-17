@@ -14,7 +14,7 @@ export const DEFAULT_HORIZON_MMR_END = Number.MAX_SAFE_INTEGER;
  *
  * Authorize a custodian-vouched sealer to publish checkpoints for a log the
  * caller owns (K(L)). Public coordinator endpoints only — no operator token,
- * no RPC. The registrar voucher is verified against an operator-pinned
+ * no RPC. The registrar voucher is verified against a caller-known
  * registrar key before the delegation certificate is bound (fail closed).
  */
 export type DelegateOptions = ForestrieCommonOptions & {
@@ -24,8 +24,9 @@ export type DelegateOptions = ForestrieCommonOptions & {
   logId: string;
   /** ES256 log-root PEM (K(L)) that authorizes the delegation. */
   signWith: string;
-  /** Pinned registrar key, base64 `x||y` (`PINNED_REGISTRAR_KEY`). */
-  pinnedRegistrarKey: string;
+  /** The known key that vouches for the operator's sealer — the registrar's
+   * voucher-signing key, base64 `x||y` (`KNOWN_SEALER_KEY`). */
+  knownSealerKey: string;
   /** Exclusive MMR end of the horizon lease (mmrStart is fixed 0). */
   horizonMmrEnd: number;
   /** Lease TTL seconds; defaults to the standing entry's suggestedTtlSeconds. */
@@ -79,10 +80,10 @@ export function parseDelegateOptions(args: LooseParsedArgs): DelegateOptions {
     ),
     logId: requiredStringOption(args, "log-id"),
     signWith: requiredStringOption(args, "sign-with"),
-    pinnedRegistrarKey: requiredStringOption(
+    knownSealerKey: requiredStringOption(
       args,
-      "pinned-registrar-key",
-      "PINNED_REGISTRAR_KEY",
+      "known-sealer-key",
+      "KNOWN_SEALER_KEY",
     ),
     horizonMmrEnd,
     ttlSeconds,
