@@ -22,6 +22,7 @@ import {
   createSyncHasher,
   type Proof,
 } from "@forestrie/merklelog";
+import { buildV2MassifBytes } from "./create-receipt-fixture.js";
 
 /** Forest genesis wire labels (stable; see receipt-verify forest-genesis-labels). */
 const LABEL_GENESIS_VERSION = -68009;
@@ -323,6 +324,11 @@ export type VerifyFixture = {
   entryIdHex: string;
   peak: Uint8Array;
   rootKeyPair: CryptoKeyPair;
+  /** Root peak of the grown 7-node (4-leaf) MMR — the "later state" a stale
+   * receipt extends into via massif nodes (FOR-297 D5). */
+  peak7: Uint8Array;
+  /** v2 massif blob holding all 7 nodes of the grown MMR. */
+  massif7Bytes: Uint8Array;
   /** The child log OWNER's public key (x||y, base64) — the delegation-cert
    * issuer for `delegatedChildReceiptCbor`; the value a caller passes as
    * `--known-log-key` (FOR-297 D1). */
@@ -438,6 +444,32 @@ export async function buildVerifyFixture(): Promise<VerifyFixture> {
     "base64",
   );
 
+  // Grown MMR (FOR-297 D5): two more leaves take the log to 7 nodes / one
+  // root peak. The original 2-leaf peak (node 2) becomes an INTERIOR node —
+  // a receipt derived at the old size must extend through massif nodes to
+  // the new covering peak (old-accumulator compatibility).
+  const inner3 = await sha256(new Uint8Array([0xd3]));
+  const inner4 = await sha256(new Uint8Array([0xd4]));
+  const leaf3Hash = await univocityLeafHash(new Uint8Array(8).fill(0x03), inner3);
+  const leaf4Hash = await univocityLeafHash(new Uint8Array(8).fill(0x04), inner4);
+  const node5 = await calculateRoot(
+    hasher,
+    leaf3Hash,
+    { path: [leaf4Hash], mmrIndex: 3n },
+    3n,
+  );
+  const peak7 = await calculateRoot(
+    hasher,
+    leaf1Hash,
+    { path: [leaf0Hash, node5], mmrIndex: 1n },
+    1n,
+  );
+  const massif7Bytes = buildV2MassifBytes({
+    massifHeight: 3,
+    massifIndex: 0,
+    logHashes: [leaf0Hash, leaf1Hash, peak, leaf3Hash, leaf4Hash, node5, peak7],
+  });
+
   const genesisCbor = buildGenesisCbor(bootstrapKey);
   const ks256GenesisCbor = cborBytes(
     new Map<number, unknown>([
@@ -469,6 +501,8 @@ export async function buildVerifyFixture(): Promise<VerifyFixture> {
     entryIdHex,
     peak,
     rootKeyPair,
+    peak7,
+    massif7Bytes,
     childOwnerKeyXyB64,
   };
 }

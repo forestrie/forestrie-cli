@@ -141,7 +141,8 @@ export function stageRows(result: ReceiptVerifyResult): StageRow[] {
   });
 }
 
-/** `--json` anchor block (chain mode only). Sizes are decimal strings. */
+/** `--json` anchor block (chain / known-accumulator modes). Sizes are
+ * decimal strings. */
 export type AnchorReport = {
   univocity: string;
   logId: string;
@@ -150,12 +151,19 @@ export type AnchorReport = {
   peakCount: number;
   matchedPeak: number | null;
   reason?: string;
+  /** known-accumulator anchors only: the audited chain read (FOR-297 D5). */
+  blockNumber?: string;
+  blockHash?: string;
+  /** True when the match required proof-path extension via massif nodes. */
+  extended?: boolean;
 };
+
+export type VerifyMode = "offline" | "chain-anchored" | "accumulator-anchored";
 
 /** `--json` report on stdout — stable shape for demo scripting. */
 export type VerifyReport = {
   command: "verify";
-  mode: "offline" | "chain-anchored";
+  mode: VerifyMode;
   ok: boolean;
   stage: ReceiptVerifyStage;
   reason?: string;
@@ -163,11 +171,18 @@ export type VerifyReport = {
   anchor?: AnchorReport;
 };
 
+/** Extra anchor facts present only for known-accumulator checks. */
+type SnapshotAnchorFacts = {
+  blockNumber?: bigint;
+  blockHashHex?: string;
+  extended?: boolean;
+};
+
 export function buildVerifyReport(opts: {
   ok: boolean;
   result: ReceiptVerifyResult;
-  mode: "offline" | "chain-anchored";
-  anchor?: AnchorCheck | undefined;
+  mode: VerifyMode;
+  anchor?: (AnchorCheck & SnapshotAnchorFacts) | undefined;
   univocity?: string | undefined;
   logId?: string | undefined;
   /** Anchor-only mode: rows that reflect the skipped signature stage. */
@@ -194,6 +209,11 @@ export function buildVerifyReport(opts: {
     };
     if (opts.anchor.reason !== undefined) {
       anchor.reason = opts.anchor.reason;
+    }
+    if (opts.anchor.blockNumber !== undefined) {
+      anchor.blockNumber = opts.anchor.blockNumber.toString();
+      anchor.blockHash = `0x${opts.anchor.blockHashHex ?? ""}`;
+      anchor.extended = opts.anchor.extended === true;
     }
     report.anchor = anchor;
   }

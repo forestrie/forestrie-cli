@@ -31,5 +31,7 @@ export default defineForestrieCommand({
     verify: () => import("./commands/verify.js").then((m) => m.default),
     "verify-grant": () =>
       import("./commands/verify-grant.js").then((m) => m.default),
+    "fetch-accumulator": () =>
+      import("./commands/fetch-accumulator.js").then((m) => m.default),
   },
 });

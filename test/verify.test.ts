@@ -12,8 +12,16 @@ import {
   type StageRow,
   type VerifyReport,
 } from "../src/lib/verify-report.js";
+import { readFileSync } from "node:fs";
 import { runVerifyGrant, type VerifyErrorReport } from "../src/main/verify.js";
+import { runFetchAccumulator } from "../src/main/fetch-accumulator.js";
 import { parseVerifyGrantOptions } from "../src/options/verify.js";
+import { parseFetchAccumulatorOptions } from "../src/options/fetch-accumulator.js";
+import {
+  decodeKnownAccumulator,
+  encodeKnownAccumulator,
+  type KnownAccumulator,
+} from "../src/lib/verify-known-accumulator.js";
 import { runCli } from "./support.js";
 import {
   buildVerifyFixture,
@@ -686,5 +694,304 @@ describe("forestrie verify-grant — caller-known log key (FOR-297 D1)", () => {
     const report = JSON.parse(r.stdout) as VerifyErrorReport;
     expect(report.error).toBe("verify_failed");
     expect(report.message).toContain("64 bytes");
+  });
+});
+
+describe("forestrie verify-grant — known accumulator snapshot (FOR-297 D5)", () => {
+  const contractLogIdBytes = (logId: string): Uint8Array => {
+    const hex = toContractLogId(logId).slice(2);
+    const out = new Uint8Array(32);
+    for (let i = 0; i < 32; i++) {
+      out[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    }
+    return out;
+  };
+
+  const snapshotBytes = (over: Partial<KnownAccumulator> = {}): Uint8Array =>
+    encodeKnownAccumulator({
+      version: 1,
+      chainId: 84532n,
+      univocity: new Uint8Array(20).fill(0xab),
+      logId: contractLogIdBytes(FIXTURE_LOG_ID),
+      size: 3n,
+      accumulator: [fx.peak],
+      blockNumber: 123n,
+      blockHash: new Uint8Array(32).fill(0xbb),
+      ...over,
+    });
+
+  const snapshotFile = (name: string, bytes: Uint8Array): string => {
+    writeFileSync(file(name), bytes);
+    return file(name);
+  };
+
+  test("golden: child receipt anchors to the snapshot fully offline (fetch forbidden)", async () => {
+    const snap = snapshotFile("acc-golden.cbor", snapshotBytes());
+    const r = await verifyInProcess(
+      baseArgs({
+        receipt: file("receipt-child.cbor"),
+        "known-accumulator": snap,
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(0);
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(true);
+    expect(report.mode).toBe("accumulator-anchored");
+    const sig = report.stages.find((s: StageRow) => s.stage === "signature");
+    expect(sig?.status).toBe("ok");
+    expect(report.anchor).toMatchObject({
+      anchored: true,
+      matchedPeak: 0,
+      anchoredSize: "3",
+      blockNumber: "123",
+      extended: false,
+    });
+  });
+
+  test("human narration names the known accumulator and the block", async () => {
+    const snap = snapshotFile("acc-golden.cbor", snapshotBytes());
+    const r = await verifyInProcess(
+      baseArgs({
+        receipt: file("receipt-child.cbor"),
+        "known-accumulator": snap,
+      }),
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toContain("known accumulator");
+    expect(r.stderr).toContain("block 123");
+    expect(r.stdout).toContain(
+      "PASS: receipt verified against the known accumulator",
+    );
+  });
+
+  test("ok-path: root receipt (genesis trust) also anchors to the snapshot", async () => {
+    const snap = snapshotFile("acc-golden.cbor", snapshotBytes());
+    const r = await verifyInProcess(
+      baseArgs({ "known-accumulator": snap, json: true }),
+    );
+    expect(r.exitCode).toBe(0);
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(true);
+    expect(report.mode).toBe("accumulator-anchored");
+    expect(report.anchor?.anchored).toBe(true);
+  });
+
+  test("stale snapshot: old receipt extends to the grown peak via --massif", async () => {
+    const snap = snapshotFile(
+      "acc-grown.cbor",
+      snapshotBytes({ size: 7n, accumulator: [fx.peak7] }),
+    );
+    writeFileSync(file("massif7.bin"), fx.massif7Bytes);
+    const r = await verifyInProcess(
+      baseArgs({
+        receipt: file("receipt-child.cbor"),
+        "known-accumulator": snap,
+        massif: file("massif7.bin"),
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(0);
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(true);
+    expect(report.anchor).toMatchObject({
+      anchored: true,
+      extended: true,
+      anchoredSize: "7",
+    });
+  });
+
+  test("stale snapshot without --massif cannot extend — fails closed", async () => {
+    const snap = snapshotFile(
+      "acc-grown.cbor",
+      snapshotBytes({ size: 7n, accumulator: [fx.peak7] }),
+    );
+    const r = await verifyInProcess(
+      baseArgs({
+        receipt: file("receipt-child.cbor"),
+        "known-accumulator": snap,
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(1);
+  });
+
+  test("receipt newer than the snapshot fails closed with a refresh hint", async () => {
+    const snap = snapshotFile(
+      "acc-old.cbor",
+      snapshotBytes({ size: 1n, accumulator: [fx.peak] }),
+    );
+    const r = await verifyInProcess(
+      baseArgs({
+        receipt: file("receipt-child.cbor"),
+        "known-accumulator": snap,
+      }),
+    );
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain("receipt_newer_than_known_accumulator");
+    expect(r.stderr).toContain("refresh the accumulator");
+  });
+
+  test("forged snapshot (wrong peaks) does not anchor", async () => {
+    const snap = snapshotFile(
+      "acc-forged.cbor",
+      snapshotBytes({ accumulator: [new Uint8Array(32).fill(0x77)] }),
+    );
+    const r = await verifyInProcess(
+      baseArgs({
+        receipt: file("receipt-child.cbor"),
+        "known-accumulator": snap,
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(false);
+  });
+
+  test("snapshot bound to a different log is rejected before any peak math", async () => {
+    const snap = snapshotFile(
+      "acc-wrong-log.cbor",
+      snapshotBytes({
+        logId: contractLogIdBytes("00000000-0000-4000-8000-000000000009"),
+      }),
+    );
+    const r = await verifyInProcess(
+      baseArgs({
+        receipt: file("receipt-child.cbor"),
+        "known-accumulator": snap,
+        "log-id": FIXTURE_LOG_ID,
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = JSON.parse(r.stdout) as VerifyErrorReport;
+    expect(report.error).toBe("anchor_check_failed");
+    expect(report.message).toContain("bound to log");
+  });
+
+  test("--known-accumulator conflicts with a live chain read", () => {
+    expect(() =>
+      parseVerifyGrantOptions(
+        baseArgs({
+          "known-accumulator": file("acc-golden.cbor"),
+          univocity: UNIVOCITY,
+          "log-id": FIXTURE_LOG_ID,
+          "rpc-url": "http://rpc.mock",
+        }) as LooseArgs,
+      ),
+    ).toThrow(/choose one chain anchor/);
+  });
+
+  test("--massif without --known-accumulator is a usage error", () => {
+    expect(() =>
+      parseVerifyGrantOptions(
+        baseArgs({ massif: file("massif7.bin") }) as LooseArgs,
+      ),
+    ).toThrow(/--massif only applies/);
+  });
+});
+
+describe("forestrie fetch-accumulator (FOR-297 D5 producer)", () => {
+  async function fetchAccumulatorInProcess(
+    args: Record<string, unknown>,
+    fetchImpl: typeof fetch,
+  ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+    const out = createCaptureOut(0);
+    const options = parseFetchAccumulatorOptions(args as LooseArgs);
+    const realFetch = globalThis.fetch;
+    const savedExitCode = process.exitCode;
+    process.exitCode = 0;
+    globalThis.fetch = fetchImpl;
+    try {
+      await runFetchAccumulator(out, options);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    const exitCode = Number(process.exitCode ?? 0);
+    process.exitCode = savedExitCode;
+    const text = (stream: "stdout" | "stderr") =>
+      out.lines
+        .filter((l) => l.stream === stream)
+        .map((l) => l.text)
+        .join("\n");
+    return { exitCode, stdout: text("stdout"), stderr: text("stderr") };
+  }
+
+  const rpcRouter = (): typeof fetch =>
+    (async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { method: string };
+      const results: Record<string, unknown> = {
+        eth_chainId: "0x14a34",
+        eth_getBlockByNumber: {
+          number: "0x7b",
+          hash: "0x" + "bb".repeat(32),
+        },
+        eth_call: encodeLogStateResult([fx.peak], 3n),
+      };
+      if (!(body.method in results)) {
+        throw new Error(`unexpected RPC method ${body.method}`);
+      }
+      return new Response(
+        JSON.stringify({ jsonrpc: "2.0", id: 1, result: results[body.method] }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+  test("writes a canonical snapshot that verify accepts as --known-accumulator", async () => {
+    const outPath = file("acc-fetched.cbor");
+    const r = await fetchAccumulatorInProcess(
+      {
+        univocity: UNIVOCITY,
+        "log-id": FIXTURE_LOG_ID,
+        "rpc-url": "http://rpc.mock",
+        out: outPath,
+        json: true,
+      },
+      rpcRouter(),
+    );
+    expect(r.exitCode).toBe(0);
+    const report = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(report.command).toBe("fetch-accumulator");
+    expect(report.chainId).toBe("84532");
+    expect(report.anchoredSize).toBe("3");
+    expect(report.blockNumber).toBe("123");
+
+    const snapshot = decodeKnownAccumulator(
+      new Uint8Array(readFileSync(outPath)),
+    );
+    expect(snapshot.size).toBe(3n);
+    expect(snapshot.chainId).toBe(84532n);
+    expect(snapshot.blockNumber).toBe(123n);
+    expect(bytesToHex(snapshot.accumulator[0]!)).toBe(bytesToHex(fx.peak));
+
+    // Round-trip: the fetched snapshot anchors the child receipt offline.
+    const v = await verifyInProcess(
+      baseArgs({
+        receipt: file("receipt-child.cbor"),
+        "known-accumulator": outPath,
+        json: true,
+      }),
+    );
+    expect(v.exitCode).toBe(0);
+  });
+
+  test("RPC failure is a structured error", async () => {
+    const refusedFetch = (async () => {
+      throw new TypeError("fetch failed: connect ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const r = await fetchAccumulatorInProcess(
+      {
+        univocity: UNIVOCITY,
+        "log-id": FIXTURE_LOG_ID,
+        "rpc-url": "http://rpc.mock",
+        out: file("acc-never.cbor"),
+        json: true,
+      },
+      refusedFetch,
+    );
+    expect(r.exitCode).toBe(1);
+    const report = JSON.parse(r.stdout) as Record<string, unknown>;
+    expect(report.error).toBe("fetch_accumulator_failed");
   });
 });

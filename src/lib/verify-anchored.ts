@@ -163,7 +163,7 @@ class SubtleHasher implements Hasher {
  * `@forestrie/receipt-verify` `univocityLeafHash` (not exported there); hoist
  * to the library when the FOR-297 multi-hop resolver lands.
  */
-async function univocityLeafHash(
+export async function univocityLeafHash(
   idtimestampBe8: Uint8Array,
   inner: Uint8Array,
 ): Promise<Uint8Array> {

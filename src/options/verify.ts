@@ -25,10 +25,19 @@ import {
  */
 
 type AnchorFields = {
-  anchor: "offline" | "chain";
+  anchor: "offline" | "chain" | "accumulator";
   univocity: string | undefined;
   logId: string | undefined;
   rpcUrl: string | undefined;
+  /**
+   * Cached on-chain accumulator snapshot (FOR-297 D5) — chain-anchored
+   * verification without `--rpc-url`. Produced by `forestrie
+   * fetch-accumulator`; never source it unauthenticated from the log
+   * operator's tile store.
+   */
+  knownAccumulator: string | undefined;
+  /** Local massif blob enabling stale-snapshot proof-path extension. */
+  massif: string | undefined;
   /**
    * Caller-known log OWNER key (the delegation-cert issuer), base64 `x||y`
    * (64 bytes, `KNOWN_LOG_KEY`) — FOR-297 D1. An offline trust anchor that
@@ -45,16 +54,35 @@ function parseAnchorFields(args: LooseParsedArgs): AnchorFields {
   const logId = optionalStringOption(args, "log-id");
   const rpcUrl = optionalStringOption(args, "rpc-url", "RPC_URL");
   const knownLogKey = optionalStringOption(args, "known-log-key", "KNOWN_LOG_KEY");
+  const knownAccumulator = optionalStringOption(args, "known-accumulator");
+  const massif = optionalStringOption(args, "massif");
   let anchor: AnchorFields["anchor"] = "offline";
-  if (univocity !== undefined) {
+  if (knownAccumulator !== undefined) {
+    if (rpcUrl !== undefined || univocity !== undefined) {
+      throw new Error(
+        "choose one chain anchor: a live read (--univocity/--log-id/--rpc-url) or a cached --known-accumulator",
+      );
+    }
+    anchor = "accumulator";
+  } else if (univocity !== undefined) {
     if (logId === undefined || rpcUrl === undefined) {
       throw new Error(
         "chain-anchored verify requires --univocity, --log-id and --rpc-url",
       );
     }
     anchor = "chain";
+  } else if (massif !== undefined) {
+    throw new Error("--massif only applies with --known-accumulator");
   }
-  return { anchor, univocity, logId, rpcUrl, knownLogKey };
+  return {
+    anchor,
+    univocity,
+    logId,
+    rpcUrl,
+    knownLogKey,
+    knownAccumulator,
+    massif,
+  };
 }
 
 /** `--genesis` is only optional when another trust anchor is supplied. */

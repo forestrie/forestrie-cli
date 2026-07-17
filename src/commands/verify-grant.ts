@@ -60,6 +60,18 @@ export default defineForestrieCommand({
         "JSON-RPC endpoint for the chain-anchored check (default: ${env} → RPC_URL)",
       valueHint: "url",
     },
+    "known-accumulator": {
+      type: "string",
+      description:
+        "Cached on-chain accumulator snapshot (CBOR from `forestrie fetch-accumulator`) — the chain-anchored check fully offline, no --rpc-url. Never source it unauthenticated from the log operator's tile store (that re-internalises operator trust). Older receipts extend to a newer snapshot via --massif; newer receipts fail closed",
+      valueHint: "path",
+    },
+    massif: {
+      type: "string",
+      description:
+        "Local massif blob — enables proof-path extension when the receipt predates the --known-accumulator snapshot",
+      valueHint: "path",
+    },
   },
   run: defineCommandRunner(parseVerifyGrantOptions, runVerifyGrant),
 });
