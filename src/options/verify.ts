@@ -22,6 +22,18 @@ import {
  *
  * Both add `--univocity --log-id --rpc-url` for the chain-anchored check (the
  * only networked path).
+ *
+ * Trust anchors (FOR-297 ladder; each rung needs strictly less trust):
+ * 1. `--known-log-key` — caller-known log OWNER key: offline, no genesis;
+ *    the key↔log binding is asserted by the key's provenance, not proven;
+ *    no lifecycle visibility, no split-view protection.
+ * 2. `--genesis` — genesis-derived roots (the grant-chain walk, approach A,
+ *    will derive per-log bindings from genesis + public tiles).
+ * 3. `--known-accumulator` — cached, auditable chain read: contract-enforced
+ *    state (signature + grant chain + split-view for covered entries),
+ *    fully offline; `--massif` extends older receipts to a newer snapshot.
+ * 4. `--rpc-url` — live chain read: rung 3 plus freshness (the RPC provider
+ *    is itself a trusted chain reader).
  */
 
 type AnchorFields = {
