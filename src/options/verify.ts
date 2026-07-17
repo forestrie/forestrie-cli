@@ -70,7 +70,10 @@ function parseAnchorFields(args: LooseParsedArgs): AnchorFields {
   const massif = optionalStringOption(args, "massif");
   let anchor: AnchorFields["anchor"] = "offline";
   if (knownAccumulator !== undefined) {
-    if (rpcUrl !== undefined || univocity !== undefined) {
+    // Conflict keys on --univocity (the live-read mode selector), NOT on
+    // rpcUrl: RPC_URL is commonly ambient in the environment and must not
+    // block the offline snapshot anchor.
+    if (univocity !== undefined) {
       throw new Error(
         "choose one chain anchor: a live read (--univocity/--log-id/--rpc-url) or a cached --known-accumulator",
       );
