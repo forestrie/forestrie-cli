@@ -232,7 +232,8 @@ export async function recomputeReceiptPeak(opts: {
  *   it directly — no signature, no trust key. Trust is the contract anchor.
  */
 export async function checkReceiptAnchored(opts: {
-  genesisCbor: Uint8Array;
+  /** Required unless `recomputedPeak` locates the peak without a trust key. */
+  genesisCbor: Uint8Array | undefined;
   receiptCbor: Uint8Array;
   univocity: string;
   logId: string;
@@ -258,6 +259,11 @@ export async function checkReceiptAnchored(opts: {
   }
 
   const { explicitPeak } = parseReceipt(opts.receiptCbor);
+  if (opts.genesisCbor === undefined) {
+    throw new Error(
+      "genesis is required to locate the receipt peak on-chain without a recomputed peak",
+    );
+  }
   const trustRoot = await decodeTrustRootFromGenesis(opts.genesisCbor);
   if (explicitPeak === null && !(trustRoot instanceof CryptoKey)) {
     // Detached receipts locate their peak via the ES256 signature; a

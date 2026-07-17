@@ -11,9 +11,15 @@ export default defineForestrieCommand({
   args: {
     genesis: {
       type: "string",
-      description: "Cached public genesis (genesis.cbor) — offline trust root",
+      description:
+        "Cached public genesis (genesis.cbor) — genesis-derived offline trust root (or supply --known-log-key instead)",
       valueHint: "path",
-      required: true,
+    },
+    "known-log-key": {
+      type: "string",
+      description:
+        "Caller-known log OWNER key (the delegation issuer), base64 x||y (64 bytes) (env KNOWN_LOG_KEY). Offline trust anchor that replaces --genesis; asserts (does not prove) the key-to-log binding — the genesis grant-chain walk derives it, and chain anchoring adds split-view protection",
+      valueHint: "base64",
     },
     receipt: {
       type: "string",

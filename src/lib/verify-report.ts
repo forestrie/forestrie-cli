@@ -87,6 +87,29 @@ export function anchorOnlyStageRows(): StageRow[] {
  * known stages read "skipped" (not evaluated by this CLI's knowledge) and
  * the unknown stage carries the failure.
  */
+/**
+ * Caller-known trust anchor (FOR-297 D1): the claim is verified under a key
+ * the CALLER supplied out of band, not one derived from genesis — the output
+ * must name that anchor so the two claims are never confusable. The known key
+ * asserts the key↔log binding (its provenance is the only defence), gives no
+ * grant-lifecycle visibility and no split-view protection.
+ */
+export const KNOWN_KEY_PARSE_REASON =
+  "receipt COSE decodes; caller-known log key loads (ES256)";
+export const KNOWN_KEY_SIGNATURE_REASON =
+  "verifies under caller-known log key (not genesis-derived)";
+
+/** Stage rows for a verify run anchored on `--known-log-key` (FOR-297 D1). */
+export function knownKeyStageRows(result: ReceiptVerifyResult): StageRow[] {
+  return stageRows(result).map((row) => {
+    if (row.status !== "ok") return row;
+    if (row.stage === "parse") return { ...row, reason: KNOWN_KEY_PARSE_REASON };
+    if (row.stage === "signature")
+      return { ...row, reason: KNOWN_KEY_SIGNATURE_REASON };
+    return row;
+  });
+}
+
 export function stageRows(result: ReceiptVerifyResult): StageRow[] {
   if (result.ok) {
     return VERIFY_STAGES.map((stage) => ({ stage, status: "ok" }));

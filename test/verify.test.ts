@@ -34,6 +34,7 @@ beforeAll(async () => {
   // Hermetic: the CLI reads these implicitly (see test/support.ts).
   delete process.env["GRANT_B64"];
   delete process.env["RPC_URL"];
+  delete process.env["KNOWN_LOG_KEY"];
   fx = await buildVerifyFixture();
   dir = mkdtempSync(path.join(tmpdir(), "forestrie-verify-"));
   writeFileSync(file("genesis.cbor"), fx.genesisCbor);
@@ -45,6 +46,10 @@ beforeAll(async () => {
   writeFileSync(file("receipt-garbage.cbor"), new Uint8Array([1, 2, 3]));
   writeFileSync(file("grant.cbor"), fx.grantPayloadCbor);
   writeFileSync(file("receipt-child.cbor"), fx.delegatedChildReceiptCbor);
+  writeFileSync(
+    file("receipt-child-bad-path.cbor"),
+    fx.tamperedPathChildReceiptCbor,
+  );
 });
 
 /** Throws if the offline path ever touches the network. */
@@ -585,5 +590,101 @@ describe("forestrie verify — anchor-only child-log fallback (FOR-297 approach 
     const report = JSON.parse(r.stdout) as VerifyErrorReport;
     expect(report.error).toBe("anchor_check_failed");
     expect(report.stage).toBe("anchor");
+  });
+});
+
+describe("forestrie verify-grant — caller-known log key (FOR-297 D1)", () => {
+  const knownKeyArgs = (overrides: LooseArgs = {}) =>
+    baseArgs({
+      genesis: undefined,
+      receipt: file("receipt-child.cbor"),
+      "known-log-key": fx.childOwnerKeyXyB64,
+      json: true,
+      ...overrides,
+    });
+
+  test("golden: child receipt verifies offline under the known owner key, no genesis", async () => {
+    const r = await verifyInProcess(knownKeyArgs());
+    expect(r.exitCode).toBe(0);
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(true);
+    expect(report.mode).toBe("offline");
+    const sig = report.stages.find((s: StageRow) => s.stage === "signature");
+    expect(sig?.status).toBe("ok");
+    expect(sig?.reason).toContain("caller-known log key");
+    const parse = report.stages.find((s: StageRow) => s.stage === "parse");
+    expect(parse?.reason).toContain("caller-known log key");
+  });
+
+  test("human narration names the anchor: not genesis-derived", async () => {
+    const r = await verifyInProcess(knownKeyArgs({ json: undefined }));
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toContain("caller-known log key (not genesis-derived)");
+    expect(r.stdout).toContain(
+      "PASS: receipt verified offline under the caller-known log key (not genesis-derived)",
+    );
+  });
+
+  test("wrong known key → known_key_mismatch (distinct from delegation_invalid)", async () => {
+    const rootRaw = new Uint8Array(
+      (await crypto.subtle.exportKey(
+        "raw",
+        fx.rootKeyPair.publicKey,
+      )) as ArrayBuffer,
+    );
+    const wrongKeyB64 = Buffer.from(rootRaw.slice(1)).toString("base64");
+    const r = await verifyInProcess(
+      knownKeyArgs({ "known-log-key": wrongKeyB64 }),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(false);
+    expect(report.stage).toBe("signature");
+    expect(report.reason).toBe("known_key_mismatch");
+  });
+
+  test("correct known key + tampered proof path → inclusion fails", async () => {
+    const r = await verifyInProcess(
+      knownKeyArgs({ receipt: file("receipt-child-bad-path.cbor") }),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(false);
+    expect(report.stage).toBe("inclusion");
+  });
+
+  test("known key also verifies the ROOT-log receipt (cert chained to the owner)", async () => {
+    // The root receipt has no delegation cert; the known key is then the
+    // direct signer key — standard SCITT RP posture on a root log.
+    const rootRaw = new Uint8Array(
+      (await crypto.subtle.exportKey(
+        "raw",
+        fx.rootKeyPair.publicKey,
+      )) as ArrayBuffer,
+    );
+    const rootKeyB64 = Buffer.from(rootRaw.slice(1)).toString("base64");
+    const r = await verifyInProcess(
+      knownKeyArgs({
+        receipt: file("receipt.cbor"),
+        "known-log-key": rootKeyB64,
+      }),
+    );
+    expect(r.exitCode).toBe(0);
+  });
+
+  test("neither --genesis nor --known-log-key is a usage error", () => {
+    expect(() =>
+      parseVerifyGrantOptions(
+        baseArgs({ genesis: undefined }) as LooseArgs,
+      ),
+    ).toThrow(/trust anchor/);
+  });
+
+  test("malformed --known-log-key (not 64 bytes) is a structured error", async () => {
+    const r = await verifyInProcess(knownKeyArgs({ "known-log-key": "AAAA" }));
+    expect(r.exitCode).toBe(1);
+    const report = JSON.parse(r.stdout) as VerifyErrorReport;
+    expect(report.error).toBe("verify_failed");
+    expect(report.message).toContain("64 bytes");
   });
 });

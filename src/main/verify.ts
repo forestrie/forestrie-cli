@@ -1,8 +1,11 @@
 import type { Out } from "@forestrie/cli-kit/reporting";
 import {
   grantCommitmentHashFromGrant,
+  importEs256PublicKeyFromGrantDataXy64,
   verifyGrantReceiptOffline,
+  verifyGrantReceiptOfflineWithKeys,
   verifyReceiptOffline,
+  verifyReceiptOfflineWithKeys,
   type ReceiptVerifyResult,
 } from "@forestrie/receipt-verify";
 import type { VerifyGrantOptions, VerifyOptions } from "../options/verify.js";
@@ -18,6 +21,7 @@ import {
 import {
   anchorOnlyStageRows,
   buildVerifyReport,
+  knownKeyStageRows,
   STAGE_NARRATION,
   stageRows,
 } from "../lib/verify-report.js";
@@ -49,7 +53,39 @@ type VerifyReportContext = {
   univocity: string | undefined;
   logId: string | undefined;
   rpcUrl: string | undefined;
+  /** Set when `--known-log-key` supplied the trust anchor (FOR-297 D1). */
+  knownLogKey?: string | undefined;
 };
+
+/**
+ * Import the caller-known log OWNER key (`--known-log-key`, base64 x||y).
+ * The value is the delegation-cert issuer's key, NOT the sealer key — the
+ * label-1000 cert still resolves under it, so the anchor survives sealer
+ * rotation and the cert-validation path is exercised (FOR-297 D1).
+ */
+async function importKnownLogKey(knownLogKey: string): Promise<CryptoKey> {
+  const bytes = new Uint8Array(Buffer.from(knownLogKey, "base64"));
+  if (bytes.length !== 64) {
+    throw new Error(
+      `--known-log-key must be base64 x||y (64 bytes), decoded ${bytes.length}`,
+    );
+  }
+  return importEs256PublicKeyFromGrantDataXy64(bytes);
+}
+
+/**
+ * Under a caller-known key, a broken delegation chain means the cert did not
+ * verify under the CALLER's key — a different trust failure than a
+ * genesis-rooted `delegation_invalid` (wrong known key, or a forged cert).
+ * Rename it so the operator reaches for "check the key you were given",
+ * not "check the log's delegation".
+ */
+function remapKnownKeyFailure(result: ReceiptVerifyResult): ReceiptVerifyResult {
+  if (!result.ok && result.reason === "delegation_invalid") {
+    return { ...result, reason: "known_key_mismatch" };
+  }
+  return result;
+}
 
 /** Structured envelope under `--json`; one clean line on stderr otherwise. */
 function reportRunError(
@@ -96,7 +132,7 @@ type AnchorLeaf = {
 async function tryAnchorOnlyVerify(
   out: Out,
   ctx: VerifyReportContext,
-  artifacts: { genesisCbor: Uint8Array; receiptCbor: Uint8Array },
+  artifacts: { genesisCbor: Uint8Array | undefined; receiptCbor: Uint8Array },
   result: ReceiptVerifyResult,
   anchorLeaf: AnchorLeaf,
 ): Promise<boolean> {
@@ -172,7 +208,7 @@ async function tryAnchorOnlyVerify(
 async function finishVerify(
   out: Out,
   ctx: VerifyReportContext,
-  artifacts: { genesisCbor: Uint8Array; receiptCbor: Uint8Array },
+  artifacts: { genesisCbor: Uint8Array | undefined; receiptCbor: Uint8Array },
   result: ReceiptVerifyResult,
   anchorLeaf?: AnchorLeaf,
 ): Promise<void> {
@@ -199,12 +235,25 @@ async function finishVerify(
   let anchor: AnchorCheck | undefined;
   if (ctx.anchor === "chain" && result.ok) {
     try {
+      // Under a caller-known key there may be no genesis to locate a detached
+      // peak by trust-key trial — recompute the peak from leaf + proof
+      // instead (same strategy as the anchor-only path).
+      let recomputedPeak: Uint8Array | undefined;
+      if (ctx.knownLogKey !== undefined && anchorLeaf !== undefined) {
+        const recomputed = await recomputeReceiptPeak({
+          receiptCbor: artifacts.receiptCbor,
+          idtimestampBe8: anchorLeaf.idtimestampBe8,
+          inner: await anchorLeaf.inner(),
+        });
+        if (recomputed.inclusionOk) recomputedPeak = recomputed.peak;
+      }
       anchor = await checkReceiptAnchored({
         genesisCbor: artifacts.genesisCbor,
         receiptCbor: artifacts.receiptCbor,
         univocity: ctx.univocity!,
         logId: ctx.logId!,
         rpcUrl: ctx.rpcUrl!,
+        ...(recomputedPeak !== undefined ? { recomputedPeak } : {}),
       });
     } catch (err) {
       reportRunError(out, ctx, "anchor", err);
@@ -213,6 +262,8 @@ async function finishVerify(
   }
 
   const ok = result.ok && (ctx.anchor !== "chain" || anchor?.anchored === true);
+  const rows =
+    ctx.knownLogKey !== undefined ? knownKeyStageRows(result) : stageRows(result);
 
   if (ctx.json) {
     const report = buildVerifyReport({
@@ -222,16 +273,17 @@ async function finishVerify(
       anchor,
       univocity: ctx.univocity,
       logId: ctx.logId,
+      ...(ctx.knownLogKey !== undefined ? { stagesOverride: rows } : {}),
     });
     out.out(JSON.stringify(report, null, 2));
   } else {
-    for (const row of stageRows(result)) {
+    for (const row of rows) {
       const detail =
         row.status === "failed"
           ? (row.reason ?? "unknown")
           : row.status === "skipped"
-            ? "not evaluated"
-            : STAGE_NARRATION[row.stage];
+            ? (row.reason ?? "not evaluated")
+            : (row.reason ?? STAGE_NARRATION[row.stage]);
       out.print(
         "verify: %s %s — %s",
         row.stage.padEnd(9),
@@ -257,11 +309,17 @@ async function finishVerify(
       }
     }
     if (ok) {
-      out.out(
-        anchor !== undefined
-          ? `PASS: receipt verified offline and anchored on-chain (anchored size ${anchor.size})`
-          : "PASS: receipt verified offline against the cached checkpoint",
-      );
+      if (anchor !== undefined) {
+        out.out(
+          `PASS: receipt verified offline and anchored on-chain (anchored size ${anchor.size})`,
+        );
+      } else if (ctx.knownLogKey !== undefined) {
+        out.out(
+          "PASS: receipt verified offline under the caller-known log key (not genesis-derived)",
+        );
+      } else {
+        out.out("PASS: receipt verified offline against the cached checkpoint");
+      }
     } else if (!result.ok) {
       out.out(
         `FAIL: stage=${result.stage} reason=${result.reason ?? "unknown"}`,
@@ -295,7 +353,24 @@ export async function runVerify(
 
   let result: ReceiptVerifyResult;
   try {
-    result = await verifyReceiptOffline(artifacts);
+    if (options.knownLogKey !== undefined) {
+      // FOR-297 D1: caller-known log owner key replaces the genesis roots.
+      const knownKey = await importKnownLogKey(options.knownLogKey);
+      result = remapKnownKeyFailure(
+        await verifyReceiptOfflineWithKeys({
+          receiptCbor: artifacts.receiptCbor,
+          payload: artifacts.payload,
+          idtimestampBe8: artifacts.idtimestampBe8,
+          trustKeys: [knownKey],
+        }),
+      );
+    } else {
+      // Parsing guarantees --genesis when --known-log-key is absent.
+      result = await verifyReceiptOffline({
+        ...artifacts,
+        genesisCbor: artifacts.genesisCbor!,
+      });
+    }
   } catch (err) {
     reportRunError(out, options, "verify", err);
     return;
@@ -332,7 +407,24 @@ export async function runVerifyGrant(
 
   let result: ReceiptVerifyResult;
   try {
-    result = await verifyGrantReceiptOffline(artifacts);
+    if (options.knownLogKey !== undefined) {
+      // FOR-297 D1: caller-known log owner key replaces the genesis roots.
+      const knownKey = await importKnownLogKey(options.knownLogKey);
+      result = remapKnownKeyFailure(
+        await verifyGrantReceiptOfflineWithKeys({
+          receiptCbor: artifacts.receiptCbor,
+          grant: artifacts.grant,
+          idtimestampBe8: artifacts.idtimestampBe8,
+          trustKeys: [knownKey],
+        }),
+      );
+    } else {
+      // Parsing guarantees --genesis when --known-log-key is absent.
+      result = await verifyGrantReceiptOffline({
+        ...artifacts,
+        genesisCbor: artifacts.genesisCbor!,
+      });
+    }
   } catch (err) {
     reportRunError(out, options, "verify", err);
     return;

@@ -311,6 +311,10 @@ export type VerifyFixture = {
    * verify fails `delegation_invalid`; chain-anchored may still pass.
    */
   delegatedChildReceiptCbor: Uint8Array;
+  /** Child-shaped receipt (attached peak) whose proof path is tampered —
+   * under a correct `--known-log-key` the cert and signature resolve but
+   * inclusion must fail (FOR-297 D1 negative). */
+  tamperedPathChildReceiptCbor: Uint8Array;
   grant: Grant;
   grantPayloadCbor: Uint8Array;
   grantCoseCbor: Uint8Array;
@@ -319,6 +323,10 @@ export type VerifyFixture = {
   entryIdHex: string;
   peak: Uint8Array;
   rootKeyPair: CryptoKeyPair;
+  /** The child log OWNER's public key (x||y, base64) — the delegation-cert
+   * issuer for `delegatedChildReceiptCbor`; the value a caller passes as
+   * `--known-log-key` (FOR-297 D1). */
+  childOwnerKeyXyB64: string;
 };
 
 /** Forest genesis CBOR with `bootstrapKey` (ES256 x||y) as the trust root. */
@@ -409,6 +417,26 @@ export async function buildVerifyFixture(): Promise<VerifyFixture> {
       childSealerKeyPair.publicKey,
     ),
   });
+  const tamperedPathChildReceiptCbor = await buildPeakReceipt({
+    signer: childSealerKeyPair,
+    peak,
+    proof,
+    attachPeak: true,
+    proofPathOverride: badPath,
+    delegationCert: await buildDelegationCert(
+      childOwnerKeyPair,
+      childSealerKeyPair.publicKey,
+    ),
+  });
+  const childOwnerRaw = new Uint8Array(
+    (await crypto.subtle.exportKey(
+      "raw",
+      childOwnerKeyPair.publicKey,
+    )) as ArrayBuffer,
+  );
+  const childOwnerKeyXyB64 = Buffer.from(childOwnerRaw.slice(1)).toString(
+    "base64",
+  );
 
   const genesisCbor = buildGenesisCbor(bootstrapKey);
   const ks256GenesisCbor = cborBytes(
@@ -432,6 +460,7 @@ export async function buildVerifyFixture(): Promise<VerifyFixture> {
     attachedPeakReceiptCbor,
     tamperedPathReceiptCbor,
     delegatedChildReceiptCbor,
+    tamperedPathChildReceiptCbor,
     grant,
     grantPayloadCbor,
     grantCoseCbor,
@@ -440,6 +469,7 @@ export async function buildVerifyFixture(): Promise<VerifyFixture> {
     entryIdHex,
     peak,
     rootKeyPair,
+    childOwnerKeyXyB64,
   };
 }
 
