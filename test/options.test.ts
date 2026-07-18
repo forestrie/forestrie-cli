@@ -18,7 +18,7 @@ const SAVED = [
   "DEPLOYER_KEY",
   "OWNER_ADDRESS",
   "DELEGATION_COORDINATOR_URL",
-  "PINNED_REGISTRAR_KEY",
+  "KNOWN_SEALER_KEY",
 ].map((name) => [name, process.env[name]] as const);
 
 afterEach(() => {
@@ -210,7 +210,7 @@ describe("parseDelegateOptions", () => {
     "coordinator-url": "https://coord",
     "log-id": "L",
     "sign-with": "root.pem",
-    "pinned-registrar-key": "AAAA",
+    "known-sealer-key": "AAAA",
   };
 
   test("horizon-mmr-end defaults to Number.MAX_SAFE_INTEGER; mmr start is fixed 0", () => {
@@ -229,15 +229,15 @@ describe("parseDelegateOptions", () => {
     expect(options.ttlSeconds).toBe(120);
   });
 
-  test("coordinator-url and pinned-registrar-key fall back to env", () => {
+  test("coordinator-url and known-sealer-key fall back to env", () => {
     process.env["DELEGATION_COORDINATOR_URL"] = "https://env-coord";
-    process.env["PINNED_REGISTRAR_KEY"] = "ZW52";
+    process.env["KNOWN_SEALER_KEY"] = "ZW52";
     const options = parseDelegateOptions({
       "log-id": "L",
       "sign-with": "root.pem",
     });
     expect(options.coordinatorUrl).toBe("https://env-coord");
-    expect(options.pinnedRegistrarKey).toBe("ZW52");
+    expect(options.knownSealerKey).toBe("ZW52");
   });
 });
 

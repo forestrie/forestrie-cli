@@ -9,18 +9,28 @@ import {
 
 /** `verify` (generic): the exact registered payload + its SCRAPI entry id. */
 export type PayloadVerifyInputOptions = {
-  genesis: string;
+  /** Optional when the trust anchor is a caller-known key (FOR-297 D1). */
+  genesis: string | undefined;
   receipt: string;
   payload: string;
   entryId: string;
 };
 
+/** Genesis-optional artifact shape (`--known-log-key` runs without genesis). */
+export type LoadedPayloadVerifyArtifacts = Omit<
+  VerifyReceiptOfflineInput,
+  "genesisCbor"
+> & { genesisCbor: Uint8Array | undefined };
+
 /** Load genesis/receipt/payload for the generic (SCITT-compatible) verify. */
 export function loadPayloadVerifyArtifacts(
   options: PayloadVerifyInputOptions,
-): VerifyReceiptOfflineInput {
+): LoadedPayloadVerifyArtifacts {
   return {
-    genesisCbor: readBytes(options.genesis, "--genesis"),
+    genesisCbor:
+      options.genesis !== undefined
+        ? readBytes(options.genesis, "--genesis")
+        : undefined,
     receiptCbor: readBytes(options.receipt, "--receipt"),
     payload: readBytes(options.payload, "--payload"),
     idtimestampBe8: entryIdHexToIdtimestampBe8(options.entryId),
@@ -40,12 +50,19 @@ export function loadPayloadVerifyArtifacts(
  *   payload); the idtimestamp comes from the permanent SCRAPI entry id.
  */
 export type VerifyInputOptions = {
-  genesis: string;
+  /** Optional when the trust anchor is a caller-known key (FOR-297 D1). */
+  genesis: string | undefined;
   receipt: string;
   committedGrant: string | undefined;
   committedGrantFile: string | undefined;
   entryId: string | undefined;
 };
+
+/** Genesis-optional artifact shape (`--known-log-key` runs without genesis). */
+export type LoadedVerifyArtifacts = Omit<
+  VerifyGrantReceiptOfflineInput,
+  "genesisCbor"
+> & { genesisCbor: Uint8Array | undefined };
 
 function readBytes(path: string, flag: string): Uint8Array {
   try {
@@ -96,8 +113,11 @@ function decodeGrantBytes(
 /** Read genesis/receipt/grant artefacts from disk into verify input bytes. */
 export function loadVerifyArtifacts(
   options: VerifyInputOptions,
-): VerifyGrantReceiptOfflineInput {
-  const genesisCbor = readBytes(options.genesis, "--genesis");
+): LoadedVerifyArtifacts {
+  const genesisCbor =
+    options.genesis !== undefined
+      ? readBytes(options.genesis, "--genesis")
+      : undefined;
   const receiptCbor = readBytes(options.receipt, "--receipt");
 
   let grantBytes: Uint8Array;

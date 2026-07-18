@@ -162,7 +162,7 @@ export const SUBCOMMANDS: Record<
       "00000000-0000-0000-0000-000000000000",
       "--sign-with",
       "root.es256.pem",
-      "--pinned-registrar-key",
+      "--known-sealer-key",
       "AAAA",
     ],
     implemented: true,

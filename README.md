@@ -15,6 +15,7 @@ against a forestrie log:
 | `create-receipt` | Self-serve COSE receipt from log data + checkpoint (or chain-anchored) |
 | `decode-receipt` | Decode a COSE receipt — it is just COSE: Sign1 + MMR inclusion |
 | `verify` | Verify a receipt offline — the same closer for every other subcommand |
+| `fetch-accumulator` | Cache the on-chain accumulator as a `--known-accumulator` snapshot |
 
 **Status:** subcommands not yet implemented declare their real argument
 surface and parse it, then exit non-zero with a structured `not_implemented`
@@ -227,6 +228,48 @@ PASS: receipt verified offline against the cached checkpoint
 Add `--univocity <address> --log-id <id> --rpc-url $RPC_URL` to check the
 receipt's peak against the on-chain accumulator instead of the checkpoint
 signature — no operator trust required.
+
+#### Trust anchors (FOR-297)
+
+`verify` supports four explicitly-named trust anchors; each rung of the
+ladder needs strictly less trust than the one before it:
+
+1. **`--known-log-key`** — a caller-known log OWNER key (base64 `x||y`,
+   env `KNOWN_LOG_KEY`), obtained out of band: the standard SCITT
+   relying-party posture and the SSH known-hosts model. Fully offline, no
+   genesis; but the "key K owns log L" binding is *asserted* by the key's
+   provenance, not proven, and there is no grant-lifecycle visibility and
+   no split-view protection.
+2. **`--genesis`** — genesis-derived roots; the planned grant-chain walk
+   (approach A) will *derive* per-log bindings from `genesis.cbor` +
+   public tiles, adding lifecycle visibility with no key distribution.
+3. **`--known-accumulator`** — a cached, auditable chain read of the log's
+   on-chain `logState` (produced by `forestrie fetch-accumulator`):
+   contract-enforced state — signature, grant chain AND split-view for
+   covered entries — fully offline. Older receipts extend to a newer
+   snapshot via `--massif` proof-path extension; newer receipts fail
+   closed. Never source the snapshot unauthenticated from the log
+   operator's tile store — that re-internalises the operator trust this
+   anchor removes.
+4. **`--rpc-url`** (live chain read) — same as 3 plus freshness; the RPC
+   provider is itself a trusted chain reader, a trust the snapshot merely
+   makes explicit and portable.
+
+The receipt never expires, and the anchor never needs to be current —
+only trusted.
+
+### `fetch-accumulator`
+
+```bash
+forestrie fetch-accumulator \
+  --univocity "$UNIVOCITY" --log-id "$LOG_ID" --rpc-url "$RPC_URL" \
+  --out accumulator.cbor
+```
+
+Reads `logState(logId)` pinned to a block and writes the
+`--known-accumulator` snapshot: canonical CBOR binding
+`(chainId, univocity, logId, size, blockNumber, blockHash)` — anyone with
+RPC can re-run the read at that block and confirm or disprove it.
 
 ## Built on (published packages)
 

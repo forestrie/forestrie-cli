@@ -11,9 +11,15 @@ export default defineForestrieCommand({
   args: {
     genesis: {
       type: "string",
-      description: "Cached public genesis (genesis.cbor) — offline trust root",
+      description:
+        "Cached public genesis (genesis.cbor) — genesis-derived offline trust root (or supply --known-log-key instead)",
       valueHint: "path",
-      required: true,
+    },
+    "known-log-key": {
+      type: "string",
+      description:
+        "Caller-known log OWNER key (the delegation issuer), base64 x||y (64 bytes) (env KNOWN_LOG_KEY). Offline trust anchor that replaces --genesis; asserts (does not prove) the key-to-log binding — the genesis grant-chain walk derives it, and chain anchoring adds split-view protection",
+      valueHint: "base64",
     },
     receipt: {
       type: "string",
@@ -53,6 +59,18 @@ export default defineForestrieCommand({
       description:
         "JSON-RPC endpoint for the chain-anchored check (default: ${env} → RPC_URL)",
       valueHint: "url",
+    },
+    "known-accumulator": {
+      type: "string",
+      description:
+        "Cached on-chain accumulator snapshot (CBOR from `forestrie fetch-accumulator`) — the chain-anchored check fully offline, no --rpc-url. Never source it unauthenticated from the log operator's tile store (that re-internalises operator trust). Older receipts extend to a newer snapshot via --massif; newer receipts fail closed",
+      valueHint: "path",
+    },
+    massif: {
+      type: "string",
+      description:
+        "Local massif blob — enables proof-path extension when the receipt predates the --known-accumulator snapshot",
+      valueHint: "path",
     },
   },
   run: defineCommandRunner(parseVerifyGrantOptions, runVerifyGrant),

@@ -22,6 +22,7 @@ import {
   createSyncHasher,
   type Proof,
 } from "@forestrie/merklelog";
+import { buildV2MassifBytes } from "./create-receipt-fixture.js";
 
 /** Forest genesis wire labels (stable; see receipt-verify forest-genesis-labels). */
 const LABEL_GENESIS_VERSION = -68009;
@@ -205,6 +206,8 @@ export async function buildPeakReceipt(opts: {
   proof: Proof;
   attachPeak?: boolean;
   proofPathOverride?: Uint8Array[];
+  /** Label-1000 delegation certificate bytes (FOR-297). */
+  delegationCert?: Uint8Array;
 }): Promise<Uint8Array> {
   const protectedInner = cborBytes(new Map<number, unknown>([[1, -7]]));
   const sig = await signPeak(opts.signer, protectedInner, opts.peak);
@@ -213,11 +216,55 @@ export async function buildPeakReceipt(opts: {
     [1, mmrIndex],
     [2, opts.proofPathOverride ?? opts.proof.path],
   ]);
-  const unprot = new Map<number, unknown>([
+  const unprotEntries: [number, unknown][] = [
     [VDS_COSE_RECEIPT_PROOFS_TAG, new Map<number, unknown>([[-1, [inclusionProofEntry]]])],
-  ]);
+  ];
+  if (opts.delegationCert !== undefined) {
+    unprotEntries.push([1000, opts.delegationCert]);
+  }
+  const unprot = new Map<number, unknown>(unprotEntries);
   const payload = opts.attachPeak ? opts.peak : null;
   return cborBytes([protectedInner, unprot, payload, sig]);
+}
+
+/**
+ * Delegation certificate: COSE Sign1 (attached payload) whose payload carries
+ * the delegated sealer's COSE key at label 5, signed by `certSigner`. Signed
+ * by the ROOT key it models a root-log delegation; signed by any other key it
+ * models a CHILD log's per-log delegation, which does NOT chain to the
+ * genesis root offline (FOR-297) → `delegation_invalid`.
+ */
+export async function buildDelegationCert(
+  certSigner: CryptoKeyPair,
+  delegatedPublic: CryptoKey,
+): Promise<Uint8Array> {
+  const raw = new Uint8Array(
+    (await crypto.subtle.exportKey("raw", delegatedPublic)) as ArrayBuffer,
+  );
+  const coseKey = new Map<number, unknown>([
+    [1, 2], // kty EC2
+    [-1, 1], // crv P-256
+    [-2, raw.slice(1, 33)], // x
+    [-3, raw.slice(33, 65)], // y
+  ]);
+  const payload = cborBytes(new Map<number, unknown>([[5, coseKey]]));
+  const protectedInner = cborBytes(new Map<number, unknown>([[1, -7]]));
+  const sigStructure = encodeSigStructure(
+    protectedInner,
+    new Uint8Array(0),
+    payload,
+  );
+  const sig = new Uint8Array(
+    await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      certSigner.privateKey,
+      sigStructure.buffer.slice(
+        sigStructure.byteOffset,
+        sigStructure.byteOffset + sigStructure.byteLength,
+      ) as ArrayBuffer,
+    ),
+  );
+  return cborBytes([protectedInner, new Map(), payload, sig]);
 }
 
 export function grantWithData(logId: string, grantData: Uint8Array): Grant {
@@ -259,6 +306,16 @@ export type VerifyFixture = {
   receiptCbor: Uint8Array;
   attachedPeakReceiptCbor: Uint8Array;
   tamperedPathReceiptCbor: Uint8Array;
+  /**
+   * Child-log shaped receipt (FOR-297): sealed by a delegated key whose
+   * label-1000 cert is signed by a NON-root "child owner" key — offline
+   * verify fails `delegation_invalid`; chain-anchored may still pass.
+   */
+  delegatedChildReceiptCbor: Uint8Array;
+  /** Child-shaped receipt (attached peak) whose proof path is tampered —
+   * under a correct `--known-log-key` the cert and signature resolve but
+   * inclusion must fail (FOR-297 D1 negative). */
+  tamperedPathChildReceiptCbor: Uint8Array;
   grant: Grant;
   grantPayloadCbor: Uint8Array;
   grantCoseCbor: Uint8Array;
@@ -267,6 +324,15 @@ export type VerifyFixture = {
   entryIdHex: string;
   peak: Uint8Array;
   rootKeyPair: CryptoKeyPair;
+  /** Root peak of the grown 7-node (4-leaf) MMR — the "later state" a stale
+   * receipt extends into via massif nodes (FOR-297 D5). */
+  peak7: Uint8Array;
+  /** v2 massif blob holding all 7 nodes of the grown MMR. */
+  massif7Bytes: Uint8Array;
+  /** The child log OWNER's public key (x||y, base64) — the delegation-cert
+   * issuer for `delegatedChildReceiptCbor`; the value a caller passes as
+   * `--known-log-key` (FOR-297 D1). */
+  childOwnerKeyXyB64: string;
 };
 
 /** Forest genesis CBOR with `bootstrapKey` (ES256 x||y) as the trust root. */
@@ -344,6 +410,66 @@ export async function buildVerifyFixture(): Promise<VerifyFixture> {
     proofPathOverride: badPath,
   });
 
+  // Child-log shape: the seal is by a delegated sealer key, and the cert is
+  // signed by the CHILD owner (not the genesis root) — never root-resolvable.
+  const childOwnerKeyPair = await generateP256KeyPair();
+  const childSealerKeyPair = await generateP256KeyPair();
+  const delegatedChildReceiptCbor = await buildPeakReceipt({
+    signer: childSealerKeyPair,
+    peak,
+    proof,
+    delegationCert: await buildDelegationCert(
+      childOwnerKeyPair,
+      childSealerKeyPair.publicKey,
+    ),
+  });
+  const tamperedPathChildReceiptCbor = await buildPeakReceipt({
+    signer: childSealerKeyPair,
+    peak,
+    proof,
+    attachPeak: true,
+    proofPathOverride: badPath,
+    delegationCert: await buildDelegationCert(
+      childOwnerKeyPair,
+      childSealerKeyPair.publicKey,
+    ),
+  });
+  const childOwnerRaw = new Uint8Array(
+    (await crypto.subtle.exportKey(
+      "raw",
+      childOwnerKeyPair.publicKey,
+    )) as ArrayBuffer,
+  );
+  const childOwnerKeyXyB64 = Buffer.from(childOwnerRaw.slice(1)).toString(
+    "base64",
+  );
+
+  // Grown MMR (FOR-297 D5): two more leaves take the log to 7 nodes / one
+  // root peak. The original 2-leaf peak (node 2) becomes an INTERIOR node —
+  // a receipt derived at the old size must extend through massif nodes to
+  // the new covering peak (old-accumulator compatibility).
+  const inner3 = await sha256(new Uint8Array([0xd3]));
+  const inner4 = await sha256(new Uint8Array([0xd4]));
+  const leaf3Hash = await univocityLeafHash(new Uint8Array(8).fill(0x03), inner3);
+  const leaf4Hash = await univocityLeafHash(new Uint8Array(8).fill(0x04), inner4);
+  const node5 = await calculateRoot(
+    hasher,
+    leaf3Hash,
+    { path: [leaf4Hash], mmrIndex: 3n },
+    3n,
+  );
+  const peak7 = await calculateRoot(
+    hasher,
+    leaf1Hash,
+    { path: [leaf0Hash, node5], mmrIndex: 1n },
+    1n,
+  );
+  const massif7Bytes = buildV2MassifBytes({
+    massifHeight: 3,
+    massifIndex: 0,
+    logHashes: [leaf0Hash, leaf1Hash, peak, leaf3Hash, leaf4Hash, node5, peak7],
+  });
+
   const genesisCbor = buildGenesisCbor(bootstrapKey);
   const ks256GenesisCbor = cborBytes(
     new Map<number, unknown>([
@@ -365,6 +491,8 @@ export async function buildVerifyFixture(): Promise<VerifyFixture> {
     receiptCbor,
     attachedPeakReceiptCbor,
     tamperedPathReceiptCbor,
+    delegatedChildReceiptCbor,
+    tamperedPathChildReceiptCbor,
     grant,
     grantPayloadCbor,
     grantCoseCbor,
@@ -373,6 +501,9 @@ export async function buildVerifyFixture(): Promise<VerifyFixture> {
     entryIdHex,
     peak,
     rootKeyPair,
+    peak7,
+    massif7Bytes,
+    childOwnerKeyXyB64,
   };
 }
 

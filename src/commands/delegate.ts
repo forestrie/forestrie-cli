@@ -27,10 +27,10 @@ export default defineForestrieCommand({
       valueHint: "path",
       required: true,
     },
-    "pinned-registrar-key": {
+    "known-sealer-key": {
       type: "string",
       description:
-        "Pinned registrar key, base64 x||y (64 bytes) (env PINNED_REGISTRAR_KEY)",
+        "The known key that vouches for the operator's sealer (the registrar's voucher-signing key), base64 x||y (64 bytes) (env KNOWN_SEALER_KEY)",
       valueHint: "base64",
     },
     "horizon-mmr-end": {
