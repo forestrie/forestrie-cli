@@ -71,6 +71,10 @@ jobs:
             dist/forestrie-linux-x64
             dist/forestrie-linux-x64.sha256
           if-no-files-found: error
+          # Build→publish handoff only; the permanent copies are the GitHub
+          # release assets. Short retention avoids feeding the Actions artifact
+          # storage quota (FOR-398).
+          retention-days: 1
 
   build-darwin:
     name: Build darwin-arm64 binary
@@ -122,6 +126,10 @@ jobs:
             dist/forestrie-darwin-arm64
             dist/forestrie-darwin-arm64.sha256
           if-no-files-found: error
+          # Build→publish handoff only; the permanent copies are the GitHub
+          # release assets. Short retention avoids feeding the Actions artifact
+          # storage quota (FOR-398).
+          retention-days: 1
 
   publish:
     name: Publish GitHub release
