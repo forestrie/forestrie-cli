@@ -12,7 +12,7 @@
         "@forestrie/encoding": "^0.3.0",
         "@forestrie/grant-builder": "^0.1.2",
         "@forestrie/merklelog": "^0.1.1",
-        "@forestrie/receipt-verify": "^0.6.1",
+        "@forestrie/receipt-verify": "^0.6.2",
         "@forestrie/scrapi-client": "^0.1.2",
         "citty": "^0.2.2",
         "viem": "^2.31.0",
@@ -40,7 +40,7 @@
 
     "@forestrie/merklelog": ["@forestrie/merklelog@0.1.1", "", {}, "sha512-xrHyZffnuddV5XA+rsiSMExcUKIrn9u/6UZTTuNFKxFRORvODWxJZgVZJICW1EUKZnUCO7C8EwQKijYgkzqPqw=="],
 
-    "@forestrie/receipt-verify": ["@forestrie/receipt-verify@0.6.1", "", { "dependencies": { "@forestrie/encoding": "0.3.0", "@forestrie/merklelog": "0.1.1", "@noble/hashes": "^1.7.1" } }, "sha512-Lx4k6YNEnpvsUyOyEvqVi2iabTZCSvcqiTels541hzfuFqmopOCvcnEfDUE1m2ivKYDO4Au6u/rPYP4/PGO+IA=="],
+    "@forestrie/receipt-verify": ["@forestrie/receipt-verify@0.6.2", "", { "dependencies": { "@forestrie/encoding": "0.3.0", "@forestrie/merklelog": "0.1.1", "@noble/hashes": "^1.7.1" } }, "sha512-FQBe14dtnNZvPAfTb/QiqYU9MKB8heaJJJIX6Lb1YutR4Z49H/O8poY3uixh9dr2qJ385/WbUVBYkS0Sj03mYw=="],
 
     "@forestrie/scrapi-client": ["@forestrie/scrapi-client@0.1.2", "", { "dependencies": { "@forestrie/encoding": "0.3.0" } }, "sha512-c63NOQ/76r74GX4iJnFdkZ08mOxTWE55ZavRZAJNOZuFqbeadKwGFZuqvJjBQMN4a3XnGFrmLn7cE3BxVjcEyg=="],
 
