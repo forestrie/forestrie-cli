@@ -10,6 +10,7 @@ import {
   type ReceiptVerifyResult,
 } from "@forestrie/receipt-verify";
 import type { VerifyGrantOptions, VerifyOptions } from "../options/verify.js";
+import { findPeakInPublishedHistory } from "../lib/verify-eventscan.js";
 import {
   checkReceiptAnchored,
   recomputeReceiptPeak,
@@ -66,6 +67,8 @@ type VerifyReportContext = {
   knownAccumulator?: string | undefined;
   /** Local massif blob for stale-snapshot proof-path extension. */
   massif?: string | undefined;
+  /** Lower bound for the CheckpointPublished history scan (FOR-368). */
+  fromBlock?: bigint | undefined;
 };
 
 /**
@@ -105,10 +108,13 @@ function printAnchorRow(
 ): void {
   const isSnapshot = ctx.anchor === "accumulator";
   if (anchor.anchored) {
+    const historical = (anchor as Partial<HistoricalAnchorFields>).historical === true;
     const where = isSnapshot
       ? `known accumulator peak %d/%d (read from chain at block ${anchor.blockNumber}, anchored size %s)` +
         (anchor.extended === true ? " via proof-path extension" : "")
-      : "on-chain accumulator peak %d/%d at anchored size %s";
+      : historical
+        ? `HISTORICAL anchored accumulator peak %d/%d (size %s, block ${(anchor as unknown as HistoricalAnchorFields).anchoredAtBlock}) — consistency-gated forward by the contract (FOR-368)`
+        : "on-chain accumulator peak %d/%d at anchored size %s";
     out.print(
       `verify: anchor    ok      — receipt peak matches ${where}`,
       anchor.matchedPeak! + 1,
@@ -255,6 +261,25 @@ async function tryAnchorOnlyVerify(
     reportRunError(out, ctx, "anchor", err);
     return true;
   }
+  if (
+    !anchor.anchored &&
+    ctx.anchor === "chain" &&
+    anchor.reason === "peak_not_current"
+  ) {
+    // FOR-368 Phase 2: buried peak — consult the anchored history. A scan
+    // failure degrades to the classified Phase 0 failure (never a run
+    // error): the honest-vs-tamper distinction must not be masked by a
+    // provider hiccup on eth_getLogs.
+    try {
+      const historical = await tryHistoricalAnchor(ctx, recomputed.peak);
+      if (historical !== null) anchor = historical;
+    } catch (err) {
+      out.warn(
+        "verify: history scan unavailable (%s); reporting peak_not_current",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
   if (!anchor.anchored) {
     // Not anchored — the offline failure stands. For a snapshot anchor,
     // narrate WHY on stderr first (a newer-than-snapshot receipt carries the
@@ -304,6 +329,42 @@ async function tryAnchorOnlyVerify(
  * Shared tail: optional chain-anchor check, then render the stage report and
  * set the exit code. Used by both `verify` (payload) and `verify-grant`.
  */
+/**
+ * FOR-368 Phase 2: when the live accumulator no longer holds the peak
+ * (peak_not_current — burial), scan the CheckpointPublished history. A
+ * match at ANY anchored state proves the receipt: univocity's consistency
+ * gating commits every anchored accumulator forward to the present.
+ * Public-chain-data-only — no tiles, no holder cache.
+ */
+async function tryHistoricalAnchor(
+  ctx: VerifyReportContext,
+  peak: Uint8Array,
+): Promise<(AnchorCheck & HistoricalAnchorFields) | null> {
+  const hit = await findPeakInPublishedHistory({
+    peak,
+    univocity: ctx.univocity!,
+    logId: ctx.logId!,
+    rpcUrl: ctx.rpcUrl!,
+    fromBlock: ctx.fromBlock,
+  });
+  if (hit === null) return null;
+  return {
+    accumulator: hit.accumulator,
+    size: hit.size,
+    anchored: true,
+    matchedPeak: hit.matchedPeak,
+    historical: true,
+    anchoredAtBlock: hit.blockNumber,
+    txHash: hit.txHash,
+  };
+}
+
+type HistoricalAnchorFields = {
+  historical: true;
+  anchoredAtBlock: bigint;
+  txHash: string;
+};
+
 async function finishVerify(
   out: Out,
   ctx: VerifyReportContext,
@@ -372,6 +433,33 @@ async function finishVerify(
           rpcUrl: ctx.rpcUrl!,
           ...(recomputedPeak !== undefined ? { recomputedPeak } : {}),
         });
+        if (!anchor.anchored && anchor.reason === "peak_not_current") {
+          // FOR-368 Phase 2: buried peak — the anchored HISTORY proves
+          // honest receipts. Recompute the peak if the genesis-trust-key
+          // strategy left it implicit.
+          if (recomputedPeak === undefined && anchorLeaf !== undefined) {
+            const recomputed = await recomputeReceiptPeak({
+              receiptCbor: artifacts.receiptCbor,
+              idtimestampBe8: anchorLeaf.idtimestampBe8,
+              inner: await anchorLeaf.inner(),
+            });
+            if (recomputed.inclusionOk) recomputedPeak = recomputed.peak;
+          }
+          if (recomputedPeak !== undefined) {
+            try {
+              const historical = await tryHistoricalAnchor(
+                ctx,
+                recomputedPeak,
+              );
+              if (historical !== null) anchor = historical;
+            } catch (err) {
+              out.warn(
+                "verify: history scan unavailable (%s); reporting peak_not_current",
+                err instanceof Error ? err.message : String(err),
+              );
+            }
+          }
+        }
       }
     } catch (err) {
       reportRunError(out, ctx, "anchor", err);

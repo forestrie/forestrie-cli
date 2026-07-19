@@ -26,6 +26,18 @@ export default defineForestrieCommand({
       description: "JSON-RPC endpoint (default: ${env} → RPC_URL)",
       valueHint: "url",
     },
+    "at-block": {
+      type: "string",
+      description:
+        "Snapshot the latest anchored state at/before this block from CheckpointPublished events — historical states without an archive node [FOR-368]",
+      valueHint: "block",
+    },
+    "from-block": {
+      type: "string",
+      description:
+        "Lower bound for the --at-block event scan (the forest's deploy block; default earliest)",
+      valueHint: "block",
+    },
     out: {
       type: "string",
       description: "Output path for the snapshot CBOR",

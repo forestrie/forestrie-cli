@@ -57,6 +57,12 @@ export default defineForestrieCommand({
         "JSON-RPC endpoint for the chain-anchored check (default: ${env} → RPC_URL)",
       valueHint: "url",
     },
+    "from-block": {
+      type: "string",
+      description:
+        "Lower bound for the buried-peak CheckpointPublished history scan (the forest's deploy block; default earliest) [FOR-368]",
+      valueHint: "block",
+    },
     "known-accumulator": {
       type: "string",
       description:

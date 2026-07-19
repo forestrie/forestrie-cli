@@ -156,6 +156,11 @@ export type AnchorReport = {
   blockHash?: string;
   /** True when the match required proof-path extension via massif nodes. */
   extended?: boolean;
+  /** Historical event-scan anchor (FOR-368): the peak matched a prior
+   * CheckpointPublished accumulator; consistency-gated forward. */
+  historical?: boolean;
+  anchoredAtBlock?: string;
+  txHash?: string;
 };
 
 export type VerifyMode = "offline" | "chain-anchored" | "accumulator-anchored";
@@ -214,6 +219,20 @@ export function buildVerifyReport(opts: {
       anchor.blockNumber = opts.anchor.blockNumber.toString();
       anchor.blockHash = `0x${opts.anchor.blockHashHex ?? ""}`;
       anchor.extended = opts.anchor.extended === true;
+    }
+    const historical = opts.anchor as {
+      historical?: boolean;
+      anchoredAtBlock?: bigint;
+      txHash?: string;
+    };
+    if (historical.historical === true) {
+      anchor.historical = true;
+      if (historical.anchoredAtBlock !== undefined) {
+        anchor.anchoredAtBlock = historical.anchoredAtBlock.toString();
+      }
+      if (historical.txHash !== undefined) {
+        anchor.txHash = historical.txHash;
+      }
     }
     report.anchor = anchor;
   }
