@@ -72,6 +72,18 @@ export default defineForestrieCommand({
         "Local massif blob — enables proof-path extension when the receipt predates the --known-accumulator snapshot",
       valueHint: "path",
     },
+    "consistency-proof": {
+      type: "string",
+      description:
+        "Portable top-up artifact (`forestrie create-consistency-proof`) — tile-free extension of an older receipt into the --known-accumulator snapshot. Untrusted input: it can only fail, never mint trust [FOR-368]",
+      valueHint: "path",
+    },
+    "checkpoint-chain": {
+      type: "string",
+      description:
+        "Retained .sth checkpoint chain — a directory of .sth objects or comma-separated files in chain order. Folds the chain from size 0, authenticating the accumulator at every retained seal from the public log store alone (no tiles, no RPC); the receipt peak may match ANY link [FOR-368]",
+      valueHint: "dir|paths",
+    },
   },
   run: defineCommandRunner(parseVerifyGrantOptions, runVerifyGrant),
 });
