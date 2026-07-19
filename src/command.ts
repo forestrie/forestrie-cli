@@ -1,3 +1,4 @@
+import pkg from "../package.json" with { type: "json" };
 import { defineForestrieCommand } from "./commoncli.js";
 
 /**
@@ -8,7 +9,10 @@ import { defineForestrieCommand } from "./commoncli.js";
 export default defineForestrieCommand({
   meta: {
     name: "forestrie",
-    version: "0.2.0",
+    // Single source of truth: release.yml's assert-tag-version checks
+    // package.json, so deriving here keeps `forestrie --version` honest
+    // (the v0.3.0 binary self-reported 0.2.0 from a stale literal).
+    version: pkg.version,
     description:
       "Participant CLI for forestrie transparency logs (SCITT / COSE receipts; ES256 is the paved path)",
   },

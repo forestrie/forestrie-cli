@@ -1,6 +1,6 @@
 {
   "name": "@forestrie/forestrie-cli",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "forestrie — single-binary participant CLI for forestrie transparency logs",
   "type": "module",
