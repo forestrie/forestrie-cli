@@ -1,5 +1,6 @@
 import type { LooseParsedArgs } from "@forestrie/cli-kit";
 import {
+  optionalStringOption,
   parseForestrieCommonOptions,
   requiredStringOption,
   type ForestrieCommonOptions,
@@ -21,7 +22,30 @@ export type FetchAccumulatorOptions = ForestrieCommonOptions & {
   rpcUrl: string;
   /** Output path for the snapshot CBOR. */
   out: string;
+  /** Snapshot the latest anchored state at/before this block, sourced
+   * from CheckpointPublished events (FOR-368; no archive node needed). */
+  atBlock: bigint | undefined;
+  /** Lower bound for the event scan (`--at-block` mode). */
+  fromBlock: bigint | undefined;
 };
+
+function optionalBlockOption(
+  args: LooseParsedArgs,
+  name: string,
+): bigint | undefined {
+  const raw = optionalStringOption(args, name);
+  if (raw === undefined) return undefined;
+  let value: bigint;
+  try {
+    value = BigInt(raw);
+  } catch {
+    throw new Error(`--${name} must be a block number`);
+  }
+  if (value < 0n) {
+    throw new Error(`--${name} must be a non-negative block number`);
+  }
+  return value;
+}
 
 export function parseFetchAccumulatorOptions(
   args: LooseParsedArgs,
@@ -32,5 +56,7 @@ export function parseFetchAccumulatorOptions(
     logId: requiredStringOption(args, "log-id"),
     rpcUrl: requiredStringOption(args, "rpc-url", "RPC_URL"),
     out: requiredStringOption(args, "out"),
+    atBlock: optionalBlockOption(args, "at-block"),
+    fromBlock: optionalBlockOption(args, "from-block"),
   };
 }

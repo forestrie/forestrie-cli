@@ -267,14 +267,49 @@ describe("forestrie verify — offline (no network)", () => {
   });
 });
 
+/** ABI-encode CheckpointPublished's non-indexed data for getLogs mocks. */
+function encodeCheckpointPublishedData(
+  peaks: Uint8Array[],
+  size: bigint,
+): string {
+  const word = (v: bigint) => v.toString(16).padStart(64, "0");
+  let hex = "";
+  hex += word(0n); // sender
+  hex += word(0n); // grantIDTimestampBe (padded)
+  hex += word(0n); // logKind
+  hex += word(size); // size
+  hex += word(BigInt(7 * 32)); // offset -> accumulator
+  hex += word(0n); // grantIndex
+  hex += word(BigInt((8 + peaks.length) * 32)); // offset -> grantPath
+  hex += word(BigInt(peaks.length));
+  for (const p of peaks) {
+    hex += Array.from(p, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  hex += word(0n); // grantPath length
+  return "0x" + hex;
+}
+
 describe("forestrie verify — chain-anchored mode", () => {
-  function rpcFetch(resultHex: string, calls: unknown[] = []): typeof fetch {
+  function rpcFetch(
+    resultHex: string,
+    calls: unknown[] = [],
+    logs: unknown[] | "error" = [],
+  ): typeof fetch {
     return (async (_url: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as {
         method: string;
         params: unknown[];
       };
       calls.push(body);
+      if (body.method === "eth_getLogs") {
+        if (logs === "error") {
+          return new Response("boom", { status: 500 });
+        }
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, result: logs }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
       expect(body.method).toBe("eth_call");
       return new Response(
         JSON.stringify({ jsonrpc: "2.0", id: 1, result: resultHex }),
@@ -340,6 +375,71 @@ describe("forestrie verify — chain-anchored mode", () => {
     expect(report.anchor?.anchored).toBe(false);
     expect(report.anchor?.reason).toBe("peak_not_current");
     expect(report.anchor?.anchoredSize).toBe("5");
+  });
+
+  test("buried peak PROVEN via CheckpointPublished history (FOR-368 Phase 2)", async () => {
+    // Current accumulator no longer holds the peak (size 5), but a
+    // historical anchored accumulator does: univocity's consistency
+    // gating carries that anchor forward, so the receipt verifies.
+    const otherPeak = new Uint8Array(32).fill(0x11);
+    const calls: unknown[] = [];
+    const r = await verifyInProcess(
+      chainArgs({ "from-block": "7" }),
+      rpcFetch(encodeLogStateResult([otherPeak], 5n), calls, [
+        {
+          data: encodeCheckpointPublishedData([fx.peak], 3n),
+          blockNumber: "0x2a",
+          transactionHash: "0xdead",
+        },
+      ]),
+    );
+    expect(r.exitCode).toBe(0);
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(true);
+    expect(report.anchor?.anchored).toBe(true);
+    expect(report.anchor?.historical).toBe(true);
+    expect(report.anchor?.anchoredAtBlock).toBe("42");
+    expect(report.anchor?.txHash).toBe("0xdead");
+    expect(report.anchor?.anchoredSize).toBe("3");
+    // The scan was topic-filtered and honoured --from-block.
+    const getLogs = (calls as { method: string; params: { fromBlock?: string; topics?: string[] }[] }[]).find(
+      (c) => c.method === "eth_getLogs",
+    );
+    expect(getLogs?.params[0]?.fromBlock).toBe("0x7");
+    expect(getLogs?.params[0]?.topics?.[0]).toMatch(/^0x156942b4/);
+  });
+
+  test("history scan failure degrades to peak_not_current, never a run error (FOR-368)", async () => {
+    const otherPeak = new Uint8Array(32).fill(0x11);
+    const r = await verifyInProcess(
+      chainArgs(),
+      rpcFetch(encodeLogStateResult([otherPeak], 5n), [], "error"),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(false);
+    expect(report.anchor?.reason).toBe("peak_not_current");
+    expect(r.stderr).toContain("history scan unavailable");
+  });
+
+  test("history scan miss keeps the honest peak_not_current failure", async () => {
+    // Event history exists but no accumulator holds the peak: the
+    // classified failure stands (a tampered receipt lands here too — the
+    // distinction from honest-buried is that honest receipts DO match a
+    // historical anchor when the history is complete).
+    const otherPeak = new Uint8Array(32).fill(0x11);
+    const r = await verifyInProcess(
+      chainArgs(),
+      rpcFetch(encodeLogStateResult([otherPeak], 5n), [], [
+        {
+          data: encodeCheckpointPublishedData([otherPeak], 3n),
+          blockNumber: "0x2a",
+          transactionHash: "0xdead",
+        },
+      ]),
+    );
+    expect(r.exitCode).toBe(1);
+    expect(jsonReport(r.stdout).anchor?.reason).toBe("peak_not_current");
   });
 
   test("unanchored entry: leaf at/after the anchored size is receipt_newer_than_anchored_state", async () => {
@@ -510,6 +610,12 @@ describe("forestrie verify — anchor-only child-log fallback (FOR-297 approach 
   function rpcFetch(resultHex: string): typeof fetch {
     return (async (_url: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as { method: string };
+      if (body.method === "eth_getLogs") {
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, result: [] }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
       expect(body.method).toBe("eth_call");
       return new Response(
         JSON.stringify({ jsonrpc: "2.0", id: 1, result: resultHex }),

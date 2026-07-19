@@ -7,6 +7,10 @@ import {
   encodeKnownAccumulator,
   type KnownAccumulator,
 } from "../lib/verify-known-accumulator.js";
+import {
+  fetchPublishedCheckpoints,
+  selectPublishedAtBlock,
+} from "../lib/verify-eventscan.js";
 
 /** Selector for `logState(bytes32)` (mirrors verify-anchored). */
 const LOG_STATE_SELECTOR = "0xeecac1b7";
@@ -72,27 +76,55 @@ export async function runFetchAccumulator(
       await ethRpc(options.rpcUrl, "eth_chainId", []),
       "eth_chainId",
     );
-    const block = (await ethRpc(options.rpcUrl, "eth_getBlockByNumber", [
-      "latest",
-      false,
-    ])) as { number?: unknown; hash?: unknown } | null;
-    if (block === null || typeof block !== "object") {
-      throw new Error("eth_getBlockByNumber returned no block");
-    }
-    const blockNumber = hexToBigint(block.number, "block number");
-    const blockHash = hexToBytes32(block.hash, "block hash");
 
-    const data = LOG_STATE_SELECTOR + contractLogId.slice(2);
-    const result = await ethRpc(options.rpcUrl, "eth_call", [
-      { to: `0x${address}`, data },
-      `0x${blockNumber.toString(16)}`,
-    ]);
-    if (typeof result !== "string" || result === "0x") {
-      throw new Error(
-        `logState eth_call returned no data for log ${options.logId} at ${options.univocity}`,
-      );
+    let state: { size: bigint; accumulator: Uint8Array[] };
+    let blockNumber: bigint;
+    let blockHash: Uint8Array;
+    if (options.atBlock !== undefined) {
+      // FOR-368: historical snapshot from the CheckpointPublished record —
+      // events survive where contract state does not, so no archive node
+      // is needed. The snapshot binds to the block the anchor landed in.
+      const published = await fetchPublishedCheckpoints({
+        univocity: options.univocity,
+        logId: options.logId,
+        rpcUrl: options.rpcUrl,
+        fromBlock: options.fromBlock,
+      });
+      const chosen = selectPublishedAtBlock(published, options.atBlock);
+      if (chosen === null) {
+        throw new Error(
+          `no CheckpointPublished at or before block ${options.atBlock} for log ${options.logId}` +
+            (published.length > 0
+              ? ` (earliest anchor is block ${published[0]!.blockNumber})`
+              : " (no anchors found in the scanned range)"),
+        );
+      }
+      state = { size: chosen.size, accumulator: chosen.accumulator };
+      blockNumber = chosen.blockNumber;
+      blockHash = hexToBytes32(chosen.blockHash, "event block hash");
+    } else {
+      const block = (await ethRpc(options.rpcUrl, "eth_getBlockByNumber", [
+        "latest",
+        false,
+      ])) as { number?: unknown; hash?: unknown } | null;
+      if (block === null || typeof block !== "object") {
+        throw new Error("eth_getBlockByNumber returned no block");
+      }
+      blockNumber = hexToBigint(block.number, "block number");
+      blockHash = hexToBytes32(block.hash, "block hash");
+
+      const data = LOG_STATE_SELECTOR + contractLogId.slice(2);
+      const result = await ethRpc(options.rpcUrl, "eth_call", [
+        { to: `0x${address}`, data },
+        `0x${blockNumber.toString(16)}`,
+      ]);
+      if (typeof result !== "string" || result === "0x") {
+        throw new Error(
+          `logState eth_call returned no data for log ${options.logId} at ${options.univocity}`,
+        );
+      }
+      state = decodeLogStateResult(result);
     }
-    const state = decodeLogStateResult(result);
 
     const snapshot: KnownAccumulator = {
       version: 1,

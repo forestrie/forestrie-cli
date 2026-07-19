@@ -50,6 +50,8 @@ type AnchorFields = {
   knownAccumulator: string | undefined;
   /** Local massif blob enabling stale-snapshot proof-path extension. */
   massif: string | undefined;
+  /** Lower bound for the CheckpointPublished history scan (FOR-368). */
+  fromBlock: bigint | undefined;
   /**
    * Caller-known log OWNER key (the delegation-cert issuer), base64 `x||y`
    * (64 bytes, `KNOWN_LOG_KEY`) — FOR-297 D1. An offline trust anchor that
@@ -68,6 +70,18 @@ function parseAnchorFields(args: LooseParsedArgs): AnchorFields {
   const knownLogKey = optionalStringOption(args, "known-log-key", "KNOWN_LOG_KEY");
   const knownAccumulator = optionalStringOption(args, "known-accumulator");
   const massif = optionalStringOption(args, "massif");
+  const fromBlockRaw = optionalStringOption(args, "from-block");
+  let fromBlock: bigint | undefined;
+  if (fromBlockRaw !== undefined) {
+    try {
+      fromBlock = BigInt(fromBlockRaw);
+    } catch {
+      throw new Error("--from-block must be a block number");
+    }
+    if (fromBlock < 0n) {
+      throw new Error("--from-block must be a non-negative block number");
+    }
+  }
   let anchor: AnchorFields["anchor"] = "offline";
   if (knownAccumulator !== undefined) {
     // Conflict keys on --univocity (the live-read mode selector), NOT on
@@ -89,6 +103,11 @@ function parseAnchorFields(args: LooseParsedArgs): AnchorFields {
   } else if (massif !== undefined) {
     throw new Error("--massif only applies with --known-accumulator");
   }
+  if (fromBlock !== undefined && anchor !== "chain") {
+    throw new Error(
+      "--from-block only applies to the live chain anchor (--univocity)",
+    );
+  }
   return {
     anchor,
     univocity,
@@ -97,6 +116,7 @@ function parseAnchorFields(args: LooseParsedArgs): AnchorFields {
     knownLogKey,
     knownAccumulator,
     massif,
+    fromBlock,
   };
 }
 
