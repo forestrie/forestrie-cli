@@ -23,6 +23,8 @@ export default defineForestrieCommand({
     "register-grant": () =>
       import("./commands/register-grant.js").then((m) => m.default),
     delegate: () => import("./commands/delegate.js").then((m) => m.default),
+    "onboard-genesis": () =>
+      import("./commands/onboard-genesis.js").then((m) => m.default),
     "complete-grant": () =>
       import("./commands/complete-grant.js").then((m) => m.default),
     "create-receipt": () =>
