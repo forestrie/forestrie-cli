@@ -13,6 +13,7 @@ export default defineForestrieCommand({
       "Participant CLI for forestrie transparency logs (SCITT / COSE receipts; ES256 is the paved path)",
   },
   subCommands: {
+    admin: () => import("./commands/admin.js").then((m) => m.default),
     deploy: () => import("./commands/deploy.js").then((m) => m.default),
     "sign-statement": () =>
       import("./commands/sign-statement.js").then((m) => m.default),
