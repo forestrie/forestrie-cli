@@ -46,6 +46,34 @@ export type AnchorCheck = OnChainLogState & {
 };
 
 /**
+ * Classify an unanchored peak so honest receipts never fail tamper-shaped
+ * (FOR-368 Phase 0, plan-2607-29):
+ * - the leaf predates the anchored size but its peak is absent — the log
+ *   grew and BURIED the peak (`peak_not_current`): an honest-receipt
+ *   condition needing growth evidence, not a tamper verdict;
+ * - the leaf is at/after the anchored size — the entry simply is not
+ *   anchored yet (`receipt_newer_than_anchored_state`).
+ * Tampered receipts surface earlier (signature/inclusion) or as a
+ * recomputed peak that matches no anchored state ever; the chain rungs
+ * that PROVE the buried case land in later plan phases.
+ */
+export function classifyUnanchoredPeak(
+  leafMmrIndex: bigint,
+  anchoredSize: bigint,
+): string {
+  if (leafMmrIndex >= anchoredSize) {
+    return "receipt_newer_than_anchored_state";
+  }
+  return "peak_not_current";
+}
+
+/** Leaf MMR index from a parsed receipt proof. */
+function receiptLeafIndex(receiptCbor: Uint8Array): bigint {
+  const { proof } = parseReceipt(receiptCbor);
+  return proof.leafIndex !== undefined ? proof.leafIndex : proof.mmrIndex!;
+}
+
+/**
  * Normalize a log id (UUID with dashes, 32-hex UUID form, or 64-hex
  * contract form) to the 32-byte contract key: Univocity stores logs with
  * the UUID in the low 16 bytes, zero-padded on the left.
@@ -254,7 +282,14 @@ export async function checkReceiptAnchored(opts: {
       ...state,
       anchored,
       matchedPeak,
-      ...(anchored ? {} : { reason: "peak_not_in_onchain_accumulator" }),
+      ...(anchored
+        ? {}
+        : {
+            reason: classifyUnanchoredPeak(
+              receiptLeafIndex(opts.receiptCbor),
+              state.size,
+            ),
+          }),
     };
   }
 
@@ -302,6 +337,13 @@ export async function checkReceiptAnchored(opts: {
     ...state,
     anchored,
     matchedPeak,
-    ...(anchored ? {} : { reason: "peak_not_in_onchain_accumulator" }),
+    ...(anchored
+      ? {}
+      : {
+          reason: classifyUnanchoredPeak(
+            receiptLeafIndex(opts.receiptCbor),
+            state.size,
+          ),
+        }),
   };
 }

@@ -116,10 +116,21 @@ function printAnchorRow(
       anchor.size.toString(),
     );
   } else {
-    const hint =
-      anchor.reason === "receipt_newer_than_known_accumulator"
-        ? " — refresh the accumulator (forestrie fetch-accumulator)"
-        : "";
+    let hint = "";
+    if (anchor.reason === "receipt_newer_than_known_accumulator") {
+      hint = " — refresh the accumulator (forestrie fetch-accumulator)";
+    } else if (anchor.reason === "peak_not_current") {
+      // FOR-368: an honest receipt whose peak the log has since buried —
+      // distinguishable from tamper; growth evidence proves it.
+      hint =
+        " — receipt predates log growth (peak buried); NOT tamper-evidence." +
+        " Re-resolve the receipt from the log, or verify with growth" +
+        " evidence (grow-proof support: FOR-368)";
+    } else if (anchor.reason === "receipt_newer_than_anchored_state") {
+      hint =
+        " — entry not anchored on-chain yet; retry after the next" +
+        " checkpoint publishes";
+    }
     out.print(
       "verify: anchor    failed  — %s (anchored size %s, %d peaks)%s",
       anchor.reason ?? "unknown",
