@@ -326,7 +326,9 @@ describe("forestrie verify — chain-anchored mode", () => {
     expect(jsonReport(r.stdout).anchor?.matchedPeak).toBe(0);
   });
 
-  test("not anchored: peak absent from the accumulator, exit 1", async () => {
+  test("buried peak: honest-old receipt fails as peak_not_current, never tamper-shaped (FOR-368)", async () => {
+    // Leaf predates the anchored size (5) but its peak is absent: the log
+    // grew and buried the peak. Must be distinguishable from tamper.
     const otherPeak = new Uint8Array(32).fill(0x11);
     const r = await verifyInProcess(
       chainArgs(),
@@ -336,8 +338,21 @@ describe("forestrie verify — chain-anchored mode", () => {
     const report = jsonReport(r.stdout);
     expect(report.ok).toBe(false);
     expect(report.anchor?.anchored).toBe(false);
-    expect(report.anchor?.reason).toBe("peak_not_in_onchain_accumulator");
+    expect(report.anchor?.reason).toBe("peak_not_current");
     expect(report.anchor?.anchoredSize).toBe("5");
+  });
+
+  test("unanchored entry: leaf at/after the anchored size is receipt_newer_than_anchored_state", async () => {
+    // Anchored size 0: nothing is anchored, so the entry is simply newer
+    // than the anchored state — a retry condition, not burial or tamper.
+    const r = await verifyInProcess(
+      chainArgs(),
+      rpcFetch(encodeLogStateResult([], 0n)),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(false);
+    expect(report.anchor?.reason).toBe("receipt_newer_than_anchored_state");
   });
 
   test("offline failure skips the network entirely in chain mode", async () => {
