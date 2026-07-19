@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createCaptureOut } from "@forestrie/cli-kit/reporting";
@@ -15,8 +15,10 @@ import {
 import { readFileSync } from "node:fs";
 import { runVerifyGrant, type VerifyErrorReport } from "../src/main/verify.js";
 import { runFetchAccumulator } from "../src/main/fetch-accumulator.js";
+import { runCreateConsistencyProof } from "../src/main/create-consistency-proof.js";
 import { parseVerifyGrantOptions } from "../src/options/verify.js";
 import { parseFetchAccumulatorOptions } from "../src/options/fetch-accumulator.js";
+import { parseCreateConsistencyProofOptions } from "../src/options/create-consistency-proof.js";
 import {
   decodeKnownAccumulator,
   encodeKnownAccumulator,
@@ -24,10 +26,12 @@ import {
 } from "../src/lib/verify-known-accumulator.js";
 import { runCli } from "./support.js";
 import {
+  buildCheckpoint,
   buildVerifyFixture,
   bytesToHex,
   encodeLogStateResult,
   FIXTURE_LOG_ID,
+  generateP256KeyPair,
   tamperSignature,
   type VerifyFixture,
 } from "./verify-fixture.js";
@@ -1001,7 +1005,7 @@ describe("forestrie verify-grant — known accumulator snapshot (FOR-297 D5)", (
           "rpc-url": "http://rpc.mock",
         }) as LooseArgs,
       ),
-    ).toThrow(/choose one chain anchor/);
+    ).toThrow(/choose one anchor/);
   });
 
   test("--massif without --known-accumulator is a usage error", () => {
@@ -1114,5 +1118,216 @@ describe("forestrie fetch-accumulator (FOR-297 D5 producer)", () => {
     expect(r.exitCode).toBe(1);
     const report = JSON.parse(r.stdout) as Record<string, unknown>;
     expect(report.error).toBe("fetch_accumulator_failed");
+  });
+});
+
+describe("forestrie verify-grant — retained checkpoint chain (FOR-368 Phase 3)", () => {
+  let chainDir: string;
+
+  beforeAll(async () => {
+    chainDir = path.join(dir, "sths");
+    mkdirSync(chainDir, { recursive: true });
+    // sth(0->3): the fixture peak arrives as a right-peak; sth(3->7): the
+    // buried peak (node 2) climbs to peak7 via node5 (ADR-0056 boundaries).
+    writeFileSync(
+      path.join(chainDir, "0000000000000000.sth"),
+      await buildCheckpoint({
+        signer: fx.rootKeyPair,
+        treeSize1: 0n,
+        treeSize2: 3n,
+        paths: [],
+        rightPeaks: [fx.peak],
+        accumulator: [fx.peak],
+      }),
+    );
+    writeFileSync(
+      path.join(chainDir, "0000000000000001.sth"),
+      await buildCheckpoint({
+        signer: fx.rootKeyPair,
+        treeSize1: 3n,
+        treeSize2: 7n,
+        paths: [[fx.node5]],
+        rightPeaks: [],
+        accumulator: [fx.peak7],
+      }),
+    );
+  });
+
+  test("golden: buried receipt anchors to an OLDER link, fully offline (fetch forbidden)", async () => {
+    const r = await verifyInProcess(
+      baseArgs({ "checkpoint-chain": chainDir, json: true }),
+    );
+    expect(r.exitCode).toBe(0);
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(true);
+    expect(report.mode).toBe("checkpoint-chain-anchored");
+    expect(report.anchor).toMatchObject({
+      anchored: true,
+      matchedPeak: 0,
+      anchoredSize: "3",
+      linkCount: 2,
+      matchedLinkSize: "3",
+    });
+  });
+
+  test("human narration names the chain, the link and the fold", async () => {
+    const r = await verifyInProcess(
+      baseArgs({ "checkpoint-chain": chainDir }),
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toContain("retained checkpoint-chain peak");
+    expect(r.stderr).toContain("2 links folded");
+    expect(r.stdout).toContain(
+      "PASS: receipt verified offline and anchored in the retained checkpoint chain",
+    );
+  });
+
+  test("a chain signed outside the genesis trust root is a structured anchor error", async () => {
+    const rogue = await generateP256KeyPair();
+    const rogueDir = path.join(dir, "sths-rogue");
+    mkdirSync(rogueDir, { recursive: true });
+    writeFileSync(
+      path.join(rogueDir, "0000000000000000.sth"),
+      await buildCheckpoint({
+        signer: rogue,
+        treeSize1: 0n,
+        treeSize2: 3n,
+        paths: [],
+        rightPeaks: [fx.peak],
+        accumulator: [fx.peak],
+      }),
+    );
+    const r = await verifyInProcess(
+      baseArgs({ "checkpoint-chain": rogueDir, json: true }),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = JSON.parse(r.stdout) as VerifyErrorReport;
+    expect(report.error).toBe("anchor_check_failed");
+    expect(report.message).toContain("signature");
+  });
+
+  test("--checkpoint-chain conflicts with --known-accumulator and --univocity", () => {
+    expect(() =>
+      parseVerifyGrantOptions(
+        baseArgs({
+          "checkpoint-chain": chainDir,
+          "known-accumulator": file("acc-golden.cbor"),
+        }) as LooseArgs,
+      ),
+    ).toThrow(/choose one anchor/);
+    expect(() =>
+      parseVerifyGrantOptions(
+        baseArgs({
+          "checkpoint-chain": chainDir,
+          univocity: UNIVOCITY,
+          "log-id": FIXTURE_LOG_ID,
+          "rpc-url": "http://rpc.mock",
+        }) as LooseArgs,
+      ),
+    ).toThrow(/choose one anchor/);
+  });
+});
+
+describe("forestrie verify-grant — consistency-proof top-up (FOR-368 Phase 3)", () => {
+  const grownSnapshot = (): string => {
+    const bytes = encodeKnownAccumulator({
+      version: 1,
+      chainId: 84532n,
+      univocity: new Uint8Array(20).fill(0xab),
+      logId: (() => {
+        const hex = toContractLogId(FIXTURE_LOG_ID).slice(2);
+        const out = new Uint8Array(32);
+        for (let i = 0; i < 32; i++) {
+          out[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+        }
+        return out;
+      })(),
+      size: 7n,
+      accumulator: [fx.peak7],
+      blockNumber: 123n,
+      blockHash: new Uint8Array(32).fill(0xbb),
+    });
+    writeFileSync(file("acc-grown-topup.cbor"), bytes);
+    return file("acc-grown-topup.cbor");
+  };
+
+  async function writeProof(name: string): Promise<string> {
+    writeFileSync(file("massif7-topup.bin"), fx.massif7Bytes);
+    const out = createCaptureOut(0);
+    const savedExitCode = process.exitCode;
+    process.exitCode = 0;
+    await runCreateConsistencyProof(
+      out,
+      parseCreateConsistencyProofOptions({
+        massif: file("massif7-topup.bin"),
+        "from-size": "3",
+        "to-size": "7",
+        out: file(name),
+      } as LooseArgs),
+    );
+    expect(Number(process.exitCode ?? 0)).toBe(0);
+    process.exitCode = savedExitCode;
+    return file(name);
+  }
+
+  test("golden: create-consistency-proof output extends a stale receipt TILE-FREE", async () => {
+    const snap = grownSnapshot();
+    const proof = await writeProof("topup.cbor");
+    const r = await verifyInProcess(
+      baseArgs({
+        receipt: file("receipt-child.cbor"),
+        "known-accumulator": snap,
+        "consistency-proof": proof,
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(0);
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(true);
+    expect(report.anchor).toMatchObject({
+      anchored: true,
+      extended: true,
+      anchoredSize: "7",
+      topUpBaseSize: "3",
+    });
+  });
+
+  test("human narration names the top-up and its base size", async () => {
+    const snap = grownSnapshot();
+    const proof = await writeProof("topup.cbor");
+    const r = await verifyInProcess(
+      baseArgs({
+        receipt: file("receipt-child.cbor"),
+        "known-accumulator": snap,
+        "consistency-proof": proof,
+      }),
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toContain("consistency-proof top-up from size 3");
+  });
+
+  test("a tampered artifact can only fail (soundness by recomputation)", async () => {
+    const snap = grownSnapshot();
+    await writeProof("topup.cbor");
+    const bytes = new Uint8Array(readFileSync(file("topup.cbor")));
+    bytes[bytes.length - 1]! ^= 0xff; // last path node byte
+    writeFileSync(file("topup-bad.cbor"), bytes);
+    const r = await verifyInProcess(
+      baseArgs({
+        receipt: file("receipt-child.cbor"),
+        "known-accumulator": snap,
+        "consistency-proof": file("topup-bad.cbor"),
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(1);
+  });
+
+  test("--consistency-proof without --known-accumulator is a usage error", () => {
+    expect(() =>
+      parseVerifyGrantOptions(
+        baseArgs({ "consistency-proof": file("topup.cbor") }) as LooseArgs,
+      ),
+    ).toThrow(/--consistency-proof only applies/);
   });
 });

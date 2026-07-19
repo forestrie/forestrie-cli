@@ -31,13 +31,18 @@ import {
  *    will derive per-log bindings from genesis + public tiles).
  * 3. `--known-accumulator` — cached, auditable chain read: contract-enforced
  *    state (signature + grant chain + split-view for covered entries),
- *    fully offline; `--massif` extends older receipts to a newer snapshot.
- * 4. `--rpc-url` — live chain read: rung 3 plus freshness (the RPC provider
- *    is itself a trusted chain reader).
+ *    fully offline; `--massif` (tiles) or `--consistency-proof` (portable
+ *    top-up artifact) extends older receipts to a newer snapshot.
+ * 4. `--checkpoint-chain` — retained `.sth` fold (FOR-368): authenticated
+ *    accumulator at every retained seal from the public log store alone;
+ *    signatures root in rung 1/2 trust.
+ * 5. `--rpc-url` — live chain read: rung 3 plus freshness (the RPC provider
+ *    is itself a trusted chain reader); buried peaks resolve via the
+ *    CheckpointPublished history scan (public chain data only).
  */
 
 type AnchorFields = {
-  anchor: "offline" | "chain" | "accumulator";
+  anchor: "offline" | "chain" | "accumulator" | "checkpoints";
   univocity: string | undefined;
   logId: string | undefined;
   rpcUrl: string | undefined;
@@ -50,6 +55,21 @@ type AnchorFields = {
   knownAccumulator: string | undefined;
   /** Local massif blob enabling stale-snapshot proof-path extension. */
   massif: string | undefined;
+  /**
+   * Retained `.sth` checkpoint chain (FOR-368 Phase 3): a directory of
+   * `.sth` objects or a comma-separated list in chain order. Folding the
+   * chain authenticates the accumulator at every retained seal from the
+   * public log store alone — no tiles, no RPC. Signature trust roots in
+   * `--genesis` / `--known-log-key`.
+   */
+  checkpointChain: string | undefined;
+  /**
+   * Portable top-up artifact (`forestrie create-consistency-proof`,
+   * FOR-368 Phase 3): tile-free extension of an old receipt to the
+   * `--known-accumulator` snapshot. Unsigned and untrusted — soundness is
+   * by recomputation into the trusted snapshot.
+   */
+  consistencyProof: string | undefined;
   /** Lower bound for the CheckpointPublished history scan (FOR-368). */
   fromBlock: bigint | undefined;
   /**
@@ -70,6 +90,8 @@ function parseAnchorFields(args: LooseParsedArgs): AnchorFields {
   const knownLogKey = optionalStringOption(args, "known-log-key", "KNOWN_LOG_KEY");
   const knownAccumulator = optionalStringOption(args, "known-accumulator");
   const massif = optionalStringOption(args, "massif");
+  const checkpointChain = optionalStringOption(args, "checkpoint-chain");
+  const consistencyProof = optionalStringOption(args, "consistency-proof");
   const fromBlockRaw = optionalStringOption(args, "from-block");
   let fromBlock: bigint | undefined;
   if (fromBlockRaw !== undefined) {
@@ -82,16 +104,21 @@ function parseAnchorFields(args: LooseParsedArgs): AnchorFields {
       throw new Error("--from-block must be a non-negative block number");
     }
   }
+  // Anchor modes are mutually exclusive. Conflict keys on --univocity (the
+  // live-read mode selector), NOT on rpcUrl: RPC_URL is commonly ambient in
+  // the environment and must not block the offline anchors.
+  const selected = [
+    knownAccumulator !== undefined ? "--known-accumulator" : null,
+    univocity !== undefined ? "--univocity" : null,
+    checkpointChain !== undefined ? "--checkpoint-chain" : null,
+  ].filter((s) => s !== null);
+  if (selected.length > 1) {
+    throw new Error(
+      `choose one anchor: a live read (--univocity/--log-id/--rpc-url), a cached --known-accumulator, or a retained --checkpoint-chain (got ${selected.join(" + ")})`,
+    );
+  }
   let anchor: AnchorFields["anchor"] = "offline";
   if (knownAccumulator !== undefined) {
-    // Conflict keys on --univocity (the live-read mode selector), NOT on
-    // rpcUrl: RPC_URL is commonly ambient in the environment and must not
-    // block the offline snapshot anchor.
-    if (univocity !== undefined) {
-      throw new Error(
-        "choose one chain anchor: a live read (--univocity/--log-id/--rpc-url) or a cached --known-accumulator",
-      );
-    }
     anchor = "accumulator";
   } else if (univocity !== undefined) {
     if (logId === undefined || rpcUrl === undefined) {
@@ -100,8 +127,18 @@ function parseAnchorFields(args: LooseParsedArgs): AnchorFields {
       );
     }
     anchor = "chain";
+  } else if (checkpointChain !== undefined) {
+    anchor = "checkpoints";
   } else if (massif !== undefined) {
     throw new Error("--massif only applies with --known-accumulator");
+  }
+  if (massif !== undefined && anchor !== "accumulator") {
+    throw new Error("--massif only applies with --known-accumulator");
+  }
+  if (consistencyProof !== undefined && anchor !== "accumulator") {
+    throw new Error(
+      "--consistency-proof only applies with --known-accumulator (the trusted target state)",
+    );
   }
   if (fromBlock !== undefined && anchor !== "chain") {
     throw new Error(
@@ -116,6 +153,8 @@ function parseAnchorFields(args: LooseParsedArgs): AnchorFields {
     knownLogKey,
     knownAccumulator,
     massif,
+    checkpointChain,
+    consistencyProof,
     fromBlock,
   };
 }

@@ -11,8 +11,8 @@
         "@forestrie/deploy-core": "^0.6.0",
         "@forestrie/encoding": "^0.5.0",
         "@forestrie/grant-builder": "^0.2.1",
-        "@forestrie/merklelog": "^0.1.1",
-        "@forestrie/receipt-verify": "^0.6.3",
+        "@forestrie/merklelog": "^0.2.0",
+        "@forestrie/receipt-verify": "^0.7.0",
         "@forestrie/scrapi-client": "^0.1.3",
         "citty": "^0.2.2",
         "viem": "^2.31.0",
@@ -38,9 +38,9 @@
 
     "@forestrie/grant-builder": ["@forestrie/grant-builder@0.2.1", "", { "dependencies": { "@forestrie/encoding": "0.5.0", "@noble/curves": "^1.9.7", "@noble/hashes": "^1.7.1" } }, "sha512-UW0mzJyqRCumfF/Gr0SQUwBaHw2nZMp3mtmYuAKUTgMu3M1r/9TXlb/l6MttDKayn4s5HoAADs2+ry2YNliZ/Q=="],
 
-    "@forestrie/merklelog": ["@forestrie/merklelog@0.1.1", "", {}, "sha512-xrHyZffnuddV5XA+rsiSMExcUKIrn9u/6UZTTuNFKxFRORvODWxJZgVZJICW1EUKZnUCO7C8EwQKijYgkzqPqw=="],
+    "@forestrie/merklelog": ["@forestrie/merklelog@0.2.0", "", {}, "sha512-Zelz0mdSrIMrFKZ8kqhOno5W8meKhXR1fXqwCpnPv2ob+LJqeYrX4dJiucpG3u2qUgMdQPjH1355J67smleStw=="],
 
-    "@forestrie/receipt-verify": ["@forestrie/receipt-verify@0.6.3", "", { "dependencies": { "@forestrie/encoding": "0.5.0", "@forestrie/merklelog": "0.1.1", "@noble/hashes": "^1.7.1" } }, "sha512-Rs0C81aEss12iyNLd1n0unhruOUyH+JN2357clxhlklQ7LWNs1CEUNhkZgIeL4ALwID9o+ly8D4F4zEHex85cA=="],
+    "@forestrie/receipt-verify": ["@forestrie/receipt-verify@0.7.0", "", { "dependencies": { "@forestrie/encoding": "0.5.0", "@forestrie/merklelog": "0.2.0", "@noble/hashes": "^1.7.1" } }, "sha512-Ce1Uh6HKbMtUaAotz49mqrj+9pr7n8HPGfRky9PYdV88QyxC7Hhk9xJerd/uWETgb2jRB9BQ8aM+S87uiObngQ=="],
 
     "@forestrie/scrapi-client": ["@forestrie/scrapi-client@0.1.3", "", { "dependencies": { "@forestrie/encoding": "0.5.0" } }, "sha512-ixj/Czux1fpI4VlOfqZqqi8lpbCXs/FFMc35gONZBt/WE+caTlDgZSuAm57nbTQzvZBn+rVkjse4xIxN4+Uq8g=="],
 

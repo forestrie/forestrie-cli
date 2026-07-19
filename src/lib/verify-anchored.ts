@@ -68,7 +68,7 @@ export function classifyUnanchoredPeak(
 }
 
 /** Leaf MMR index from a parsed receipt proof. */
-function receiptLeafIndex(receiptCbor: Uint8Array): bigint {
+export function receiptLeafIndex(receiptCbor: Uint8Array): bigint {
   const { proof } = parseReceipt(receiptCbor);
   return proof.leafIndex !== undefined ? proof.leafIndex : proof.mmrIndex!;
 }

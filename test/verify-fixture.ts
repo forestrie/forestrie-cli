@@ -228,6 +228,48 @@ export async function buildPeakReceipt(opts: {
 }
 
 /**
+ * v3-style checkpoint (ADR-0046/ADR-0056): COSE Sign1 with DETACHED payload
+ * (the raw concat of the tree-size-2 accumulator peaks) and the embedded
+ * consistency proof `[tree-size-1, tree-size-2, paths, right-peaks]` as a
+ * bstr at vdp 396 key -2 — the shape `verifyCheckpointChain` folds
+ * (FOR-368 Phase 3).
+ */
+export async function buildCheckpoint(opts: {
+  signer: CryptoKeyPair;
+  treeSize1: bigint;
+  treeSize2: bigint;
+  paths: Uint8Array[][];
+  rightPeaks: Uint8Array[];
+  /** Accumulator at treeSize2 — the detached payload the signature covers. */
+  accumulator: Uint8Array[];
+  delegationCert?: Uint8Array;
+}): Promise<Uint8Array> {
+  const protectedInner = cborBytes(new Map<number, unknown>([[1, -7]]));
+  const payload = new Uint8Array(
+    opts.accumulator.reduce((s, p) => s + p.length, 0),
+  );
+  let off = 0;
+  for (const p of opts.accumulator) {
+    payload.set(p, off);
+    off += p.length;
+  }
+  const sig = await signPeak(opts.signer, protectedInner, payload);
+  const proofBstr = cborBytes([
+    opts.treeSize1,
+    opts.treeSize2,
+    opts.paths,
+    opts.rightPeaks,
+  ]);
+  const unprotEntries: [number, unknown][] = [
+    [VDS_COSE_RECEIPT_PROOFS_TAG, new Map<number, unknown>([[-2, proofBstr]])],
+  ];
+  if (opts.delegationCert !== undefined) {
+    unprotEntries.push([1000, opts.delegationCert]);
+  }
+  return cborBytes([protectedInner, new Map(unprotEntries), null, sig]);
+}
+
+/**
  * Delegation certificate: COSE Sign1 (attached payload) whose payload carries
  * the delegated sealer's COSE key at label 5, signed by `certSigner`. Signed
  * by the ROOT key it models a root-log delegation; signed by any other key it
@@ -329,6 +371,8 @@ export type VerifyFixture = {
   peak7: Uint8Array;
   /** v2 massif blob holding all 7 nodes of the grown MMR. */
   massif7Bytes: Uint8Array;
+  /** Interior node 5 (parent of leaves 3,4) — the 3->7 consistency path. */
+  node5: Uint8Array;
   /** The child log OWNER's public key (x||y, base64) — the delegation-cert
    * issuer for `delegatedChildReceiptCbor`; the value a caller passes as
    * `--known-log-key` (FOR-297 D1). */
@@ -503,6 +547,7 @@ export async function buildVerifyFixture(): Promise<VerifyFixture> {
     rootKeyPair,
     peak7,
     massif7Bytes,
+    node5,
     childOwnerKeyXyB64,
   };
 }

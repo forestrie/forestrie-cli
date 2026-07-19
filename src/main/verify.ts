@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
 import type { Out } from "@forestrie/cli-kit/reporting";
 import {
+  decodeTrustRootFromGenesis,
   grantCommitmentHashFromGrant,
   importEs256PublicKeyFromGrantDataXy64,
+  verifyCheckpointChain,
   verifyGrantReceiptOffline,
   verifyGrantReceiptOfflineWithKeys,
   verifyReceiptOffline,
@@ -13,9 +15,20 @@ import type { VerifyGrantOptions, VerifyOptions } from "../options/verify.js";
 import { findPeakInPublishedHistory } from "../lib/verify-eventscan.js";
 import {
   checkReceiptAnchored,
+  receiptLeafIndex,
   recomputeReceiptPeak,
   type AnchorCheck,
 } from "../lib/verify-anchored.js";
+import {
+  checkReceiptAnchoredToCheckpointChain,
+  loadCheckpointChainFiles,
+  makeCheckpointSignatureVerifier,
+  type CheckpointChainAnchorCheck,
+} from "../lib/verify-checkpoint-chain.js";
+import {
+  checkReceiptAnchoredViaConsistencyProof,
+  decodeConsistencyProofArtifact,
+} from "../lib/consistency-proof.js";
 import {
   assertSnapshotBinding,
   checkReceiptAnchoredToSnapshot,
@@ -57,7 +70,7 @@ const VERIFY_ERROR_CODES: Record<
 /** Fields both verify commands share for reporting + the chain-anchor check. */
 type VerifyReportContext = {
   json?: boolean;
-  anchor: "offline" | "chain" | "accumulator";
+  anchor: "offline" | "chain" | "accumulator" | "checkpoints";
   univocity: string | undefined;
   logId: string | undefined;
   rpcUrl: string | undefined;
@@ -67,6 +80,12 @@ type VerifyReportContext = {
   knownAccumulator?: string | undefined;
   /** Local massif blob for stale-snapshot proof-path extension. */
   massif?: string | undefined;
+  /** Retained `.sth` chain — dir or comma list (FOR-368 Phase 3). */
+  checkpointChain?: string | undefined;
+  /** Portable top-up artifact for tile-free extension (FOR-368 Phase 3). */
+  consistencyProof?: string | undefined;
+  /** Genesis path, needed to root checkpoint-chain signatures. */
+  genesis?: string | undefined;
   /** Lower bound for the CheckpointPublished history scan (FOR-368). */
   fromBlock?: bigint | undefined;
 };
@@ -90,13 +109,92 @@ async function checkSnapshotAnchor(
     ctx.massif !== undefined
       ? new Uint8Array(readFileSync(ctx.massif))
       : undefined;
-  return checkReceiptAnchoredToSnapshot({
+  const direct = await checkReceiptAnchoredToSnapshot({
     snapshot,
     receiptCbor,
     idtimestampBe8: anchorLeaf.idtimestampBe8,
     inner: await anchorLeaf.inner(),
     recomputedPeak,
     massifBytes,
+  });
+  if (
+    direct.anchored ||
+    ctx.consistencyProof === undefined ||
+    direct.reason !== "peak_not_in_known_accumulator"
+  ) {
+    return direct;
+  }
+  // FOR-368 Phase 3: tile-free extension. The untrusted top-up artifact can
+  // only fail — a pass means the receipt's peak sits in the artifact's base
+  // accumulator AND that base folds into the TRUSTED snapshot state.
+  const artifact = decodeConsistencyProofArtifact(
+    new Uint8Array(readFileSync(ctx.consistencyProof)),
+  );
+  const viaProof = await checkReceiptAnchoredViaConsistencyProof({
+    artifact,
+    recomputedPeak,
+    leafMmrIndex: receiptLeafIndex(receiptCbor),
+    trustedSize: snapshot.size,
+    trustedAccumulator: snapshot.accumulator,
+  });
+  if (!viaProof.anchored) {
+    return { ...direct, reason: viaProof.reason ?? direct.reason };
+  }
+  const anchored: SnapshotAnchorCheck & { topUpBaseSize: bigint } = {
+    accumulator: snapshot.accumulator,
+    size: snapshot.size,
+    blockNumber: snapshot.blockNumber,
+    blockHashHex: direct.blockHashHex,
+    anchored: true,
+    matchedPeak: viaProof.matchedPeak,
+    extended: true,
+    topUpBaseSize: artifact.fromSize,
+  };
+  return anchored;
+}
+
+/**
+ * Retained checkpoint-chain anchor (FOR-368 Phase 3): fold the store's
+ * `.sth` chain — each link's accumulator computed from the previous one and
+ * its signature verified over exactly that computed payload — then match
+ * the recomputed receipt peak against ANY authenticated link. Signature
+ * trust roots in the same anchors as the offline verify (genesis-derived
+ * roots or the caller-known log key); the label-1000 delegation cert on
+ * each checkpoint resolves the sealer key under them.
+ */
+async function checkCheckpointChainAnchor(
+  ctx: VerifyReportContext,
+  genesisCbor: Uint8Array | undefined,
+  receiptCbor: Uint8Array,
+  recomputedPeak: Uint8Array,
+): Promise<CheckpointChainAnchorCheck> {
+  const rootKeys: CryptoKey[] = [];
+  if (ctx.knownLogKey !== undefined) {
+    rootKeys.push(await importKnownLogKey(ctx.knownLogKey));
+  }
+  if (genesisCbor !== undefined) {
+    const root = await decodeTrustRootFromGenesis(genesisCbor);
+    if (root instanceof CryptoKey) rootKeys.push(root);
+  }
+  if (rootKeys.length === 0) {
+    throw new Error(
+      "checkpoint-chain verification needs an ES256 trust root (--genesis or --known-log-key)",
+    );
+  }
+  const { checkpoints, files } = loadCheckpointChainFiles(ctx.checkpointChain!);
+  const chain = await verifyCheckpointChain({
+    checkpoints,
+    verifySignature: makeCheckpointSignatureVerifier(rootKeys),
+  });
+  if (!chain.ok) {
+    throw new Error(
+      `checkpoint chain did not verify (${chain.reason} at ${files[chain.at] ?? `link ${chain.at}`}): ${chain.detail}`,
+    );
+  }
+  return checkReceiptAnchoredToCheckpointChain({
+    links: chain.links,
+    recomputedPeak,
+    leafMmrIndex: receiptLeafIndex(receiptCbor),
   });
 }
 
@@ -109,12 +207,20 @@ function printAnchorRow(
   const isSnapshot = ctx.anchor === "accumulator";
   if (anchor.anchored) {
     const historical = (anchor as Partial<HistoricalAnchorFields>).historical === true;
+    const chained = anchor as Partial<CheckpointChainAnchorCheck>;
+    const topUpBaseSize = (anchor as { topUpBaseSize?: bigint }).topUpBaseSize;
     const where = isSnapshot
       ? `known accumulator peak %d/%d (read from chain at block ${anchor.blockNumber}, anchored size %s)` +
-        (anchor.extended === true ? " via proof-path extension" : "")
-      : historical
-        ? `HISTORICAL anchored accumulator peak %d/%d (size %s, block ${(anchor as unknown as HistoricalAnchorFields).anchoredAtBlock}) — consistency-gated forward by the contract (FOR-368)`
-        : "on-chain accumulator peak %d/%d at anchored size %s";
+        (topUpBaseSize !== undefined
+          ? ` via consistency-proof top-up from size ${topUpBaseSize}`
+          : anchor.extended === true
+            ? " via proof-path extension"
+            : "")
+      : ctx.anchor === "checkpoints"
+        ? `retained checkpoint-chain peak %d/%d at link sealed size %s (${chained.linkCount} links folded) — later links' signed proofs commit it forward (FOR-368)`
+        : historical
+          ? `HISTORICAL anchored accumulator peak %d/%d (size %s, block ${(anchor as unknown as HistoricalAnchorFields).anchoredAtBlock}) — consistency-gated forward by the contract (FOR-368)`
+          : "on-chain accumulator peak %d/%d at anchored size %s";
     out.print(
       `verify: anchor    ok      — receipt peak matches ${where}`,
       anchor.matchedPeak! + 1,
@@ -136,6 +242,14 @@ function printAnchorRow(
       hint =
         " — entry not anchored on-chain yet; retry after the next" +
         " checkpoint publishes";
+    } else if (anchor.reason === "receipt_newer_than_checkpoint_chain") {
+      hint =
+        " — the supplied chain ends before this entry; fetch the newer" +
+        " .sth objects and retry";
+    } else if (anchor.reason === "peak_not_in_checkpoint_chain") {
+      hint =
+        " — no retained seal covers this peak (seals are replaced within a" +
+        " massif); use --known-accumulator with a top-up, or a chain anchor";
     }
     out.print(
       "verify: anchor    failed  — %s (anchored size %s, %d peaks)%s",
@@ -394,15 +508,15 @@ async function finishVerify(
   }
 
   let anchor: (AnchorCheck & Partial<SnapshotAnchorCheck>) | undefined;
-  if ((ctx.anchor === "chain" || ctx.anchor === "accumulator") && result.ok) {
+  if (ctx.anchor !== "offline" && result.ok) {
     try {
       // Under a caller-known key there may be no genesis to locate a detached
       // peak by trust-key trial — recompute the peak from leaf + proof
-      // instead (same strategy as the anchor-only path). The snapshot check
-      // always works from the recomputed peak.
+      // instead (same strategy as the anchor-only path). The snapshot and
+      // checkpoint-chain checks always work from the recomputed peak.
       let recomputedPeak: Uint8Array | undefined;
       if (
-        (ctx.knownLogKey !== undefined || ctx.anchor === "accumulator") &&
+        (ctx.knownLogKey !== undefined || ctx.anchor !== "chain") &&
         anchorLeaf !== undefined
       ) {
         const recomputed = await recomputeReceiptPeak({
@@ -422,6 +536,18 @@ async function finishVerify(
           ctx,
           artifacts.receiptCbor,
           anchorLeaf,
+          recomputedPeak,
+        );
+      } else if (ctx.anchor === "checkpoints") {
+        if (anchorLeaf === undefined || recomputedPeak === undefined) {
+          throw new Error(
+            "cannot recompute the receipt peak for the checkpoint-chain check",
+          );
+        }
+        anchor = await checkCheckpointChainAnchor(
+          ctx,
+          artifacts.genesisCbor,
+          artifacts.receiptCbor,
           recomputedPeak,
         );
       } else {
@@ -481,7 +607,9 @@ async function finishVerify(
           ? "chain-anchored"
           : ctx.anchor === "accumulator"
             ? "accumulator-anchored"
-            : "offline",
+            : ctx.anchor === "checkpoints"
+              ? "checkpoint-chain-anchored"
+              : "offline",
       anchor,
       univocity: ctx.univocity,
       logId: ctx.logId,
@@ -511,7 +639,9 @@ async function finishVerify(
         out.out(
           ctx.anchor === "accumulator"
             ? `PASS: receipt verified offline and matched the known accumulator (anchored size ${anchor.size}, read from chain at block ${anchor.blockNumber})`
-            : `PASS: receipt verified offline and anchored on-chain (anchored size ${anchor.size})`,
+            : ctx.anchor === "checkpoints"
+              ? `PASS: receipt verified offline and anchored in the retained checkpoint chain (link sealed size ${anchor.size}; no tiles, no RPC)`
+              : `PASS: receipt verified offline and anchored on-chain (anchored size ${anchor.size})`,
         );
       } else if (ctx.knownLogKey !== undefined) {
         out.out(

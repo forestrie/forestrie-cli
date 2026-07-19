@@ -161,9 +161,20 @@ export type AnchorReport = {
   historical?: boolean;
   anchoredAtBlock?: string;
   txHash?: string;
+  /** Checkpoint-chain anchors only (FOR-368 Phase 3): links folded and the
+   * sealed size of the link that held the peak. */
+  linkCount?: number;
+  matchedLinkSize?: string;
+  /** Consistency-proof top-up (FOR-368 Phase 3): base size the untrusted
+   * artifact extended the receipt from into the trusted snapshot. */
+  topUpBaseSize?: string;
 };
 
-export type VerifyMode = "offline" | "chain-anchored" | "accumulator-anchored";
+export type VerifyMode =
+  | "offline"
+  | "chain-anchored"
+  | "accumulator-anchored"
+  | "checkpoint-chain-anchored";
 
 /** `--json` report on stdout — stable shape for demo scripting. */
 export type VerifyReport = {
@@ -233,6 +244,20 @@ export function buildVerifyReport(opts: {
       if (historical.txHash !== undefined) {
         anchor.txHash = historical.txHash;
       }
+    }
+    const chained = opts.anchor as {
+      linkCount?: number;
+      matchedLinkSize?: bigint | null;
+    };
+    if (chained.linkCount !== undefined) {
+      anchor.linkCount = chained.linkCount;
+      if (chained.matchedLinkSize !== undefined && chained.matchedLinkSize !== null) {
+        anchor.matchedLinkSize = chained.matchedLinkSize.toString();
+      }
+    }
+    const topUp = opts.anchor as { topUpBaseSize?: bigint };
+    if (topUp.topUpBaseSize !== undefined) {
+      anchor.topUpBaseSize = topUp.topUpBaseSize.toString();
     }
     report.anchor = anchor;
   }
