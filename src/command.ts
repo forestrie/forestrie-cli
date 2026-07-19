@@ -8,7 +8,7 @@ import { defineForestrieCommand } from "./commoncli.js";
 export default defineForestrieCommand({
   meta: {
     name: "forestrie",
-    version: "0.1.0",
+    version: "0.2.0",
     description:
       "Participant CLI for forestrie transparency logs (SCITT / COSE receipts; ES256 is the paved path)",
   },
