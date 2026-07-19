@@ -1,12 +1,17 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 // test/verify-fixture.ts for the same pattern).
 import {
   COSE_ALG_ES256,
+  COSE_CWT_CLAIMS,
+  coseKeyThumbprintUriP256,
   coseUnprotectedToMap,
+  CWT_IAT,
+  CWT_ISS,
+  CWT_SUB,
   decodeCoseSign1,
   encodeCoseProtectedMapBytes,
   extractAlgFromProtected,
@@ -128,14 +133,22 @@ describe("sign-statement key loading", () => {
   });
 });
 
+/** Default `sub` (ADR-0055): sha-256:<hex> of the payload bytes. */
+function expectedDefaultSub(): string {
+  return `sha-256:${createHash("sha256").update(PAYLOAD).digest("hex")}`;
+}
+
+/** Default `iss` (ADR-0055): lowercase hex of the kid bytes. */
+function expectedDefaultIss(): string {
+  return Buffer.from(expectedKid()).toString("hex");
+}
+
 describe("sign-statement build (golden path)", () => {
   test("sign then decode round-trips and verifies", async () => {
     const key = await loadEs256SigningKey(pemPath);
-    const statement = await buildSignedStatement(
-      PAYLOAD,
-      key,
-      "application/json",
-    );
+    const { statement } = await buildSignedStatement(PAYLOAD, key, {
+      contentType: "application/json",
+    });
 
     // Plain COSE Sign1: untagged array(4), protected as a plain bstr with a
     // 1-byte length (0x84 0x58 xx head) — no cbor-x tag 64.
@@ -147,11 +160,13 @@ describe("sign-statement build (golden path)", () => {
     if (decoded === null) throw new Error("unreachable");
 
     // Protected header is exactly the canonical
-    // { 1: ES256, 3: cty, 4: kid } map (encoding >= 0.2.0).
+    // { 1: ES256, 3: cty, 4: kid, 15: {1: iss, 2: sub} } map with the
+    // ADR-0055 defaults (SCITT-compliant by default, FOR-371).
     expect(decoded.protectedBstr).toEqual(
       encodeCoseProtectedMapBytes(key.kid, {
         alg: COSE_ALG_ES256,
         cty: "application/json",
+        cwtClaims: { iss: expectedDefaultIss(), sub: expectedDefaultSub() },
       }),
     );
     // Round-trip decode: alg, cty, and kid are all INSIDE the protected
@@ -178,11 +193,9 @@ describe("sign-statement build (golden path)", () => {
 
   test("tampering the protected cty invalidates the signature", async () => {
     const key = await loadEs256SigningKey(pemPath);
-    const statement = await buildSignedStatement(
-      PAYLOAD,
-      key,
-      "application/json",
-    );
+    const { statement } = await buildSignedStatement(PAYLOAD, key, {
+      contentType: "application/json",
+    });
     // Byte 6 sits inside the protected bstr ({1: alg} then the cty label);
     // the signature covers it, so any flip must fail verification.
     const tampered = new Uint8Array(statement);
@@ -196,6 +209,231 @@ describe("sign-statement build (golden path)", () => {
     expect(() => readPayloadBytes(path.join(dir, "no-such.json"))).toThrow(
       /cannot read payload file/,
     );
+  });
+});
+
+describe("sign-statement CWT claims (FOR-371)", () => {
+  test("default claims: iss = hex kid, sub = payload sha-256; reported back", async () => {
+    const key = await loadEs256SigningKey(pemPath);
+    const { statement, iss, sub } = await buildSignedStatement(PAYLOAD, key, {
+      contentType: "application/json",
+    });
+    expect(iss).toBe(expectedDefaultIss());
+    expect(sub).toBe(expectedDefaultSub());
+    const claims = protectedToMap(
+      decodeCoseSign1(statement)!.protectedBstr,
+    ).get(COSE_CWT_CLAIMS);
+    expect((claims as Map<number, unknown>).get(CWT_ISS)).toBe(iss);
+    expect((claims as Map<number, unknown>).get(CWT_SUB)).toBe(sub);
+  });
+
+  test("explicit --iss/--sub literals pass through", async () => {
+    const key = await loadEs256SigningKey(pemPath);
+    const { statement, iss, sub } = await buildSignedStatement(PAYLOAD, key, {
+      contentType: "application/json",
+      iss: "alice.example",
+      sub: "urn:artifact:widget-9",
+    });
+    expect(iss).toBe("alice.example");
+    expect(sub).toBe("urn:artifact:widget-9");
+    const claims = protectedToMap(
+      decodeCoseSign1(statement)!.protectedBstr,
+    ).get(COSE_CWT_CLAIMS) as Map<number, unknown>;
+    expect(claims.get(CWT_ISS)).toBe("alice.example");
+    expect(claims.get(CWT_SUB)).toBe("urn:artifact:widget-9");
+  });
+
+  test("--iss ckt derives the RFC 9679 COSE Key Thumbprint URI", async () => {
+    const key = await loadEs256SigningKey(pemPath);
+    const { iss } = await buildSignedStatement(PAYLOAD, key, {
+      contentType: "application/json",
+      iss: "ckt",
+    });
+    expect(iss).toBe(await coseKeyThumbprintUriP256(key.publicXY));
+    expect(iss).toStartWith("urn:ietf:params:oauth:ckt:sha-256:");
+  });
+
+  test("iat is opt-in and covered by the signature", async () => {
+    const key = await loadEs256SigningKey(pemPath);
+    const { statement } = await buildSignedStatement(PAYLOAD, key, {
+      contentType: "application/json",
+      iat: 1752868800,
+    });
+    const claims = protectedToMap(
+      decodeCoseSign1(statement)!.protectedBstr,
+    ).get(COSE_CWT_CLAIMS) as Map<number, unknown>;
+    expect(claims.get(CWT_IAT)).toBe(1752868800);
+    expect(
+      await verifyCoseSign1WithParsedKey(statement, { x, y, curve: "P-256" }),
+    ).toBe(true);
+  });
+
+  test("CLI --json reports the resolved default iss/sub", () => {
+    const result = runCli([
+      "sign-statement",
+      "--json",
+      "--key",
+      pemPath,
+      "--payload",
+      path.join(dir, "statement.json"),
+    ]);
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(report["iss"]).toBe(expectedDefaultIss());
+    expect(report["sub"]).toBe(expectedDefaultSub());
+    expect(report["iat"]).toBeUndefined();
+  });
+
+  test("CLI --iss ckt / --sub / --iat land in the signed claims", async () => {
+    const key = await loadEs256SigningKey(pemPath);
+    const result = runCliRaw([
+      "sign-statement",
+      "--key",
+      pemPath,
+      "--payload",
+      path.join(dir, "statement.json"),
+      "--iss",
+      "ckt",
+      "--sub",
+      "urn:artifact:widget-9",
+      "--iat",
+      "1752868800",
+    ]);
+    expect(result.exitCode).toBe(0);
+    const claims = protectedToMap(
+      decodeCoseSign1(result.stdout)!.protectedBstr,
+    ).get(COSE_CWT_CLAIMS) as Map<number, unknown>;
+    expect(claims.get(CWT_ISS)).toBe(
+      await coseKeyThumbprintUriP256(key.publicXY),
+    );
+    expect(claims.get(CWT_SUB)).toBe("urn:artifact:widget-9");
+    expect(claims.get(CWT_IAT)).toBe(1752868800);
+  });
+
+  test("CLI rejects a malformed --iat through the structured error path", () => {
+    const result = runCli([
+      "sign-statement",
+      "--key",
+      pemPath,
+      "--payload",
+      path.join(dir, "statement.json"),
+      "--iat",
+      "yesterday",
+    ]);
+    expect(result.exitCode).not.toBe(0);
+    // The clean reportFailure line, not a parse-time stack trace.
+    expect(result.stderr).toContain(
+      "forestrie sign-statement: --iat must be 'now' or unix seconds",
+    );
+    expect(result.stderr).not.toContain("    at ");
+  });
+
+  test("CLI --json emits the structured error report for a bad --iat", () => {
+    const result = runCli([
+      "sign-statement",
+      "--json",
+      "--key",
+      pemPath,
+      "--payload",
+      path.join(dir, "statement.json"),
+      "--iat",
+      "yesterday",
+    ]);
+    expect(result.exitCode).not.toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(report["error"]).toBe("sign_statement_failed");
+    expect(String(report["message"])).toContain("--iat must be 'now'");
+  });
+
+  test("CLI rejects a milliseconds --iat with a divide-by-1000 hint", () => {
+    const result = runCli([
+      "sign-statement",
+      "--key",
+      pemPath,
+      "--payload",
+      path.join(dir, "statement.json"),
+      "--iat",
+      "1752868800000",
+    ]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("milliseconds — divide by 1000");
+  });
+
+  test("CLI --iat now signs the resolved time and reports the same value", async () => {
+    const before = Math.floor(Date.now() / 1000);
+    const result = runCli([
+      "sign-statement",
+      "--json",
+      "--key",
+      pemPath,
+      "--payload",
+      path.join(dir, "statement.json"),
+      "--iat",
+      "now",
+    ]);
+    const after = Math.floor(Date.now() / 1000);
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    const reportedIat = report["iat"] as number;
+    expect(reportedIat).toBeGreaterThanOrEqual(before);
+    expect(reportedIat).toBeLessThanOrEqual(after);
+    const statement = new Uint8Array(
+      Buffer.from(report["statementB64"] as string, "base64"),
+    );
+    const claims = protectedToMap(
+      decodeCoseSign1(statement)!.protectedBstr,
+    ).get(COSE_CWT_CLAIMS) as Map<number, unknown>;
+    // The signed claim is the same number the report shows.
+    expect(claims.get(CWT_IAT)).toBe(reportedIat);
+  });
+
+  test("CLI rejects empty --iss and --sub instead of substituting defaults", () => {
+    for (const flag of ["--iss", "--sub"]) {
+      const result = runCli([
+        "sign-statement",
+        "--key",
+        pemPath,
+        "--payload",
+        path.join(dir, "statement.json"),
+        flag,
+        "",
+      ]);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain(`${flag} must not be empty`);
+    }
+  });
+
+  test("stdin payload derives the default sub from the piped bytes", async () => {
+    const stdinPayload = new TextEncoder().encode('{"from":"stdin"}');
+    const outPath = path.join(dir, "stdin-claims.cose");
+    const result = runCliRaw(
+      ["sign-statement", "--key", pemPath, "--payload", "-", "--out", outPath],
+      stdinPayload,
+    );
+    expect(result.exitCode).toBe(0);
+    const statement = new Uint8Array(readFileSync(outPath));
+    const claims = protectedToMap(
+      decodeCoseSign1(statement)!.protectedBstr,
+    ).get(COSE_CWT_CLAIMS) as Map<number, unknown>;
+    expect(claims.get(CWT_SUB)).toBe(
+      `sha-256:${createHash("sha256").update(stdinPayload).digest("hex")}`,
+    );
+  });
+
+  test("signing is deterministic by default (no implicit timestamps)", async () => {
+    const key = await loadEs256SigningKey(pemPath);
+    const a = await buildSignedStatement(PAYLOAD, key, {
+      contentType: "application/json",
+    });
+    const b = await buildSignedStatement(PAYLOAD, key, {
+      contentType: "application/json",
+    });
+    // ECDSA signatures are randomized; the *signed bytes* (protected +
+    // payload) must be identical, so compare the Sig_structure inputs.
+    const da = decodeCoseSign1(a.statement)!;
+    const db = decodeCoseSign1(b.statement)!;
+    expect(da.protectedBstr).toEqual(db.protectedBstr);
+    expect(da.payloadBstr).toEqual(db.payloadBstr);
   });
 });
 

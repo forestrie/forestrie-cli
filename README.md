@@ -8,7 +8,7 @@ against a forestrie log:
 | Subcommand | What it does |
 |---|---|
 | `deploy` | Deploy a univocity instance (ES256 bootstrap is the paved path) |
-| `sign-statement` | Produce a plain COSE Sign1 signed statement |
+| `sign-statement` | Produce a SCITT signed statement (plain COSE Sign1 with CWT claims) |
 | `register` | Register a signed statement via SCRAPI, download the receipt |
 | `register-grant` | Authorize a signer for a child/data log (one grant per signer) |
 | `complete-grant` | Self-create the `Forestrie-Grant` header from a checkpoint |
@@ -110,9 +110,28 @@ forestrie sign-statement \
 ```
 signed statement: plain COSE Sign1 (ES256)
   kid:       241115ab754013fcbf2e88544a369009d5d7de7f54497ad640ef28ad6237392c
+  iss:       241115ab754013fcbf2e88544a369009d5d7de7f54497ad640ef28ad6237392c
+  sub:       sha-256:9c3f8a5d0e6b17c4a2f1d8e05b6c93a7714f2e8d90ab35c6e1d47f80b92c5a13
   payload:   45 bytes (application/json)
-  statement: 173 bytes -> statement.cose
+  statement: 253 bytes -> statement.cose
 ```
+
+Statements carry SCITT CWT claims (protected COSE header label 15,
+covered by the signature). Defaults keep signing zero-config and
+deterministic; every claim is settable:
+
+- `--iss <string-or-uri>` — issuer (CWT claim 1). Default: the
+  lowercase hex kid. The keyword `ckt` derives the RFC 9679 COSE Key
+  Thumbprint URI (`urn:ietf:params:oauth:ckt:sha-256:…`) from the
+  signing key — which also means a literal issuer named `ckt` is not
+  expressible.
+- `--sub <string-or-uri>` — subject the statement speaks about (CWT
+  claim 2). Default: `sha-256:<hex>` of the payload bytes.
+- `--iat now|<unix-seconds>` — issued-at (CWT claim 6). Omitted by
+  default so repeated signing of the same payload is byte-identical.
+
+Empty `--iss`/`--sub` values are rejected rather than silently
+replaced with the defaults.
 
 ### `register`
 
