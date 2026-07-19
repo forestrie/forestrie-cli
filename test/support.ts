@@ -16,6 +16,8 @@ const CLI_ENV_VARS = [
   "GRANT_B64",
   "OWNER_ADDRESS",
   "DEPLOYER_KEY",
+  "CANOPY_OPS_ADMIN_TOKEN",
+  "ONBOARD_TOKEN",
 ];
 
 /** Run the CLI from source (`bun src/cli.ts …`) with a scrubbed env. */
