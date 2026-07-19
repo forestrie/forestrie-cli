@@ -60,16 +60,15 @@ export async function runSignStatement(
   let signed: SignedStatement;
   let kidHex: string;
   try {
+    rejectEmptyClaim("--iss", options.iss, "the default hex-kid issuer");
+    rejectEmptyClaim("--sub", options.sub, "the default payload-hash subject");
     payload = readPayloadBytes(options.payload);
     const key = await loadEs256SigningKey(options.key);
     signed = await buildSignedStatement(payload, key, {
       contentType: options.contentType,
       iss: options.iss,
       sub: options.sub,
-      iat:
-        options.iat === "now"
-          ? Math.floor(Date.now() / 1000)
-          : options.iat,
+      iat: resolveIatOption(options.iat),
     });
     kidHex = Buffer.from(key.kid).toString("hex");
     if (options.out !== undefined) {
@@ -115,6 +114,38 @@ export async function runSignStatement(
     statement.length,
     options.out ?? "stdout",
   );
+}
+
+/** Largest iat the canonical encoder accepts (4-byte CBOR uint). */
+const IAT_MAX_SECONDS = 0xffffffff;
+
+/** `--iat now` → current unix seconds; digits → bounded integer. */
+function resolveIatOption(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === "now") return Math.floor(Date.now() / 1000);
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`--iat must be 'now' or unix seconds, got '${raw}'`);
+  }
+  const seconds = Number.parseInt(raw, 10);
+  if (seconds > IAT_MAX_SECONDS) {
+    throw new Error(
+      `--iat ${raw} exceeds ${IAT_MAX_SECONDS} (unix seconds; a 13-digit value is usually milliseconds — divide by 1000)`,
+    );
+  }
+  return seconds;
+}
+
+/** An explicit empty claim is an error, never a silent default. */
+function rejectEmptyClaim(
+  flag: string,
+  value: string | undefined,
+  fallbackDescription: string,
+): void {
+  if (value === "") {
+    throw new Error(
+      `${flag} must not be empty (omit it for ${fallbackDescription})`,
+    );
+  }
 }
 
 /** Human mode: one line on stderr. `--json`: the report on stdout. */

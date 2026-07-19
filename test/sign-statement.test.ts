@@ -310,7 +310,7 @@ describe("sign-statement CWT claims (FOR-371)", () => {
     expect(claims.get(CWT_IAT)).toBe(1752868800);
   });
 
-  test("CLI rejects a malformed --iat", () => {
+  test("CLI rejects a malformed --iat through the structured error path", () => {
     const result = runCli([
       "sign-statement",
       "--key",
@@ -321,7 +321,103 @@ describe("sign-statement CWT claims (FOR-371)", () => {
       "yesterday",
     ]);
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain("--iat must be 'now' or unix seconds");
+    // The clean reportFailure line, not a parse-time stack trace.
+    expect(result.stderr).toContain(
+      "forestrie sign-statement: --iat must be 'now' or unix seconds",
+    );
+    expect(result.stderr).not.toContain("    at ");
+  });
+
+  test("CLI --json emits the structured error report for a bad --iat", () => {
+    const result = runCli([
+      "sign-statement",
+      "--json",
+      "--key",
+      pemPath,
+      "--payload",
+      path.join(dir, "statement.json"),
+      "--iat",
+      "yesterday",
+    ]);
+    expect(result.exitCode).not.toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(report["error"]).toBe("sign_statement_failed");
+    expect(String(report["message"])).toContain("--iat must be 'now'");
+  });
+
+  test("CLI rejects a milliseconds --iat with a divide-by-1000 hint", () => {
+    const result = runCli([
+      "sign-statement",
+      "--key",
+      pemPath,
+      "--payload",
+      path.join(dir, "statement.json"),
+      "--iat",
+      "1752868800000",
+    ]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("milliseconds — divide by 1000");
+  });
+
+  test("CLI --iat now signs the resolved time and reports the same value", async () => {
+    const before = Math.floor(Date.now() / 1000);
+    const result = runCli([
+      "sign-statement",
+      "--json",
+      "--key",
+      pemPath,
+      "--payload",
+      path.join(dir, "statement.json"),
+      "--iat",
+      "now",
+    ]);
+    const after = Math.floor(Date.now() / 1000);
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    const reportedIat = report["iat"] as number;
+    expect(reportedIat).toBeGreaterThanOrEqual(before);
+    expect(reportedIat).toBeLessThanOrEqual(after);
+    const statement = new Uint8Array(
+      Buffer.from(report["statementB64"] as string, "base64"),
+    );
+    const claims = protectedToMap(
+      decodeCoseSign1(statement)!.protectedBstr,
+    ).get(COSE_CWT_CLAIMS) as Map<number, unknown>;
+    // The signed claim is the same number the report shows.
+    expect(claims.get(CWT_IAT)).toBe(reportedIat);
+  });
+
+  test("CLI rejects empty --iss and --sub instead of substituting defaults", () => {
+    for (const flag of ["--iss", "--sub"]) {
+      const result = runCli([
+        "sign-statement",
+        "--key",
+        pemPath,
+        "--payload",
+        path.join(dir, "statement.json"),
+        flag,
+        "",
+      ]);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain(`${flag} must not be empty`);
+    }
+  });
+
+  test("stdin payload derives the default sub from the piped bytes", async () => {
+    const stdinPayload = new TextEncoder().encode('{"from":"stdin"}');
+    const outPath = path.join(dir, "stdin-claims.cose");
+    const result = runCliRaw(
+      ["sign-statement", "--key", pemPath, "--payload", "-", "--out", outPath],
+      stdinPayload,
+    );
+    expect(result.exitCode).toBe(0);
+    const statement = new Uint8Array(readFileSync(outPath));
+    const claims = protectedToMap(
+      decodeCoseSign1(statement)!.protectedBstr,
+    ).get(COSE_CWT_CLAIMS) as Map<number, unknown>;
+    expect(claims.get(CWT_SUB)).toBe(
+      `sha-256:${createHash("sha256").update(stdinPayload).digest("hex")}`,
+    );
   });
 
   test("signing is deterministic by default (no implicit timestamps)", async () => {
