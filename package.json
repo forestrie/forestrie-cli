@@ -21,7 +21,7 @@
     "@forestrie/cli-kit": "^0.1.0",
     "@forestrie/delegation-cose": "^0.1.4",
     "@forestrie/deploy-core": "^0.6.0",
-    "@forestrie/encoding": "^0.3.0",
+    "@forestrie/encoding": "^0.5.0",
     "@forestrie/grant-builder": "^0.1.2",
     "@forestrie/merklelog": "^0.1.1",
     "@forestrie/receipt-verify": "^0.6.2",

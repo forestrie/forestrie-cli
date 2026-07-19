@@ -15,8 +15,13 @@
  * consumers (any SCRAPI client) accept — no cbor-x tag 64 re-encode
  * workaround is needed now that no unprotected header is merged in.
  */
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { COSE_ALG_ES256, signCoseSign1Statement } from "@forestrie/encoding";
+import {
+  COSE_ALG_ES256,
+  coseKeyThumbprintUriP256,
+  signCoseSign1Statement,
+} from "@forestrie/encoding";
 import { errorMessage, type Es256SigningKey } from "./sign-statement-key.js";
 
 /** COSE header label for content type (RFC 9052 §3.1) — protected. */
@@ -38,25 +43,75 @@ export function readPayloadBytes(pathOrDash: string): Uint8Array {
   }
 }
 
+/** `--iss` keyword deriving the RFC 9679 COSE Key Thumbprint URI. */
+export const ISS_CKT_KEYWORD = "ckt";
+
+/** Statement content type plus CWT claims inputs (FOR-371). */
+export type SignStatementBuildOptions = {
+  /** COSE content type header value (label 3, protected). */
+  contentType: string;
+  /**
+   * Issuer (CWT claim 1): literal StringOrURI, or {@link ISS_CKT_KEYWORD}
+   * to derive the RFC 9679 thumbprint URI from the signing key.
+   * Default: lowercase hex of the kid bytes (devdocs ADR-0055).
+   */
+  iss?: string | undefined;
+  /**
+   * Subject (CWT claim 2): issuer-scoped StringOrURI.
+   * Default: `sha-256:<hex>` of the payload bytes.
+   */
+  sub?: string | undefined;
+  /** Issued-at (CWT claim 6), seconds since epoch. Omitted by default. */
+  iat?: number | undefined;
+};
+
+/** A signed statement plus the claims that were actually bound into it. */
+export type SignedStatement = {
+  /** CBOR COSE Sign1 bytes (untagged array(4)). */
+  statement: Uint8Array;
+  /** Resolved issuer (CWT claim 1). */
+  iss: string;
+  /** Resolved subject (CWT claim 2). */
+  sub: string;
+  /** Issued-at (CWT claim 6), when requested. */
+  iat?: number;
+};
+
 /**
  * Sign `payload` as a plain COSE Sign1 signed statement.
  *
- * Protected header carries `{1: ES256, 3: contentType, 4: kid}`; the
- * unprotected header is empty. The signature covers alg and cty (they are
- * inside the protected bstr in the Sig_structure).
+ * Protected header carries `{1: ES256, 3: contentType, 4: kid, 15: CWT
+ * claims}` (SCITT signed statement, FOR-371); the unprotected header is
+ * empty. The signature covers everything interpretable — alg, cty, and the
+ * claims are all inside the protected bstr in the Sig_structure.
  *
  * @param payload - Statement payload bytes
  * @param key - Loaded ES256 signing key (kid = first 32 bytes of `x||y`)
- * @param contentType - COSE content type header value (label 3, protected)
- * @returns CBOR COSE Sign1 bytes (untagged array(4))
+ * @param options - Content type and claims; iss/sub default per ADR-0055
+ * @returns Statement bytes plus the resolved iss/sub (and iat when set)
  */
 export async function buildSignedStatement(
   payload: Uint8Array,
   key: Es256SigningKey,
-  contentType: string,
-): Promise<Uint8Array> {
-  return signCoseSign1Statement(payload, key.kid, key.privateKey, {
-    alg: COSE_ALG_ES256,
-    cty: contentType,
-  });
+  options: SignStatementBuildOptions,
+): Promise<SignedStatement> {
+  const iss =
+    options.iss === ISS_CKT_KEYWORD
+      ? await coseKeyThumbprintUriP256(key.publicXY)
+      : (options.iss ??
+        Buffer.from(key.kid).toString("hex"));
+  const sub =
+    options.sub ??
+    `sha-256:${createHash("sha256").update(payload).digest("hex")}`;
+  const statement = await signCoseSign1Statement(
+    payload,
+    key.kid,
+    key.privateKey,
+    {
+      alg: COSE_ALG_ES256,
+      cty: options.contentType,
+      cwtClaims: { iss, sub, ...(options.iat !== undefined && { iat: options.iat }) },
+    },
+  );
+  return { statement, iss, sub, ...(options.iat !== undefined && { iat: options.iat }) };
 }

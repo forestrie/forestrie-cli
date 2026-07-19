@@ -6,7 +6,7 @@ export default defineForestrieCommand({
   meta: {
     name: "sign-statement",
     description:
-      "Produce a plain COSE Sign1 signed statement (ES256; alg, content type and kid all in the protected header; kid = first 32 bytes of x||y) [FOR-341]",
+      "Produce a SCITT signed statement: plain COSE Sign1 (ES256) with alg, content type, kid and CWT claims (iss/sub, label 15) all in the protected header [FOR-341, FOR-371]",
   },
   args: {
     key: {
@@ -25,6 +25,23 @@ export default defineForestrieCommand({
       type: "string",
       description: "Payload content type (protected COSE header, label 3)",
       default: "application/json",
+    },
+    iss: {
+      type: "string",
+      description:
+        "Issuer (CWT claim 1, protected label 15): a StringOrURI, or 'ckt' for the RFC 9679 key-thumbprint URI (default: hex kid)",
+    },
+    sub: {
+      type: "string",
+      description:
+        "Subject (CWT claim 2, protected label 15): what the statement speaks about (default: sha-256:<hex> of the payload)",
+      valueHint: "string-or-uri",
+    },
+    iat: {
+      type: "string",
+      description:
+        "Issued-at (CWT claim 6): unix seconds or 'now' (default: omitted, keeping output deterministic)",
+      valueHint: "now|seconds",
     },
     out: {
       type: "string",
