@@ -39,10 +39,15 @@ describe("decodeCheckpointPublishedData (FOR-368)", () => {
 
   test("rejects truncated data", () => {
     const good = encodeData([new Uint8Array(32).fill(1)], 5n);
-    // Cut into the accumulator element region (peak word + trailing words).
+    // Keep the accumulator LENGTH word but cut its element (and the
+    // trailing grantPath word): trips the per-peak truncation guard.
     expect(() =>
-      decodeCheckpointPublishedData(good.slice(0, good.length - 192)),
-    ).toThrow(/truncated/);
+      decodeCheckpointPublishedData(good.slice(0, good.length - 128)),
+    ).toThrow(/truncated at peak 0/);
+    // Cutting the length word itself trips the head-word guard instead.
+    expect(() =>
+      decodeCheckpointPublishedData(good.slice(0, good.length - 256)),
+    ).toThrow(/too short/);
   });
 
   test("topic0 is the precomputed event signature hash", () => {
