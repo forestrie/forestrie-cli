@@ -12,13 +12,16 @@ describe("forestrie --help", () => {
     }
   });
 
+  // Spawns `forestrie <cmd> --help` once per subcommand — real subprocess
+  // cold-starts that scale with the command set, so the default 5s per-test
+  // timeout is too tight on a loaded CI runner. Give it headroom.
   test("subcommand --help exits 0 and names its FOR-34x issue", () => {
     for (const [name, spec] of Object.entries(SUBCOMMANDS)) {
       const result = runCli([name, "--help"]);
       expect(result.exitCode).toBe(0);
       expect(result.stdout + result.stderr).toContain(spec.issue);
     }
-  });
+  }, 30_000);
 
   test("verify help notes ES256 and offline", () => {
     const result = runCli(["verify", "--help"]);
