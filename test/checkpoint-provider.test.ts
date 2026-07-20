@@ -94,6 +94,17 @@ describe("foldProofChain + provider parity (FOR-418)", () => {
     expect(accHex(links[1]!)).toEqual([toHex(fx.peak7)]);
   });
 
+  test("each link carries its raw proof — freshen's climb material, one pass", async () => {
+    const proofs = chainProofs(fx);
+    const links = await foldProofChain(proofs);
+    // `links.map((l) => l.proof)` IS freshen's ordered `consistencyProofs`.
+    expect(links.map((l) => l.proof)).toEqual(proofs);
+    expect(links.map((l) => l.proof.treeSize2)).toEqual([3n, 7n]);
+    expect(links[1]!.proof.paths.map((p) => p.map(toHex))).toEqual([
+      [toHex(fx.node5)],
+    ]);
+  });
+
   test("PARITY: `.sth` and calldata read the SAME chain to identical accumulators", async () => {
     const proofs = chainProofs(fx);
     // .sth source: one signed checkpoint per link
@@ -117,6 +128,12 @@ describe("foldProofChain + provider parity (FOR-418)", () => {
 
     expect(calldataLinks.map(accHex)).toEqual(sthLinks.map(accHex));
     expect(calldataLinks.map(accHex)).toEqual([[toHex(fx.peak)], [toHex(fx.peak7)]]);
+    // PARITY extends to the raw climb paths (what freshen consumes), not just
+    // the folded accumulators.
+    const pathsHex = (links: CheckpointLink[]) =>
+      links.map((l) => l.proof.paths.map((p) => p.map(toHex)));
+    expect(pathsHex(calldataLinks)).toEqual(pathsHex(sthLinks));
+    expect(pathsHex(sthLinks)).toEqual([[], [[toHex(fx.node5)]]]);
     // sourceRef carried from the tx hash on the calldata path
     expect(calldataLinks[1]!.sourceRef).toBe("0x" + "22".repeat(32));
   });

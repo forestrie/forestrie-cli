@@ -19,6 +19,13 @@
  * root against those seals (Phase 4). Both sources decode to the identical
  * `CheckpointConsistencyProof` shape and fold identically — the parity that
  * makes them interchangeable (see the tests).
+ *
+ * Each link also carries the raw `proof` it was folded from (its per-peak
+ * `paths`), so a consumer that needs the climb material rather than just the
+ * folded accumulator — `resolve-receipt`'s freshen (Phase 3c), which extends an
+ * old inclusion path to the latest peak — gets it in one pass with no re-decode
+ * and no second RPC sweep: `links.map((l) => l.proof)` is exactly freshen's
+ * ordered `consistencyProofs`. Consumers that only fold (verify) ignore it.
  */
 import {
   computeCheckpointAccumulator,
@@ -54,6 +61,10 @@ export type CheckpointLink = {
   treeSize2: bigint;
   /** Folded accumulator at `treeSize2` (descending-height / contract order). */
   accumulator: Uint8Array[];
+  /** The raw consistency proof this link was folded from — its per-peak `paths`
+   * (the tile-free climb material). Retained so a path-extending consumer
+   * (freshen) gets it without a re-decode; folding consumers ignore it. */
+  proof: CheckpointConsistencyProof;
   /** The signature material to verify this link's accumulator, when directly
    * signed (see {@link CheckpointSeal}). The provider does NOT verify it. */
   seal?: CheckpointSeal;
@@ -103,6 +114,7 @@ export async function foldProofChain(
       treeSize1: p.treeSize1,
       treeSize2: p.treeSize2,
       accumulator,
+      proof: p,
     };
     const seal = opts.seals?.[i];
     if (seal !== undefined) link.seal = seal;
