@@ -58,6 +58,9 @@ export type CreateReceiptOptions = ForestrieCommonOptions & {
   /** Rewrite the `--receipt` file in place with the freshened receipt (freshen
    * only; mutually exclusive with `--out`). */
   inPlace: boolean;
+  /** Trusted accumulator snapshot (`fetch-accumulator` output) to bind the
+   * freshened state against — the accumulator trust rung, freshen only. */
+  knownAccumulator: string | undefined;
 };
 
 function parseMMRIndex(raw: string): bigint {
@@ -84,6 +87,7 @@ export function parseCreateReceiptOptions(
   const entryId = optionalStringOption(args, "entry-id");
   const out = optionalStringOption(args, "out");
   const inPlace = args["in-place"] === true;
+  const knownAccumulator = optionalStringOption(args, "known-accumulator");
   const common = parseForestrieCommonOptions(args);
 
   const base = {
@@ -99,6 +103,7 @@ export function parseCreateReceiptOptions(
     entryId,
     out,
     inPlace,
+    knownAccumulator,
   };
 
   if (inPlace && out !== undefined) {
@@ -114,6 +119,11 @@ export function parseCreateReceiptOptions(
   if (inPlace && receipt === undefined) {
     throw new Error(
       "--in-place only applies to freshen (--receipt) — there is no receipt file to rewrite",
+    );
+  }
+  if (knownAccumulator !== undefined && receipt === undefined) {
+    throw new Error(
+      "--known-accumulator only applies to freshen (--receipt)",
     );
   }
 

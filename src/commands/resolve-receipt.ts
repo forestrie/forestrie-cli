@@ -84,6 +84,12 @@ export default defineForestrieCommand({
       description:
         "Rewrite the --receipt file with the freshened receipt (freshen only; mutually exclusive with --out)",
     },
+    "known-accumulator": {
+      type: "string",
+      description:
+        "Trusted accumulator snapshot (fetch-accumulator output) — bind the freshened state to it (freshen only; the accumulator trust rung, no genesis)",
+      valueHint: "path",
+    },
   },
   run: defineCommandRunner(parseCreateReceiptOptions, runCreateReceipt),
 });

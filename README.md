@@ -238,35 +238,49 @@ forestrie resolve-receipt \
   --in-place
 
 # from on-chain publishCheckpoint calldata (known-key rung); calldata carries
-# no peak receipts, so the latest .sth is supplied for emission
+# no peak receipts, so the latest .sth is supplied for emission, and
+# --known-accumulator binds the folded state to a trusted snapshot
 forestrie resolve-receipt \
   --receipt stale.cbor \
   --rpc-url $RPC_URL --univocity <address> --log-id <id> \
-  --checkpoint latest.sth \
+  --checkpoint latest.sth --known-accumulator accumulator.cbor \
   --committed-grant-file grant.cbor --entry-id <hex> \
   --out fresh.cbor
 ```
 
-`--in-place` rewrites the `--receipt` file (mutually exclusive with `--out`).
-The freshened receipt is a native receipt — it verifies with plain `verify`
-against the current state, and freshen fails closed (it never emits a receipt
-whose recomputed peak does not match the folded latest accumulator).
+`--in-place` rewrites the `--receipt` file (mutually exclusive with `--out`;
+crash-safe — written to a sibling temp then atomically renamed). The freshened
+receipt is a native receipt that verifies with plain `verify` against the
+current state, and freshen fails closed (it never emits a receipt whose
+recomputed peak does not match the folded latest accumulator).
 
-#### Freshen trust ladder (which source to reach for)
+#### Bind the freshened state (`--known-accumulator`)
 
-Both sources fold the same consistency-proof chain; they differ in what
-authenticates the latest state:
+Both sources fold a consistency-proof chain to the latest accumulator, but the
+**source authenticates that state differently**, and the emission checkpoint's
+role differs:
 
-1. **`--checkpoint-chain` (retained `.sth`)** — the checkpoints are
-   sealer-signed and their delegation chains resolve to the genesis trust
-   root, so the freshened receipt is **genesis-verifiable** offline. Reach for
-   this by default.
-2. **calldata (`--rpc-url`/`--univocity`/`--log-id` + `--checkpoint`)** — the
-   climb material is read trustlessly from the `publishCheckpoint` transactions
-   (on-chain consistency gating), but emission borrows the supplied latest
-   `.sth`'s signature — the **known-key rung**: trust flows from the sealer key
-   in that checkpoint, not from a genesis walk. Use it when you have RPC access
-   but not the full retained `.sth` history.
+- **`--checkpoint-chain` (retained `.sth`)** is the safer source because the
+  checkpoint the receipt is emitted under **is the chain's own tail** — there is
+  no separate artifact to mismatch, and the sealer-signed, genesis-rooted `.sth`
+  makes the freshened receipt **genesis-verifiable** offline. Reach for this by
+  default.
+- **calldata (`--rpc-url`/`--univocity`/`--log-id` + `--checkpoint`)** reads the
+  climb material trustlessly from the `publishCheckpoint` transactions (the fold
+  is cross-checked against the on-chain `CheckpointPublished` accumulator), but
+  emission borrows a **separately-supplied** latest `.sth` for its signature.
+  This is the **known-key rung**.
+
+Because the calldata `--checkpoint` is a separate input, pass
+**`--known-accumulator <snapshot>`** (a `fetch-accumulator` capture) to bind the
+freshened state to a trusted accumulator: freshen asserts the folded latest
+accumulator **equals your snapshot at the same size**, failing closed on any
+disagreement. This is the accumulator trust rung — a chain-captured `logState`
+is a direct, falsifiable attestation of the current state, stronger than a
+genesis walk for "is this the real log," and it needs no genesis (non-root logs
+would otherwise have to walk the grant hierarchy to find it). It also catches a
+lying/stale RPC on the calldata path, since the snapshot is an independent
+read. `--known-accumulator` works with either source.
 
 ### `decode-receipt`
 
