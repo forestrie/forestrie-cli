@@ -7,38 +7,52 @@ import {
 } from "./common.js";
 
 /**
- * `forestrie create-receipt` — FOR-345.
+ * `forestrie resolve-receipt` (alias `create-receipt`) — FOR-345 / FOR-418.
  *
- * Two anchor modes:
- * - `checkpoint`: attach the locally-rebuilt leaf→peak path to the
- *   pre-signed peak receipt from a format-v3 checkpoint —
- *   verify-equivalent with an API-issued receipt, no operator call.
- * - `chain`: verify the computed peak against the on-chain accumulator
- *   (`--univocity` + `--log-id` + `--rpc-url`) — no operator, only the
- *   contract (FOR-334 variant B; plan-2607-15 phase 2).
+ * ONE receipt producer; the source is chosen by the flags present, not a
+ * `--mode` (plan-2607-32 D3). Three sources, mutually exclusive:
  *
- * Leaf addressing (exactly one):
- * - `--mmr-index`: the leaf's MMR index directly;
- * - `--entry-id`: the permanent SCRAPI entry id (32 hex chars =
- *   idtimestamp_be8 || mmrIndex_be8) — the mmrIndex is decoded from its
- *   second half, no index-region lookup needed.
+ * - **tiles** (`--massif`): rebuild the leaf→peak path from a massif blob and
+ *   either attach it to a checkpoint's pre-signed peak receipt (`--checkpoint`,
+ *   offline) or verify the computed peak against the on-chain accumulator
+ *   (`--univocity` + `--log-id` + `--rpc-url`, report-only). Leaf addressing:
+ *   exactly one of `--mmr-index` / `--entry-id`.
+ * - **`.sth` chain** (`--checkpoint-chain`): tile-free FRESHEN of a stale
+ *   `--receipt` — fold the retained checkpoint chain, extend the receipt's old
+ *   path to the latest peak, re-emit under the latest `.sth`. Genesis-verifiable.
+ *
+ * Freshen (`--receipt` + a tile-free source) recomputes the leaf value exactly
+ * as `verify-grant` does, so it takes the same grant inputs: `--committed-grant`
+ * / `--committed-grant-file` + `--entry-id`.
+ *
+ * Multiple sources → error ("choose one source"); an under-specified source →
+ * error naming what's missing. No implicit pick — every ambiguous invocation
+ * fails closed with guidance.
  */
 export type CreateReceiptOptions = ForestrieCommonOptions & {
-  anchor: "checkpoint" | "chain";
-  /** Massif .log blob holding the leaf and its proof nodes. */
-  massif: string;
-  /** MMR index of the leaf to prove (`--mmr-index` addressing). */
+  anchor: "checkpoint" | "chain" | "freshen";
+  /** Tiles source: massif .log blob holding the leaf and its proof nodes. */
+  massif: string | undefined;
+  /** MMR index of the leaf to prove (`--mmr-index` addressing, tiles source). */
   mmrIndex: bigint | undefined;
-  /** Permanent SCRAPI entry id (`--entry-id` addressing). */
+  /** Permanent SCRAPI entry id (leaf addressing / freshen idtimestamp). */
   entryId: string | undefined;
-  /** Checkpoint (.sth) with pre-signed peak receipts (checkpoint mode). */
+  /** Checkpoint (.sth) with pre-signed peak receipts (tiles + `--checkpoint`). */
   checkpoint: string | undefined;
-  /** ImutableUnivocity contract address (chain mode). */
+  /** ImutableUnivocity contract address (tiles + chain-anchored mode). */
   univocity: string | undefined;
   /** Log id for the on-chain accumulator read (chain mode). */
   logId: string | undefined;
   /** JSON-RPC endpoint (`RPC_URL`, chain mode). */
   rpcUrl: string | undefined;
+  /** Stale receipt to freshen (`.sth`-chain / calldata source). */
+  receipt: string | undefined;
+  /** Retained `.sth` checkpoint chain (dir or comma-separated files). */
+  checkpointChain: string | undefined;
+  /** Committed grant, base64 (freshen leaf-value source). */
+  committedGrant: string | undefined;
+  /** Committed grant CBOR file (freshen leaf-value source). */
+  committedGrantFile: string | undefined;
   /** Receipt output path (default: stdout). */
   out: string | undefined;
 };
@@ -55,8 +69,67 @@ function parseMMRIndex(raw: string): bigint {
 export function parseCreateReceiptOptions(
   args: LooseParsedArgs,
 ): CreateReceiptOptions {
-  const rawMMRIndex = optionalStringOption(args, "mmr-index");
+  const massif = optionalStringOption(args, "massif");
+  const receipt = optionalStringOption(args, "receipt");
+  const checkpointChain = optionalStringOption(args, "checkpoint-chain");
+  const checkpoint = optionalStringOption(args, "checkpoint");
+  const univocity = optionalStringOption(args, "univocity");
+  const logId = optionalStringOption(args, "log-id");
+  const rpcUrl = optionalStringOption(args, "rpc-url", "RPC_URL");
+  const committedGrant = optionalStringOption(args, "committed-grant");
+  const committedGrantFile = optionalStringOption(args, "committed-grant-file");
   const entryId = optionalStringOption(args, "entry-id");
+  const out = optionalStringOption(args, "out");
+  const common = parseForestrieCommonOptions(args);
+
+  const base = {
+    massif,
+    checkpoint,
+    univocity,
+    logId,
+    rpcUrl,
+    receipt,
+    checkpointChain,
+    committedGrant,
+    committedGrantFile,
+    entryId,
+    out,
+  };
+
+  // Source selection is exclusive: tiles (--massif) vs freshen (--receipt).
+  if (massif !== undefined && receipt !== undefined) {
+    throw new Error(
+      "choose one source: --massif (build from tiles) or --receipt (freshen a stale receipt) — not both",
+    );
+  }
+
+  // --- FRESHEN source (--receipt + a tile-free chain) ---
+  if (receipt !== undefined) {
+    if (checkpointChain === undefined) {
+      throw new Error(
+        "freshen (--receipt) needs a tile-free source: --checkpoint-chain <dir|files>",
+      );
+    }
+    if (committedGrant === undefined && committedGrantFile === undefined) {
+      throw new Error(
+        "freshen needs the committed grant to recompute the leaf value: --committed-grant or --committed-grant-file",
+      );
+    }
+    if (committedGrantFile !== undefined && entryId === undefined) {
+      throw new Error(
+        "freshen from a raw grant file needs the SCRAPI entry id (idtimestamp): --entry-id",
+      );
+    }
+    return { ...common, ...base, anchor: "freshen", mmrIndex: undefined };
+  }
+
+  // --- TILES source (--massif) ---
+  if (massif === undefined) {
+    throw new Error(
+      "a source is required: --massif (build from tiles) or --receipt + --checkpoint-chain (freshen)",
+    );
+  }
+  const rawMMRIndex = optionalStringOption(args, "mmr-index");
   if ((rawMMRIndex === undefined) === (entryId === undefined)) {
     throw new Error(
       "exactly one of --mmr-index or --entry-id is required to address the leaf",
@@ -65,12 +138,7 @@ export function parseCreateReceiptOptions(
   const mmrIndex =
     rawMMRIndex !== undefined ? parseMMRIndex(rawMMRIndex) : undefined;
 
-  const checkpoint = optionalStringOption(args, "checkpoint");
-  const univocity = optionalStringOption(args, "univocity");
-  const logId = optionalStringOption(args, "log-id");
-  const rpcUrl = optionalStringOption(args, "rpc-url", "RPC_URL");
-
-  let anchor: CreateReceiptOptions["anchor"];
+  let anchor: "checkpoint" | "chain";
   if (checkpoint !== undefined && univocity === undefined) {
     anchor = "checkpoint";
   } else if (checkpoint === undefined && univocity !== undefined) {
@@ -87,15 +155,10 @@ export function parseCreateReceiptOptions(
   }
 
   return {
-    ...parseForestrieCommonOptions(args),
+    ...common,
+    ...base,
     anchor,
     massif: requiredStringOption(args, "massif"),
     mmrIndex,
-    entryId,
-    checkpoint,
-    univocity,
-    logId,
-    rpcUrl,
-    out: optionalStringOption(args, "out"),
   };
 }

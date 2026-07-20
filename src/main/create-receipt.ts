@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import { writeFileSync } from "node:fs";
 import type { Out } from "@forestrie/cli-kit/reporting";
 import type { CreateReceiptOptions } from "../options/create-receipt.js";
@@ -11,6 +12,12 @@ import {
   loadCreateReceiptArtifacts,
   type CreateReceiptArtifacts,
 } from "../lib/create-receipt-inputs.js";
+import { loadVerifyArtifacts } from "../lib/verify-inputs.js";
+import { loadCheckpointChainFiles } from "../lib/verify-checkpoint-chain.js";
+import {
+  freshenFromSthChain,
+  type FreshenResult,
+} from "../lib/resolve-receipt-freshen.js";
 import {
   ChainVerifyFailure,
   verifyChainAnchored,
@@ -352,6 +359,11 @@ export async function runCreateReceipt(
   out: Out,
   options: CreateReceiptOptions,
 ): Promise<void> {
+  if (options.anchor === "freshen") {
+    await runFreshen(out, options);
+    return;
+  }
+
   let artifacts: CreateReceiptArtifacts;
   try {
     artifacts = loadCreateReceiptArtifacts(options);
@@ -461,6 +473,158 @@ export async function runCreateReceipt(
   );
   out.print(
     "create-receipt: receipt    — %d bytes -> %s",
+    receiptCbor.length,
+    options.out ?? "stdout",
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Freshen source (FOR-418 Phase 3c): tile-free re-anchor of a stale --receipt
+// against a retained .sth checkpoint chain. New surface, so its report uses the
+// forward name `resolve-receipt`; the tile-mode reports keep `create-receipt`
+// for contract stability.
+// ---------------------------------------------------------------------------
+
+/** `--json` freshen success report — the shape is a contract. */
+export type ResolveReceiptFreshenReport = {
+  command: "resolve-receipt";
+  source: "checkpoint-chain";
+  leaf: { mmrIndex: string; entryId?: string };
+  chain: { links: number; sealedSize: string; sources: string[] };
+  proof: { length: number };
+  receiptBytes: number;
+  out?: string;
+  receiptB64?: string;
+};
+
+/** `--json` freshen operational-error shape. */
+export type ResolveReceiptFreshenErrorReport = {
+  error: "resolve_receipt_freshen_failed";
+  command: "resolve-receipt";
+  source: "checkpoint-chain";
+  stage: "input" | "freshen";
+  message: string;
+};
+
+function reportFreshenError(
+  out: Out,
+  options: CreateReceiptOptions,
+  stage: "input" | "freshen",
+  err: unknown,
+): void {
+  const message = err instanceof Error ? err.message : String(err);
+  if (options.json) {
+    const report: ResolveReceiptFreshenErrorReport = {
+      error: "resolve_receipt_freshen_failed",
+      command: "resolve-receipt",
+      source: "checkpoint-chain",
+      stage,
+      message,
+    };
+    out.out(JSON.stringify(report, null, 2));
+  } else {
+    out.warn("forestrie resolve-receipt: %s: %s", stage, message);
+  }
+  process.exitCode = 1;
+}
+
+/**
+ * Freshen a stale `--receipt` against a retained `--checkpoint-chain` (`.sth`).
+ * Reuses `verify-grant`'s grant/entry-id loaders (the leaf value is recomputed
+ * identically), folds the chain via the `.sth` provider, extends the receipt's
+ * old path to the latest peak, and re-emits under the latest checkpoint. The
+ * result verifies with `verify --genesis` against the current state.
+ */
+async function runFreshen(
+  out: Out,
+  options: CreateReceiptOptions,
+): Promise<void> {
+  let loaded: ReturnType<typeof loadVerifyArtifacts>;
+  let chain: ReturnType<typeof loadCheckpointChainFiles>;
+  try {
+    loaded = loadVerifyArtifacts({
+      genesis: undefined,
+      // Options parsing guarantees these in freshen mode.
+      receipt: options.receipt!,
+      committedGrant: options.committedGrant,
+      committedGrantFile: options.committedGrantFile,
+      entryId: options.entryId,
+    });
+    chain = loadCheckpointChainFiles(options.checkpointChain!);
+  } catch (err) {
+    reportFreshenError(out, options, "input", err);
+    return;
+  }
+
+  let result: FreshenResult;
+  try {
+    result = await freshenFromSthChain({
+      oldReceiptBytes: loaded.receiptCbor,
+      grant: loaded.grant,
+      idtimestampBe8: loaded.idtimestampBe8,
+      checkpoints: chain.checkpoints,
+      sourceRefs: chain.files.map((f) => basename(f)),
+    });
+  } catch (err) {
+    reportFreshenError(out, options, "freshen", err);
+    return;
+  }
+
+  const { receiptCbor, details } = result;
+  try {
+    if (options.out !== undefined) {
+      writeFileSync(options.out, receiptCbor);
+    }
+  } catch (err) {
+    reportFreshenError(out, options, "input", err);
+    return;
+  }
+
+  if (options.json) {
+    const report: ResolveReceiptFreshenReport = {
+      command: "resolve-receipt",
+      source: "checkpoint-chain",
+      leaf: {
+        mmrIndex: details.leafMmrIndex.toString(10),
+        ...(options.entryId !== undefined ? { entryId: options.entryId } : {}),
+      },
+      chain: {
+        links: details.chainLinks,
+        sealedSize: details.sealedSize.toString(10),
+        sources: details.sourceRefs,
+      },
+      proof: { length: details.proofLength },
+      receiptBytes: receiptCbor.length,
+      ...(options.out !== undefined
+        ? { out: options.out }
+        : { receiptB64: Buffer.from(receiptCbor).toString("base64") }),
+    };
+    out.out(JSON.stringify(report, null, 2));
+    return;
+  }
+
+  if (options.out === undefined) {
+    // Raw CBOR to stdout (pipeable); narration stays on stderr.
+    writeFileSync(1, receiptCbor);
+  }
+  out.print(
+    "resolve-receipt: freshen    — stale receipt re-anchored tile-free",
+  );
+  out.print(
+    "resolve-receipt: leaf       — mmrIndex %s",
+    details.leafMmrIndex.toString(10),
+  );
+  out.print(
+    "resolve-receipt: chain      — %d .sth link(s) -> sealed size %s",
+    details.chainLinks,
+    details.sealedSize.toString(10),
+  );
+  out.print(
+    "resolve-receipt: proof      — %d node(s) in the extended path",
+    details.proofLength,
+  );
+  out.print(
+    "resolve-receipt: receipt    — %d bytes -> %s",
     receiptCbor.length,
     options.out ?? "stdout",
   );

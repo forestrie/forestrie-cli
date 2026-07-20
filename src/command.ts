@@ -31,8 +31,11 @@ export default defineForestrieCommand({
       import("./commands/onboard-genesis.js").then((m) => m.default),
     "complete-grant": () =>
       import("./commands/complete-grant.js").then((m) => m.default),
+    "resolve-receipt": () =>
+      import("./commands/resolve-receipt.js").then((m) => m.default),
+    // Non-breaking alias for the pre-FOR-418 name (plan-2607-32 D5).
     "create-receipt": () =>
-      import("./commands/create-receipt.js").then((m) => m.default),
+      import("./commands/resolve-receipt.js").then((m) => m.default),
     "decode-receipt": () =>
       import("./commands/decode-receipt.js").then((m) => m.default),
     verify: () => import("./commands/verify.js").then((m) => m.default),
