@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { Out } from "@forestrie/cli-kit/reporting";
 import type { CreateReceiptOptions } from "../options/create-receipt.js";
 import {
@@ -14,6 +14,11 @@ import {
 } from "../lib/create-receipt-inputs.js";
 import { loadVerifyArtifacts } from "../lib/verify-inputs.js";
 import { loadCheckpointChainFiles } from "../lib/verify-checkpoint-chain.js";
+import {
+  assertSnapshotBinding,
+  decodeKnownAccumulator,
+  type KnownAccumulator,
+} from "../lib/verify-known-accumulator.js";
 import {
   freshenFromCalldataChain,
   freshenFromSthChain,
@@ -504,6 +509,8 @@ export type ResolveReceiptFreshenReport = {
   receiptB64?: string;
   /** True when the `--receipt` file was rewritten in place. */
   inPlace?: boolean;
+  /** Present when `--known-accumulator` bound the freshened state. */
+  knownAccumulator?: { matched: boolean };
 };
 
 /** `--json` freshen operational-error shape. */
@@ -538,11 +545,30 @@ function reportFreshenError(
   process.exitCode = 1;
 }
 
+/** Load + bind the optional `--known-accumulator` snapshot for the freshen run. */
+function loadFreshenSnapshot(
+  options: CreateReceiptOptions,
+): KnownAccumulator | undefined {
+  if (options.knownAccumulator === undefined) return undefined;
+  const snapshot = decodeKnownAccumulator(
+    new Uint8Array(readFileSync(options.knownAccumulator)),
+  );
+  // Reject a snapshot for the wrong log/contract before it can anchor anything.
+  // (Only calldata freshen supplies --univocity/--log-id; the `.sth` path skips
+  // the binding it has no target for.)
+  assertSnapshotBinding(snapshot, {
+    univocity: options.univocity,
+    logId: options.logId,
+  });
+  return snapshot;
+}
+
 /** Build the FreshenResult from whichever tile-free source the flags selected. */
 async function freshenFromSource(
   options: CreateReceiptOptions,
   loaded: ReturnType<typeof loadVerifyArtifacts>,
 ): Promise<FreshenResult> {
+  const knownAccumulator = loadFreshenSnapshot(options);
   if (options.anchor === "freshen-calldata") {
     // Options parsing guarantees these in calldata-freshen mode.
     const latestCheckpointBytes = new Uint8Array(
@@ -556,6 +582,7 @@ async function freshenFromSource(
       logId: options.logId!,
       rpcUrl: options.rpcUrl!,
       latestCheckpointBytes,
+      knownAccumulator,
     });
   }
   const chain = loadCheckpointChainFiles(options.checkpointChain!);
@@ -565,6 +592,7 @@ async function freshenFromSource(
     idtimestampBe8: loaded.idtimestampBe8,
     checkpoints: chain.checkpoints,
     sourceRefs: chain.files.map((f) => basename(f)),
+    knownAccumulator,
   });
 }
 
@@ -613,7 +641,13 @@ async function runFreshen(
   // --in-place rewrites the stale receipt file; otherwise --out, else stdout.
   const writeTarget = options.inPlace ? options.receipt! : options.out;
   try {
-    if (writeTarget !== undefined) {
+    if (options.inPlace) {
+      // Crash-safe overwrite of the source receipt: write a sibling temp then
+      // atomically rename, so a failed write never truncates the original.
+      const tmp = `${writeTarget}.freshen.tmp`;
+      writeFileSync(tmp, receiptCbor);
+      renameSync(tmp, writeTarget!);
+    } else if (writeTarget !== undefined) {
       writeFileSync(writeTarget, receiptCbor);
     }
   } catch (err) {
@@ -640,6 +674,9 @@ async function runFreshen(
         ? { out: writeTarget }
         : { receiptB64: Buffer.from(receiptCbor).toString("base64") }),
       ...(options.inPlace ? { inPlace: true } : {}),
+      ...(details.knownAccumulatorMatched !== undefined
+        ? { knownAccumulator: { matched: details.knownAccumulatorMatched } }
+        : {}),
     };
     out.out(JSON.stringify(report, null, 2));
     return;
@@ -665,6 +702,11 @@ async function runFreshen(
     unit,
     details.sealedSize.toString(10),
   );
+  if (details.knownAccumulatorMatched) {
+    out.print(
+      "resolve-receipt: anchor     — folded state matches --known-accumulator (trusted)",
+    );
+  }
   out.print(
     "resolve-receipt: proof      — %d node(s) in the extended path",
     details.proofLength,

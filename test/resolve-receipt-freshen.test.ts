@@ -9,6 +9,7 @@ import { verifyGrantReceiptOffline } from "@forestrie/receipt-verify";
 import { PUBLISH_CHECKPOINT_ABI } from "../src/lib/decode-checkpoint-calldata.js";
 import { parseCreateReceiptOptions } from "../src/options/create-receipt.js";
 import { runCreateReceipt } from "../src/main/create-receipt.js";
+import type { KnownAccumulator } from "../src/lib/verify-known-accumulator.js";
 import {
   freshenFromCalldataChain,
   freshenFromSthChain,
@@ -271,6 +272,34 @@ describe("resolve-receipt freshen via calldata (FOR-418)", () => {
     });
     expect(verified).toEqual({ ok: true, stage: "binding" });
   });
+
+  test("fails closed when --checkpoint size disagrees with the calldata chain", async () => {
+    const fx = await buildVerifyFixture();
+    const calldata03 = encodeCalldata([
+      { treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak] },
+    ]);
+    const calldata37 = encodeCalldata([
+      { treeSize1: 3n, treeSize2: 7n, paths: [[fx.node5]], rightPeaks: [] },
+    ]);
+    const mockFetch = makeMockChain([
+      { size: 3n, accumulator: [fx.peak], txHash: "0x" + "11".repeat(32), calldata: calldata03 },
+      { size: 7n, accumulator: [fx.peak7], txHash: "0x" + "22".repeat(32), calldata: calldata37 },
+    ]);
+    // Emission checkpoint sealed size 4 — does not match the size-7 chain.
+    const wrongSth = buildSth({ consistency: [0n, 4n, [], []] });
+    await expect(
+      freshenFromCalldataChain({
+        oldReceiptBytes: fx.receiptCbor,
+        grant: fx.grant,
+        idtimestampBe8: fx.idtimestampBe8,
+        univocity: "0x" + "ab".repeat(20),
+        logId: "660e8400-e29b-41d4-a716-446655440001",
+        rpcUrl: "http://rpc.mock",
+        latestCheckpointBytes: wrongSth,
+        fetchImpl: mockFetch,
+      }),
+    ).rejects.toThrow(/ends at size 7 but the checkpoint sealed size 4/);
+  });
 });
 
 type LooseArgs = Parameters<typeof parseCreateReceiptOptions>[0];
@@ -361,6 +390,79 @@ describe("resolve-receipt freshen source dispatch (D3)", () => {
     expect(() =>
       parse({ massif: "m.log", checkpoint: "c.sth", "entry-id": "ab", "in-place": true }),
     ).toThrow(/--in-place only applies to freshen/);
+  });
+
+  test("--known-accumulator without --receipt (tiles) is rejected", () => {
+    expect(() =>
+      parse({
+        massif: "m.log",
+        checkpoint: "c.sth",
+        "entry-id": "ab",
+        "known-accumulator": "acc.cbor",
+      }),
+    ).toThrow(/--known-accumulator only applies to freshen/);
+  });
+});
+
+/** A minimal known-accumulator snapshot at `size` with `accumulator`. */
+const snap = (size: bigint, accumulator: Uint8Array[]): KnownAccumulator => ({
+  version: 1,
+  chainId: 84532n,
+  univocity: new Uint8Array(20).fill(0xab),
+  logId: new Uint8Array(32).fill(0x11),
+  size,
+  accumulator,
+  blockNumber: 1n,
+  blockHash: new Uint8Array(32).fill(0xbb),
+});
+
+describe("resolve-receipt freshen --known-accumulator (C1)", () => {
+  async function sthSetup() {
+    const fx = await buildVerifyFixture();
+    const sth0 = buildSth({ consistency: [0n, 3n, [], [fx.peak]] });
+    const sth1 = buildSth({
+      consistency: [3n, 7n, [[fx.node5]], []],
+      peakReceipts: [await signDetachedPeakReceipt(fx.rootKeyPair, fx.peak7)],
+    });
+    return { fx, checkpoints: [sth0, sth1] };
+  }
+
+  test("binds the freshened state to a matching snapshot", async () => {
+    const { fx, checkpoints } = await sthSetup();
+    const result = await freshenFromSthChain({
+      oldReceiptBytes: fx.receiptCbor,
+      grant: fx.grant,
+      idtimestampBe8: fx.idtimestampBe8,
+      checkpoints,
+      knownAccumulator: snap(7n, [fx.peak7]),
+    });
+    expect(result.details.knownAccumulatorMatched).toBe(true);
+  });
+
+  test("fails closed when the snapshot accumulator disagrees", async () => {
+    const { fx, checkpoints } = await sthSetup();
+    await expect(
+      freshenFromSthChain({
+        oldReceiptBytes: fx.receiptCbor,
+        grant: fx.grant,
+        idtimestampBe8: fx.idtimestampBe8,
+        checkpoints,
+        knownAccumulator: snap(7n, [new Uint8Array(32).fill(0x99)]),
+      }),
+    ).rejects.toThrow(/does not match --known-accumulator/);
+  });
+
+  test("fails closed when the snapshot is a different size", async () => {
+    const { fx, checkpoints } = await sthSetup();
+    await expect(
+      freshenFromSthChain({
+        oldReceiptBytes: fx.receiptCbor,
+        grant: fx.grant,
+        idtimestampBe8: fx.idtimestampBe8,
+        checkpoints,
+        knownAccumulator: snap(3n, [fx.peak]),
+      }),
+    ).rejects.toThrow(/is size 3 but the freshened state is size 7/);
   });
 });
 
