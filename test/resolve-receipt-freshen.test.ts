@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { encodeAbiParameters, encodeFunctionData } from "viem";
 import { createCaptureOut } from "@forestrie/cli-kit/reporting";
-import { encodeCborDeterministic } from "@forestrie/encoding";
+import { encodeCborDeterministic, encodeGrantPayload } from "@forestrie/encoding";
 import { verifyGrantReceiptOffline } from "@forestrie/receipt-verify";
 import { PUBLISH_CHECKPOINT_ABI } from "../src/lib/decode-checkpoint-calldata.js";
+import { runCli } from "./support.js";
 import { parseCreateReceiptOptions } from "../src/options/create-receipt.js";
 import { runCreateReceipt } from "../src/main/create-receipt.js";
 import type { KnownAccumulator } from "../src/lib/verify-known-accumulator.js";
@@ -500,5 +501,91 @@ describe("resolve-receipt freshen --in-place (FOR-418)", () => {
       idtimestampBe8: fx.idtimestampBe8,
     });
     expect(verified).toEqual({ ok: true, stage: "binding" });
+  });
+});
+
+describe("resolve-receipt freshen | verify (CLI end-to-end, FOR-418)", () => {
+  /** Write a stale receipt + a genesis-rooted 0->3->7 `.sth` chain + grant +
+   * genesis to disk; return the paths for a real `forestrie` invocation. */
+  async function writeFreshenArtifacts() {
+    const fx = await buildVerifyFixture();
+    const dir = mkdtempSync(path.join(tmpdir(), "forestrie-freshen-e2e-"));
+    // .sth chain in its own directory so --checkpoint-chain sees only checkpoints.
+    const chain = path.join(dir, "chain");
+    mkdirSync(chain);
+    const stale = path.join(dir, "stale.cbor");
+    const grant = path.join(dir, "grant.cbor");
+    const genesis = path.join(dir, "genesis.cbor");
+    writeFileSync(stale, fx.receiptCbor);
+    writeFileSync(grant, encodeGrantPayload(fx.grant));
+    writeFileSync(genesis, fx.genesisCbor);
+    writeFileSync(
+      path.join(chain, "0000.sth"),
+      buildSth({ consistency: [0n, 3n, [], [fx.peak]] }),
+    );
+    writeFileSync(
+      path.join(chain, "0001.sth"),
+      buildSth({
+        consistency: [3n, 7n, [[fx.node5]], []],
+        peakReceipts: [await signDetachedPeakReceipt(fx.rootKeyPair, fx.peak7)],
+      }),
+    );
+    return { fx, dir, chain, stale, grant, genesis };
+  }
+
+  test("`resolve-receipt --receipt --checkpoint-chain` freshens and the result passes `forestrie verify-grant`", async () => {
+    const { fx, dir, chain, stale, grant, genesis } =
+      await writeFreshenArtifacts();
+    const fresh = path.join(dir, "fresh.cbor");
+
+    const created = runCli([
+      "resolve-receipt",
+      "--receipt",
+      stale,
+      "--checkpoint-chain",
+      chain,
+      "--committed-grant-file",
+      grant,
+      "--entry-id",
+      fx.entryIdHex,
+      "--out",
+      fresh,
+    ]);
+    expect(created.exitCode).toBe(0);
+    expect(created.stderr).toContain("resolve-receipt: freshen");
+
+    const verified = runCli([
+      "verify-grant",
+      "--genesis",
+      genesis,
+      "--receipt",
+      fresh,
+      "--committed-grant-file",
+      grant,
+      "--entry-id",
+      fx.entryIdHex,
+    ]);
+    expect(verified.exitCode).toBe(0);
+    expect(verified.stdout).toContain("PASS");
+  });
+
+  test("the `create-receipt` alias routes to the same freshen path", async () => {
+    const { fx, dir, chain, stale, grant } = await writeFreshenArtifacts();
+    const fresh = path.join(dir, "fresh-alias.cbor");
+    const created = runCli([
+      "create-receipt",
+      "--receipt",
+      stale,
+      "--checkpoint-chain",
+      chain,
+      "--committed-grant-file",
+      grant,
+      "--entry-id",
+      fx.entryIdHex,
+      "--out",
+      fresh,
+    ]);
+    expect(created.exitCode).toBe(0);
+    expect(new Uint8Array(readFileSync(fresh)).length).toBeGreaterThan(0);
   });
 });
