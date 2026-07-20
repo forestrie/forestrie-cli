@@ -65,6 +65,11 @@ export function loadCreateReceiptArtifacts(
   options: CreateReceiptOptions,
 ): CreateReceiptArtifacts {
   const leaf = resolveLeaf(options);
+  if (options.massif === undefined) {
+    // Unreachable: only tile anchors (checkpoint/chain) reach here, and options
+    // parsing requires --massif for those. Guard keeps the type honest.
+    throw new Error("--massif is required to build a receipt from tiles");
+  }
   const massifBytes = readBytes(options.massif, "--massif");
   const checkpointBytes =
     options.checkpoint !== undefined
