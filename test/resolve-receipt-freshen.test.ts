@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { encodeAbiParameters, encodeFunctionData } from "viem";
+import { createCaptureOut } from "@forestrie/cli-kit/reporting";
 import { encodeCborDeterministic } from "@forestrie/encoding";
 import { verifyGrantReceiptOffline } from "@forestrie/receipt-verify";
 import { PUBLISH_CHECKPOINT_ABI } from "../src/lib/decode-checkpoint-calldata.js";
 import { parseCreateReceiptOptions } from "../src/options/create-receipt.js";
+import { runCreateReceipt } from "../src/main/create-receipt.js";
 import {
   freshenFromCalldataChain,
   freshenFromSthChain,
@@ -337,5 +342,61 @@ describe("resolve-receipt freshen source dispatch (D3)", () => {
       "entry-id": "ab",
     });
     expect(o.anchor).toBe("freshen-calldata");
+  });
+
+  test("--in-place + --out is rejected", () => {
+    expect(() =>
+      parse({
+        receipt: "r.cbor",
+        "checkpoint-chain": "chain/",
+        "committed-grant-file": "g.cbor",
+        "entry-id": "ab",
+        "in-place": true,
+        out: "o.cbor",
+      }),
+    ).toThrow(/--out or --in-place, not both/);
+  });
+
+  test("--in-place without --receipt (tiles) is rejected", () => {
+    expect(() =>
+      parse({ massif: "m.log", checkpoint: "c.sth", "entry-id": "ab", "in-place": true }),
+    ).toThrow(/--in-place only applies to freshen/);
+  });
+});
+
+describe("resolve-receipt freshen --in-place (FOR-418)", () => {
+  test("rewrites the stale --receipt file with the freshened receipt", async () => {
+    const fx = await buildVerifyFixture();
+    const sth0 = buildSth({ consistency: [0n, 3n, [], [fx.peak]] });
+    const sth1 = buildSth({
+      consistency: [3n, 7n, [[fx.node5]], []],
+      peakReceipts: [await signDetachedPeakReceipt(fx.rootKeyPair, fx.peak7)],
+    });
+
+    const dir = mkdtempSync(path.join(tmpdir(), "forestrie-freshen-inplace-"));
+    const receiptPath = path.join(dir, "receipt.cbor");
+    writeFileSync(receiptPath, fx.receiptCbor);
+    writeFileSync(path.join(dir, "0000.sth"), sth0);
+    writeFileSync(path.join(dir, "0001.sth"), sth1);
+
+    const options = parseCreateReceiptOptions({
+      receipt: receiptPath,
+      "checkpoint-chain": dir,
+      "committed-grant": fx.grantCoseB64,
+      "entry-id": fx.entryIdHex,
+      "in-place": true,
+    } as Parameters<typeof parseCreateReceiptOptions>[0]);
+    await runCreateReceipt(createCaptureOut(0), options);
+
+    const rewritten = new Uint8Array(readFileSync(receiptPath));
+    // The file was replaced by the (larger) freshened receipt, not the stale one.
+    expect(rewritten).not.toEqual(new Uint8Array(fx.receiptCbor));
+    const verified = await verifyGrantReceiptOffline({
+      genesisCbor: fx.genesisCbor,
+      receiptCbor: rewritten,
+      grant: fx.grant,
+      idtimestampBe8: fx.idtimestampBe8,
+    });
+    expect(verified).toEqual({ ok: true, stage: "binding" });
   });
 });

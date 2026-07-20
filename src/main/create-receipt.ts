@@ -502,6 +502,8 @@ export type ResolveReceiptFreshenReport = {
   receiptBytes: number;
   out?: string;
   receiptB64?: string;
+  /** True when the `--receipt` file was rewritten in place. */
+  inPlace?: boolean;
 };
 
 /** `--json` freshen operational-error shape. */
@@ -608,9 +610,11 @@ async function runFreshen(
   }
 
   const { receiptCbor, details } = result;
+  // --in-place rewrites the stale receipt file; otherwise --out, else stdout.
+  const writeTarget = options.inPlace ? options.receipt! : options.out;
   try {
-    if (options.out !== undefined) {
-      writeFileSync(options.out, receiptCbor);
+    if (writeTarget !== undefined) {
+      writeFileSync(writeTarget, receiptCbor);
     }
   } catch (err) {
     reportFreshenError(out, options, source, "input", err);
@@ -632,15 +636,16 @@ async function runFreshen(
       },
       proof: { length: details.proofLength },
       receiptBytes: receiptCbor.length,
-      ...(options.out !== undefined
-        ? { out: options.out }
+      ...(writeTarget !== undefined
+        ? { out: writeTarget }
         : { receiptB64: Buffer.from(receiptCbor).toString("base64") }),
+      ...(options.inPlace ? { inPlace: true } : {}),
     };
     out.out(JSON.stringify(report, null, 2));
     return;
   }
 
-  if (options.out === undefined) {
+  if (writeTarget === undefined) {
     // Raw CBOR to stdout (pipeable); narration stays on stderr.
     writeFileSync(1, receiptCbor);
   }
@@ -665,8 +670,9 @@ async function runFreshen(
     details.proofLength,
   );
   out.print(
-    "resolve-receipt: receipt    — %d bytes -> %s",
+    "resolve-receipt: receipt    — %d bytes -> %s%s",
     receiptCbor.length,
-    options.out ?? "stdout",
+    writeTarget ?? "stdout",
+    options.inPlace ? " (in place)" : "",
   );
 }
