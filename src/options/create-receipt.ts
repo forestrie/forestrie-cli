@@ -30,7 +30,7 @@ import {
  * fails closed with guidance.
  */
 export type CreateReceiptOptions = ForestrieCommonOptions & {
-  anchor: "checkpoint" | "chain" | "freshen";
+  anchor: "checkpoint" | "chain" | "freshen-sth" | "freshen-calldata";
   /** Tiles source: massif .log blob holding the leaf and its proof nodes. */
   massif: string | undefined;
   /** MMR index of the leaf to prove (`--mmr-index` addressing, tiles source). */
@@ -105,11 +105,8 @@ export function parseCreateReceiptOptions(
 
   // --- FRESHEN source (--receipt + a tile-free chain) ---
   if (receipt !== undefined) {
-    if (checkpointChain === undefined) {
-      throw new Error(
-        "freshen (--receipt) needs a tile-free source: --checkpoint-chain <dir|files>",
-      );
-    }
+    // The grant recomputes the leaf value (same as verify-grant) — both
+    // sub-sources need it.
     if (committedGrant === undefined && committedGrantFile === undefined) {
       throw new Error(
         "freshen needs the committed grant to recompute the leaf value: --committed-grant or --committed-grant-file",
@@ -120,7 +117,38 @@ export function parseCreateReceiptOptions(
         "freshen from a raw grant file needs the SCRAPI entry id (idtimestamp): --entry-id",
       );
     }
-    return { ...common, ...base, anchor: "freshen", mmrIndex: undefined };
+    const hasSth = checkpointChain !== undefined;
+    const hasCalldata =
+      univocity !== undefined || rpcUrl !== undefined || logId !== undefined;
+    if (hasSth && hasCalldata) {
+      throw new Error(
+        "choose one freshen source: --checkpoint-chain (.sth) or --rpc-url/--univocity/--log-id (calldata)",
+      );
+    }
+    if (hasSth) {
+      return { ...common, ...base, anchor: "freshen-sth", mmrIndex: undefined };
+    }
+    if (hasCalldata) {
+      if (univocity === undefined || logId === undefined || rpcUrl === undefined) {
+        throw new Error(
+          "calldata freshen requires --univocity, --log-id and --rpc-url",
+        );
+      }
+      if (checkpoint === undefined) {
+        throw new Error(
+          "calldata freshen requires --checkpoint (the latest .sth) for emission — calldata carries no pre-signed peak receipts",
+        );
+      }
+      return {
+        ...common,
+        ...base,
+        anchor: "freshen-calldata",
+        mmrIndex: undefined,
+      };
+    }
+    throw new Error(
+      "freshen (--receipt) needs a tile-free source: --checkpoint-chain (.sth) or --rpc-url/--univocity/--log-id (calldata)",
+    );
   }
 
   // --- TILES source (--massif) ---

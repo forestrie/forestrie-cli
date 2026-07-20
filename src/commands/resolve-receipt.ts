@@ -6,7 +6,7 @@ export default defineForestrieCommand({
   meta: {
     name: "resolve-receipt",
     description:
-      "Produce or freshen a COSE receipt (SCRAPI §2.4) — source by flags: --massif (tiles), or --receipt + --checkpoint-chain (tile-free freshen) [FOR-345/FOR-418]. Alias: create-receipt.",
+      "Produce or freshen a COSE receipt (SCRAPI §2.4) — source by flags: --massif (tiles), --receipt + --checkpoint-chain (.sth freshen, genesis-verifiable), or --receipt + --rpc-url/--univocity/--log-id + --checkpoint (calldata freshen) [FOR-345/FOR-418]. Alias: create-receipt.",
   },
   args: {
     // --- tiles source (--massif) ---
