@@ -55,6 +55,9 @@ export type CreateReceiptOptions = ForestrieCommonOptions & {
   committedGrantFile: string | undefined;
   /** Receipt output path (default: stdout). */
   out: string | undefined;
+  /** Rewrite the `--receipt` file in place with the freshened receipt (freshen
+   * only; mutually exclusive with `--out`). */
+  inPlace: boolean;
 };
 
 function parseMMRIndex(raw: string): bigint {
@@ -80,6 +83,7 @@ export function parseCreateReceiptOptions(
   const committedGrantFile = optionalStringOption(args, "committed-grant-file");
   const entryId = optionalStringOption(args, "entry-id");
   const out = optionalStringOption(args, "out");
+  const inPlace = args["in-place"] === true;
   const common = parseForestrieCommonOptions(args);
 
   const base = {
@@ -94,12 +98,22 @@ export function parseCreateReceiptOptions(
     committedGrantFile,
     entryId,
     out,
+    inPlace,
   };
+
+  if (inPlace && out !== undefined) {
+    throw new Error("choose --out or --in-place, not both");
+  }
 
   // Source selection is exclusive: tiles (--massif) vs freshen (--receipt).
   if (massif !== undefined && receipt !== undefined) {
     throw new Error(
       "choose one source: --massif (build from tiles) or --receipt (freshen a stale receipt) — not both",
+    );
+  }
+  if (inPlace && receipt === undefined) {
+    throw new Error(
+      "--in-place only applies to freshen (--receipt) — there is no receipt file to rewrite",
     );
   }
 

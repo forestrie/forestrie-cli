@@ -79,6 +79,11 @@ export default defineForestrieCommand({
       description: "Receipt output path (default: stdout)",
       valueHint: "path",
     },
+    "in-place": {
+      type: "boolean",
+      description:
+        "Rewrite the --receipt file with the freshened receipt (freshen only; mutually exclusive with --out)",
+    },
   },
   run: defineCommandRunner(parseCreateReceiptOptions, runCreateReceipt),
 });

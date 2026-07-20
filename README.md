@@ -12,7 +12,7 @@ against a forestrie log:
 | `register` | Register a signed statement via SCRAPI, download the receipt |
 | `register-grant` | Authorize a signer for a child/data log (one grant per signer) |
 | `complete-grant` | Self-create the `Forestrie-Grant` header from a checkpoint |
-| `create-receipt` | Self-serve COSE receipt from log data + checkpoint (or chain-anchored) |
+| `resolve-receipt` | Produce or freshen a COSE receipt — from tiles, or tile-free from a `.sth`/calldata chain (alias: `create-receipt`) |
 | `decode-receipt` | Decode a COSE receipt — it is just COSE: Sign1 + MMR inclusion |
 | `verify` | Verify a receipt offline — the same closer for every other subcommand |
 | `fetch-accumulator` | Cache the on-chain accumulator as a `--known-accumulator` snapshot |
@@ -195,25 +195,78 @@ peak, and attaches the receipt + idtimestamp — the same completed bearer
 `--idtimestamp <hex|path>` is a fallback for the rare massif with no index
 region.
 
-### `create-receipt`
+### `resolve-receipt`
+
+One receipt producer (SCRAPI §2.4 "Resolve Receipt"; `create-receipt` is a
+kept alias). The **source is chosen by the flags present**, not a `--mode`;
+passing more than one source, or an under-specified one, errors with guidance.
 
 ```bash
-forestrie create-receipt \
+# from tiles: rebuild the leaf→peak path from a massif and a checkpoint
+forestrie resolve-receipt \
   --massif massif.log --checkpoint checkpoint.sth \
   --mmr-index 0 \
   --out receipt.cbor
 ```
 
 ```
-create-receipt: massif     — index 0 (height 3, mmr indexes 0..3)
-create-receipt: leaf       — mmrIndex 0 (from --mmr-index)
-create-receipt: checkpoint — sealed size 4, 2 peak(s)
-create-receipt: proof      — 1 node(s) to peak 1/2 (mmrIndex 2)
-create-receipt: receipt    — 144 bytes -> receipt.cbor
+resolve-receipt: massif     — index 0 (height 3, mmr indexes 0..3)
+resolve-receipt: leaf       — mmrIndex 0 (from --mmr-index)
+resolve-receipt: checkpoint — sealed size 4, 2 peak(s)
+resolve-receipt: proof      — 1 node(s) to peak 1/2 (mmrIndex 2)
+resolve-receipt: receipt    — 144 bytes -> receipt.cbor
 ```
 
 Add `--univocity <address> --log-id <id> --rpc-url $RPC_URL` for a
-chain-anchored (report-only) receipt instead of a checkpoint-based one.
+chain-anchored (report-only) verification instead of a checkpoint-based
+receipt.
+
+#### Freshen a stale receipt (tile-free)
+
+When log growth buries the peak a receipt commits to, **freshen** re-anchors
+it to the current sealed state without tiles. `resolve-receipt --receipt
+<stale>` plus a tile-free source extends the receipt's old inclusion path to
+the latest peak and re-emits it. The leaf value is recomputed from the grant
+exactly as `verify-grant` does, so freshen takes the same grant inputs
+(`--committed-grant`/`--committed-grant-file` + `--entry-id`).
+
+```bash
+# from a retained .sth chain (genesis-verifiable)
+forestrie resolve-receipt \
+  --receipt stale.cbor --checkpoint-chain ./checkpoints/ \
+  --committed-grant-file grant.cbor --entry-id <hex> \
+  --in-place
+
+# from on-chain publishCheckpoint calldata (known-key rung); calldata carries
+# no peak receipts, so the latest .sth is supplied for emission
+forestrie resolve-receipt \
+  --receipt stale.cbor \
+  --rpc-url $RPC_URL --univocity <address> --log-id <id> \
+  --checkpoint latest.sth \
+  --committed-grant-file grant.cbor --entry-id <hex> \
+  --out fresh.cbor
+```
+
+`--in-place` rewrites the `--receipt` file (mutually exclusive with `--out`).
+The freshened receipt is a native receipt — it verifies with plain `verify`
+against the current state, and freshen fails closed (it never emits a receipt
+whose recomputed peak does not match the folded latest accumulator).
+
+#### Freshen trust ladder (which source to reach for)
+
+Both sources fold the same consistency-proof chain; they differ in what
+authenticates the latest state:
+
+1. **`--checkpoint-chain` (retained `.sth`)** — the checkpoints are
+   sealer-signed and their delegation chains resolve to the genesis trust
+   root, so the freshened receipt is **genesis-verifiable** offline. Reach for
+   this by default.
+2. **calldata (`--rpc-url`/`--univocity`/`--log-id` + `--checkpoint`)** — the
+   climb material is read trustlessly from the `publishCheckpoint` transactions
+   (on-chain consistency gating), but emission borrows the supplied latest
+   `.sth`'s signature — the **known-key rung**: trust flows from the sealer key
+   in that checkpoint, not from a genesis walk. Use it when you have RPC access
+   but not the full retained `.sth` history.
 
 ### `decode-receipt`
 
