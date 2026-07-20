@@ -1,0 +1,28 @@
+{
+  "txHash": "0x6c609f423481e77c25105973c50ff0414f21c6809919c5912ddb22ee42468593",
+  "chainId": 84532,
+  "univocity": "0xb10cbd716ea938887492eb3b2968a72b99af05b0",
+  "block": 44384137,
+  "calldataSha256": "cbdf37760e7767ab082172889006ba8562046a6baa9d63c2cf60d677dd1dcd01",
+  "protectedHeaderHex": "0xa2012619018b03",
+  "signatureHex": "0xeb8930f3ec03f7debfcfb2703ca1b3c979360aad77216479fc0aeb1036d99de12feef4a8a9aa6a25c2e77fb31fa0f4a19881d05817af5ad9ad8bd1fdb55a634d",
+  "consistencyProofs": [
+    {
+      "treeSize1": "7",
+      "treeSize2": "8",
+      "paths": [
+        []
+      ],
+      "rightPeaks": [
+        "0x0443531468b99cd41d078d4d60028277d87b2603357f9fceb82548a3ed65f2ec"
+      ]
+    }
+  ],
+  "delegation": {
+    "protectedHeaderHex": "0xa1013a00010106",
+    "delegationKeyHex": "0xba192965b5583008e9400ff799f14afbffa55592fefa3af79b7a30b53c617b2e3439f32e5a7fea6d3a23d89c62bf01f3bb11cd58cb88b412eef896839f69ccb9",
+    "mmrStart": "0",
+    "mmrEnd": "8",
+    "signatureHex": "0x917ee1adffdfd20a83e03638cca6fd5206db9571dfbeca025ba90276ad400e477b7360c03cf1ccac9bcbb1d67514b9f687a2400103dc3072d6634cca20310ece00"
+  }
+}
