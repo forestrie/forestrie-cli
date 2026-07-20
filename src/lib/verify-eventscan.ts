@@ -15,6 +15,7 @@
  * independent of the log store (the retained-checkpoint chain rung is its
  * complement with the opposite dependency; see plan-2607-29).
  */
+import { bytesEqual } from "./bytes.js";
 import { normalizeHexAddress } from "@forestrie/chain-rpc";
 import { toContractLogId } from "./verify-anchored.js";
 
@@ -167,12 +168,6 @@ export async function fetchPublishedCheckpoints(opts: {
   return out;
 }
 
-function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  let x = 0;
-  for (let i = 0; i < a.length; i++) x |= a[i]! ^ b[i]!;
-  return x === 0;
-}
 
 /**
  * Find the recomputed receipt peak in any historically anchored

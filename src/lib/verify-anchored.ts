@@ -1,3 +1,4 @@
+import { bytesEqual } from "./bytes.js";
 import { ethCall, normalizeHexAddress } from "@forestrie/chain-rpc";
 import { verifyCoseSign1WithParsedKey } from "@forestrie/encoding";
 import {
@@ -156,12 +157,6 @@ export async function fetchOnChainLogState(opts: {
   return decodeLogStateResult(result);
 }
 
-function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  let x = 0;
-  for (let i = 0; i < a.length; i++) x |= a[i]! ^ b[i]!;
-  return x === 0;
-}
 
 /** Web Crypto SHA-256 hasher (mirrors @forestrie/receipt-verify SubtleHasher). */
 class SubtleHasher implements Hasher {
