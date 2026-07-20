@@ -1,3 +1,4 @@
+import { bytesEqual } from "./bytes.js";
 import {
   computeAccumulatorPeak,
   openMassifNodeStore,
@@ -114,12 +115,6 @@ function toHex(bytes: Uint8Array): string {
   return hex;
 }
 
-function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  let x = 0;
-  for (let i = 0; i < a.length; i++) x |= a[i]! ^ b[i]!;
-  return x === 0;
-}
 
 /** Dependencies, injectable so tests can mock the on-chain read. */
 export type ChainVerifyDeps = {

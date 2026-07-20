@@ -145,11 +145,88 @@ describe("foldProofChain — contiguity + suffix", () => {
     await expect(foldProofChain(proofs)).rejects.toThrow(/not contiguous/);
   });
 
-  test("a suffix chain seeds from a trusted accumulatorFrom", async () => {
+  test("a suffix chain seeds from a trusted accumulatorFrom + size (R2)", async () => {
     const links = await foldProofChain([chainProofs(fx)[1]!], {
       accumulatorFrom: [fx.peak],
+      accumulatorFromSize: 3n,
     });
     expect(accHex(links[0]!)).toEqual([toHex(fx.peak7)]);
+  });
+
+  test("accumulatorFrom without a size is rejected (R2)", async () => {
+    await expect(
+      foldProofChain([chainProofs(fx)[1]!], { accumulatorFrom: [fx.peak] }),
+    ).rejects.toThrow(/requires accumulatorFromSize/);
+  });
+
+  test("a seed whose size mismatches the first link's base throws (R2)", async () => {
+    await expect(
+      foldProofChain([chainProofs(fx)[1]!], {
+        accumulatorFrom: [fx.peak],
+        accumulatorFromSize: 5n, // first proof's treeSize1 is 3
+      }),
+    ).rejects.toThrow(/not contiguous at link 0/);
+  });
+});
+
+describe("seal retention (R1) + event cross-check (R3) + from-block (R2)", () => {
+  test("calldata links retain the seal on each tx's final link", async () => {
+    const both = encodeCalldata(chainProofs(fx));
+    const mockFetch = makeMockChain([
+      { size: 7n, accumulator: [fx.peak7], txHash: "0x" + "44".repeat(32), calldata: both },
+    ]);
+    const links = await calldataCheckpointChain({
+      univocity: "0x" + "ab".repeat(20),
+      logId: "660e8400-e29b-41d4-a716-446655440001",
+      rpcUrl: "http://rpc.mock",
+      fetchImpl: mockFetch,
+    });
+    // one tx, two proofs -> intermediate link unsealed, final link sealed
+    expect(links[0]!.seal).toBeUndefined();
+    expect(links[1]!.seal?.kind).toBe("calldata");
+    if (links[1]!.seal?.kind === "calldata") {
+      expect(links[1]!.seal.signature.length).toBe(64);
+      expect(links[1]!.seal.delegation.delegationKey.length).toBe(64);
+    }
+  });
+
+  test(".sth links each retain the checkpoint bytes as their seal", async () => {
+    const sth1 = await buildCheckpoint({ signer: fx.rootKeyPair, treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak], accumulator: [fx.peak] });
+    const links = await sthCheckpointChain([sth1], { sourceRefs: ["0000.sth"] });
+    expect(links[0]!.seal?.kind).toBe("sth");
+    if (links[0]!.seal?.kind === "sth") {
+      expect(links[0]!.seal.checkpointBytes).toEqual(sth1);
+    }
+    expect(links[0]!.sourceRef).toBe("0000.sth"); // R6
+  });
+
+  test("R3: a calldata fold that disagrees with the event accumulator throws", async () => {
+    const both = encodeCalldata(chainProofs(fx));
+    // event claims a WRONG accumulator at size 7
+    const mockFetch = makeMockChain([
+      { size: 7n, accumulator: [new Uint8Array(32).fill(0x99)], txHash: "0x" + "55".repeat(32), calldata: both },
+    ]);
+    await expect(
+      calldataCheckpointChain({
+        univocity: "0x" + "ab".repeat(20),
+        logId: "660e8400-e29b-41d4-a716-446655440001",
+        rpcUrl: "http://rpc.mock",
+        fetchImpl: mockFetch,
+      }),
+    ).rejects.toThrow(/disagrees with the CheckpointPublished event/);
+  });
+
+  test("R2: --from-block without a trusted seed is rejected", async () => {
+    const mockFetch = makeMockChain([]);
+    await expect(
+      calldataCheckpointChain({
+        univocity: "0x" + "ab".repeat(20),
+        logId: "660e8400-e29b-41d4-a716-446655440001",
+        rpcUrl: "http://rpc.mock",
+        fromBlock: 100n,
+        fetchImpl: mockFetch,
+      }),
+    ).rejects.toThrow(/must be paired with a trusted seed/);
   });
 });
 

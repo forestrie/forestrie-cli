@@ -167,6 +167,14 @@ export async function fetchTransactionInput(opts: {
   if (typeof input !== "string" || input.length < 10) {
     throw new Error(`transaction ${opts.txHash} has no input calldata`);
   }
+  // A real publishCheckpoint calldata is a few KB; cap the accepted size so a
+  // hostile RPC cannot return a multi-hundred-MB `input` string (R6). 8M hex
+  // chars ≈ 4 MB — generous for any legitimate proof chain.
+  if (input.length > 8_000_000) {
+    throw new Error(
+      `transaction ${opts.txHash} input is implausibly large (${input.length} hex chars)`,
+    );
+  }
   return input;
 }
 
