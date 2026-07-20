@@ -6,7 +6,7 @@
  * receipt supplies the leaf's MMR index and its old inclusion path (leaf → old
  * peak); a checkpoint chain supplies the climb from that old peak to the latest
  * accumulator; the latest checkpoint supplies the signature to emit under. The
- * result is a native receipt that verifies with plain `verify --genesis`.
+ * result is a native receipt that verifies with the offline verifier.
  *
  * The leaf VALUE is not in the stale receipt (its payload is detached — verify
  * recomputes it), so freshen recomputes it exactly as `verify-grant` does:
@@ -14,10 +14,13 @@
  * needs it for its fail-closed self-check (recomputed peak == folded accumulator
  * peak), so a bad chain/leaf throws here rather than minting a bad receipt.
  *
- * This module covers the `.sth`-chain source (retained checkpoints → genesis-
- * verifiable). The calldata source (known-key rung) reuses the same
- * `freshenReceipt` with the chain read from `publishCheckpoint` calldata plus a
- * latest `.sth` for emission — added in the next increment.
+ * Two tile-free sources, both folding to `freshenReceipt`:
+ * - **`.sth` chain** (`freshenFromSthChain`): retained checkpoints → genesis-
+ *   verifiable. The last checkpoint in the chain is the emission checkpoint.
+ * - **chain calldata** (`freshenFromCalldataChain`): the `publishCheckpoint`
+ *   transactions carry the consistency-proof chain (known-key rung). Calldata
+ *   carries no pre-signed peak receipts / cert, so emission still needs a latest
+ *   `.sth` supplied separately (plan-2607-32 Phase 3 finding).
  */
 import {
   freshenReceipt,
@@ -25,7 +28,11 @@ import {
   parseReceipt,
   type Grant,
 } from "@forestrie/receipt-verify";
-import { sthCheckpointChain } from "./checkpoint-provider.js";
+import {
+  calldataCheckpointChain,
+  sthCheckpointChain,
+  type CheckpointLink,
+} from "./checkpoint-provider.js";
 import { univocityLeafHash } from "./verify-anchored.js";
 
 /** Structured detail for the `--json` report and human narration. */
@@ -34,11 +41,11 @@ export type FreshenDetails = {
   leafMmrIndex: bigint;
   /** Sealed size the freshened receipt is anchored at (latest checkpoint). */
   sealedSize: bigint;
-  /** Number of consistency-proof links folded from the `.sth` chain. */
+  /** Number of consistency-proof links folded from the chain. */
   chainLinks: number;
   /** Length of the emitted (extended) inclusion path. */
   proofLength: number;
-  /** The `.sth` chain sources, ascending (filenames), for narration. */
+  /** The chain sources, ascending (`.sth` filenames or tx hashes), for narration. */
   sourceRefs: string[];
 };
 
@@ -47,15 +54,54 @@ export type FreshenResult = {
   details: FreshenDetails;
 };
 
+/** The leaf's committed value, recomputed exactly as `verify-grant` does. */
+async function leafValueFor(
+  grant: Grant,
+  idtimestampBe8: Uint8Array,
+): Promise<Uint8Array> {
+  const inner = await grantCommitmentHashFromGrant(grant);
+  return univocityLeafHash(idtimestampBe8, inner);
+}
+
+/**
+ * Shared emission: fold-free — take the provider's links + a latest checkpoint,
+ * extend the stale receipt's path, and re-emit. `freshenReceipt` cross-checks the
+ * chain against the latest checkpoint and self-checks the recomputed peak.
+ */
+async function emitFreshened(opts: {
+  oldReceiptBytes: Uint8Array;
+  leafValue: Uint8Array;
+  links: readonly CheckpointLink[];
+  latestCheckpointBytes: Uint8Array;
+  sourceRefs: string[];
+}): Promise<FreshenResult> {
+  const result = await freshenReceipt({
+    oldReceiptBytes: opts.oldReceiptBytes,
+    leafValue: opts.leafValue,
+    consistencyProofs: opts.links.map((l) => l.proof),
+    latestCheckpointBytes: opts.latestCheckpointBytes,
+  });
+  const { proof } = parseReceipt(result.receipt);
+  return {
+    receiptCbor: result.receipt,
+    details: {
+      leafMmrIndex: proof.mmrIndex!,
+      sealedSize: result.sealedSize,
+      chainLinks: opts.links.length,
+      proofLength: proof.path.length,
+      sourceRefs: opts.sourceRefs,
+    },
+  };
+}
+
 /**
  * Freshen a stale receipt against a retained `.sth` checkpoint chain.
  *
  * `checkpoints` are the raw `.sth` bytes in ascending massif order (a contiguous
- * chain from the log's base); `sourceRefs` optionally names them. The last
- * checkpoint is the one the freshened receipt is emitted under. Throws (with the
- * underlying reason) if the chain is not a contiguous cover to the leaf, if the
- * chain does not match the latest checkpoint, or if the recomputed peak does not
- * match the folded accumulator.
+ * chain from the log's base); the last checkpoint is the emission checkpoint.
+ * `sourceRefs` optionally names them. Throws (with the underlying reason) if the
+ * chain is not a contiguous cover to the leaf, if the chain does not match the
+ * latest checkpoint, or if the recomputed peak does not match the fold.
  */
 export async function freshenFromSthChain(opts: {
   oldReceiptBytes: Uint8Array;
@@ -67,31 +113,57 @@ export async function freshenFromSthChain(opts: {
   if (opts.checkpoints.length === 0) {
     throw new Error("--checkpoint-chain resolved to no checkpoints");
   }
-  const inner = await grantCommitmentHashFromGrant(opts.grant);
-  const leafValue = await univocityLeafHash(opts.idtimestampBe8, inner);
-
+  const leafValue = await leafValueFor(opts.grant, opts.idtimestampBe8);
   const links = await sthCheckpointChain(
     opts.checkpoints,
     opts.sourceRefs !== undefined ? { sourceRefs: opts.sourceRefs } : {},
   );
-  const latestCheckpointBytes = opts.checkpoints[opts.checkpoints.length - 1]!;
-
-  const result = await freshenReceipt({
+  return emitFreshened({
     oldReceiptBytes: opts.oldReceiptBytes,
     leafValue,
-    consistencyProofs: links.map((l) => l.proof),
-    latestCheckpointBytes,
+    links,
+    latestCheckpointBytes: opts.checkpoints[opts.checkpoints.length - 1]!,
+    sourceRefs: [...(opts.sourceRefs ?? [])],
   });
+}
 
-  const { proof } = parseReceipt(result.receipt);
-  return {
-    receiptCbor: result.receipt,
-    details: {
-      leafMmrIndex: proof.mmrIndex!,
-      sealedSize: result.sealedSize,
-      chainLinks: links.length,
-      proofLength: proof.path.length,
-      sourceRefs: [...(opts.sourceRefs ?? [])],
-    },
-  };
+/**
+ * Freshen a stale receipt against the on-chain `publishCheckpoint` calldata.
+ *
+ * Reads the log's checkpoint chain from the `CheckpointPublished` transactions
+ * (trustless climb material), then re-emits under `latestCheckpointBytes` — a
+ * latest `.sth` supplied by the caller, because the calldata carries no
+ * pre-signed peak receipts or delegation cert. The calldata chain's sealed size
+ * must equal the latest checkpoint's (enforced by `freshenReceipt`). This is the
+ * known-key rung: trust flows from the sealer key in the seal, not genesis.
+ */
+export async function freshenFromCalldataChain(opts: {
+  oldReceiptBytes: Uint8Array;
+  grant: Grant;
+  idtimestampBe8: Uint8Array;
+  univocity: string;
+  logId: string;
+  rpcUrl: string;
+  latestCheckpointBytes: Uint8Array;
+  fetchImpl?: typeof fetch;
+}): Promise<FreshenResult> {
+  const leafValue = await leafValueFor(opts.grant, opts.idtimestampBe8);
+  const links = await calldataCheckpointChain({
+    univocity: opts.univocity,
+    logId: opts.logId,
+    rpcUrl: opts.rpcUrl,
+    ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
+  });
+  if (links.length === 0) {
+    throw new Error(
+      "no CheckpointPublished history found on-chain for this log — nothing to freshen against",
+    );
+  }
+  return emitFreshened({
+    oldReceiptBytes: opts.oldReceiptBytes,
+    leafValue,
+    links,
+    latestCheckpointBytes: opts.latestCheckpointBytes,
+    sourceRefs: links.map((l) => l.sourceRef ?? ""),
+  });
 }

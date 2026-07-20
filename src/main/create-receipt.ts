@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import type { Out } from "@forestrie/cli-kit/reporting";
 import type { CreateReceiptOptions } from "../options/create-receipt.js";
 import {
@@ -15,6 +15,7 @@ import {
 import { loadVerifyArtifacts } from "../lib/verify-inputs.js";
 import { loadCheckpointChainFiles } from "../lib/verify-checkpoint-chain.js";
 import {
+  freshenFromCalldataChain,
   freshenFromSthChain,
   type FreshenResult,
 } from "../lib/resolve-receipt-freshen.js";
@@ -359,7 +360,10 @@ export async function runCreateReceipt(
   out: Out,
   options: CreateReceiptOptions,
 ): Promise<void> {
-  if (options.anchor === "freshen") {
+  if (
+    options.anchor === "freshen-sth" ||
+    options.anchor === "freshen-calldata"
+  ) {
     await runFreshen(out, options);
     return;
   }
@@ -485,10 +489,13 @@ export async function runCreateReceipt(
 // for contract stability.
 // ---------------------------------------------------------------------------
 
+/** Freshen source, for the report + narration. */
+type FreshenSource = "checkpoint-chain" | "calldata";
+
 /** `--json` freshen success report — the shape is a contract. */
 export type ResolveReceiptFreshenReport = {
   command: "resolve-receipt";
-  source: "checkpoint-chain";
+  source: FreshenSource;
   leaf: { mmrIndex: string; entryId?: string };
   chain: { links: number; sealedSize: string; sources: string[] };
   proof: { length: number };
@@ -501,7 +508,7 @@ export type ResolveReceiptFreshenReport = {
 export type ResolveReceiptFreshenErrorReport = {
   error: "resolve_receipt_freshen_failed";
   command: "resolve-receipt";
-  source: "checkpoint-chain";
+  source: FreshenSource;
   stage: "input" | "freshen";
   message: string;
 };
@@ -509,6 +516,7 @@ export type ResolveReceiptFreshenErrorReport = {
 function reportFreshenError(
   out: Out,
   options: CreateReceiptOptions,
+  source: FreshenSource,
   stage: "input" | "freshen",
   err: unknown,
 ): void {
@@ -517,7 +525,7 @@ function reportFreshenError(
     const report: ResolveReceiptFreshenErrorReport = {
       error: "resolve_receipt_freshen_failed",
       command: "resolve-receipt",
-      source: "checkpoint-chain",
+      source,
       stage,
       message,
     };
@@ -528,19 +536,52 @@ function reportFreshenError(
   process.exitCode = 1;
 }
 
+/** Build the FreshenResult from whichever tile-free source the flags selected. */
+async function freshenFromSource(
+  options: CreateReceiptOptions,
+  loaded: ReturnType<typeof loadVerifyArtifacts>,
+): Promise<FreshenResult> {
+  if (options.anchor === "freshen-calldata") {
+    // Options parsing guarantees these in calldata-freshen mode.
+    const latestCheckpointBytes = new Uint8Array(
+      readFileSync(options.checkpoint!),
+    );
+    return freshenFromCalldataChain({
+      oldReceiptBytes: loaded.receiptCbor,
+      grant: loaded.grant,
+      idtimestampBe8: loaded.idtimestampBe8,
+      univocity: options.univocity!,
+      logId: options.logId!,
+      rpcUrl: options.rpcUrl!,
+      latestCheckpointBytes,
+    });
+  }
+  const chain = loadCheckpointChainFiles(options.checkpointChain!);
+  return freshenFromSthChain({
+    oldReceiptBytes: loaded.receiptCbor,
+    grant: loaded.grant,
+    idtimestampBe8: loaded.idtimestampBe8,
+    checkpoints: chain.checkpoints,
+    sourceRefs: chain.files.map((f) => basename(f)),
+  });
+}
+
 /**
- * Freshen a stale `--receipt` against a retained `--checkpoint-chain` (`.sth`).
- * Reuses `verify-grant`'s grant/entry-id loaders (the leaf value is recomputed
- * identically), folds the chain via the `.sth` provider, extends the receipt's
- * old path to the latest peak, and re-emits under the latest checkpoint. The
- * result verifies with `verify --genesis` against the current state.
+ * Freshen a stale `--receipt` tile-free. Reuses `verify-grant`'s grant/entry-id
+ * loaders (the leaf value is recomputed identically), reads the checkpoint chain
+ * from the selected source — a retained `.sth` chain (`--checkpoint-chain`,
+ * genesis-verifiable) or the on-chain `publishCheckpoint` calldata
+ * (`--rpc-url`/`--univocity`/`--log-id` + a latest `--checkpoint`, known-key
+ * rung) — extends the receipt's old path to the latest peak, and re-emits.
  */
 async function runFreshen(
   out: Out,
   options: CreateReceiptOptions,
 ): Promise<void> {
+  const source: FreshenSource =
+    options.anchor === "freshen-calldata" ? "calldata" : "checkpoint-chain";
+
   let loaded: ReturnType<typeof loadVerifyArtifacts>;
-  let chain: ReturnType<typeof loadCheckpointChainFiles>;
   try {
     loaded = loadVerifyArtifacts({
       genesis: undefined,
@@ -550,23 +591,19 @@ async function runFreshen(
       committedGrantFile: options.committedGrantFile,
       entryId: options.entryId,
     });
-    chain = loadCheckpointChainFiles(options.checkpointChain!);
   } catch (err) {
-    reportFreshenError(out, options, "input", err);
+    reportFreshenError(out, options, source, "input", err);
     return;
   }
 
   let result: FreshenResult;
   try {
-    result = await freshenFromSthChain({
-      oldReceiptBytes: loaded.receiptCbor,
-      grant: loaded.grant,
-      idtimestampBe8: loaded.idtimestampBe8,
-      checkpoints: chain.checkpoints,
-      sourceRefs: chain.files.map((f) => basename(f)),
-    });
+    result = await freshenFromSource(options, loaded);
   } catch (err) {
-    reportFreshenError(out, options, "freshen", err);
+    // Chain read / fold / self-check failures are the freshen stage; a bad
+    // --checkpoint / --checkpoint-chain path surfaces here too but reads as
+    // input — keep the single "freshen" stage token, the message names it.
+    reportFreshenError(out, options, source, "freshen", err);
     return;
   }
 
@@ -576,14 +613,14 @@ async function runFreshen(
       writeFileSync(options.out, receiptCbor);
     }
   } catch (err) {
-    reportFreshenError(out, options, "input", err);
+    reportFreshenError(out, options, source, "input", err);
     return;
   }
 
   if (options.json) {
     const report: ResolveReceiptFreshenReport = {
       command: "resolve-receipt",
-      source: "checkpoint-chain",
+      source,
       leaf: {
         mmrIndex: details.leafMmrIndex.toString(10),
         ...(options.entryId !== undefined ? { entryId: options.entryId } : {}),
@@ -607,16 +644,20 @@ async function runFreshen(
     // Raw CBOR to stdout (pipeable); narration stays on stderr.
     writeFileSync(1, receiptCbor);
   }
-  out.print(
-    "resolve-receipt: freshen    — stale receipt re-anchored tile-free",
-  );
+  const trust =
+    source === "calldata"
+      ? "from the on-chain publish calldata — sealer-signed, no tiles"
+      : "from the retained checkpoint chain — genesis-verifiable, no tiles";
+  const unit = source === "calldata" ? "calldata link(s)" : ".sth link(s)";
+  out.print("resolve-receipt: freshen    — stale receipt re-anchored %s", trust);
   out.print(
     "resolve-receipt: leaf       — mmrIndex %s",
     details.leafMmrIndex.toString(10),
   );
   out.print(
-    "resolve-receipt: chain      — %d .sth link(s) -> sealed size %s",
+    "resolve-receipt: chain      — %d %s -> sealed size %s",
     details.chainLinks,
+    unit,
     details.sealedSize.toString(10),
   );
   out.print(
