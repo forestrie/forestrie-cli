@@ -11,7 +11,7 @@ confusion comes from collapsing them into one "the receipt is valid".
 
 ## The three questions
 
-### 1. Freshness / split-view consistency — *is this the real, current, single history?*
+### 1. Split-view consistency — *is this a single, un-forked history?*
 
 Answered by the **accumulator** (the log's peak set). Recompute the leaf's
 inclusion path to a peak and match it against a *trusted* accumulator. Because
@@ -19,7 +19,16 @@ every published accumulator is consistency-gated forward (each is a committed
 prefix of every later one — ADR-0056), matching one proves the log has not
 forked or rewritten history under you.
 
-Trusted-accumulator sources, in ascending freshness:
+This property is **independent of currency.** Any accumulator is a genuine,
+non-equivocal commitment up to its own tree size, so an older one is not "less
+valid" — staleness only limits *coverage* (whether the snapshot reaches the leaf,
+and how much newer history it attests), never the validity of what it does cover.
+"Freshness" — *is this the latest accumulator* — is therefore a weaker, separate
+axis that bears only on coverage; do not collapse it into split-view. Split-view
+is the load-bearing property here; currency is at most the `--rpc-url` "as of
+now" delta below.
+
+Trusted-accumulator sources, in ascending currency:
 
 - `--known-accumulator` — a cached, auditable chain read (`fetch-accumulator`).
 - `--rpc-url` — a live read; same guarantee plus "as of now".
@@ -92,7 +101,7 @@ published.
 `verify` offers four named anchors (FOR-297 / plan-2607-24). They are not a
 single "more vs less trust" line — each answers a different subset:
 
-| Anchor | Freshness (§1) | Sealing (§2) | Authority (§3) |
+| Anchor | Split-view (§1) | Sealing (§2) | Authority (§3) |
 |---|---|---|---|
 | `--known-log-key` | — | signature under a caller-known owner key | key→log binding **asserted** (out-of-band), not proven |
 | `--genesis` | — | signature chains to the **root** owner (root log / direct delegation) | root only; a child log needs the grant-chain walk (still open) |
@@ -138,7 +147,7 @@ node 6. The three questions attach to that one re-emitted receipt like this:
 ```
 freshened receipt, leaf@1 @ size 7
 ├─ inclusion path [0,5] --recompute--> node 6
-│    FRESHNESS (§1) : node 6 == trusted size-7 accumulator[0]
+│    SPLIT-VIEW (§1): node 6 == trusted size-7 accumulator[0]
 │                     (freshen self-check vs the .sth; bound by --known-accumulator / --rpc-url)
 │
 ├─ peak receipt over node 6, signed by the size-7 sealer
@@ -194,7 +203,7 @@ exactly this reason).
 ## "Known-accumulator-verifiable but not genesis-verifiable" is not a gap
 
 A receipt anchored purely at the accumulator rung authenticates the **state**
-(the leaf roots into the genuine current accumulator) but says nothing, by
+(the leaf roots into the genuine canonical accumulator) but says nothing, by
 itself, about **signer provenance** (that the sealer chains to genesis). These
 are the two *different* questions §1 and §2/§3 — not a strong check and a weak
 one. The state question is answered by the accumulator; the provenance question,
