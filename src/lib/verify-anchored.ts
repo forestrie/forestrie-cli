@@ -9,7 +9,11 @@ import {
 import {
   decodeTrustRootFromGenesis,
   parseReceipt,
+  univocityLeafHash,
 } from "@forestrie/receipt-verify";
+
+/** Re-exported for existing local consumers (was CLI-private before FOR-297 D5 hoist). */
+export { univocityLeafHash };
 
 /**
  * Chain-anchored receipt check (FOR-347 / demo step 5a): read the
@@ -177,28 +181,6 @@ class SubtleHasher implements Hasher {
     }
     return new Uint8Array(await crypto.subtle.digest("SHA-256", combined));
   }
-}
-
-/**
- * Univocity leaf commitment: `SHA-256(idtimestamp_be8 ‖ inner)` where `inner`
- * is the leaf ContentHash (`SHA-256(payload)` for a statement leaf, the grant
- * commitment hash for a grant leaf). Mirrors
- * `@forestrie/receipt-verify` `univocityLeafHash` (not exported there); hoist
- * to the library when the FOR-297 multi-hop resolver lands.
- */
-export async function univocityLeafHash(
-  idtimestampBe8: Uint8Array,
-  inner: Uint8Array,
-): Promise<Uint8Array> {
-  if (idtimestampBe8.length < 8) {
-    throw new Error("idtimestamp must be at least 8 bytes");
-  }
-  const id8 =
-    idtimestampBe8.length > 8 ? idtimestampBe8.slice(-8) : idtimestampBe8;
-  const preimage = new Uint8Array(8 + inner.length);
-  preimage.set(id8);
-  preimage.set(inner, 8);
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", preimage));
 }
 
 export type RecomputedPeak = {
