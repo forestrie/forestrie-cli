@@ -640,12 +640,15 @@ async function freshenFromSource(
 }
 
 /**
- * Freshen a stale `--receipt` tile-free. Reuses `verify-grant`'s grant/entry-id
- * loaders (the leaf value is recomputed identically), reads the checkpoint chain
- * from the selected source — a retained `.sth` chain (`--checkpoint-chain`,
- * genesis-verifiable) or the on-chain `publishCheckpoint` calldata
- * (`--rpc-url`/`--univocity`/`--log-id` + a latest `--checkpoint`, known-key
- * rung) — extends the receipt's old path to the latest peak, and re-emits.
+ * Freshen a stale `--receipt` tile-free. Reuses `verify`'s leaf-value loaders
+ * (recomputed identically from `--payload` or the committed grant), reads the
+ * climb material from the selected source — a retained `.sth` chain
+ * (`--checkpoint-chain`; emitted under the chain's own tail checkpoint) or the
+ * on-chain `publishCheckpoint` calldata (`--rpc-url`/`--univocity`/`--log-id` +
+ * a separately-supplied latest `--checkpoint` for emission) — extends the
+ * receipt's old path to the current peak, and re-emits. Both sources produce a
+ * receipt re-anchored to the current accumulator; the trust posture (freshness
+ * vs signer provenance) is chosen at verify. See TRUST-MODEL.md.
  */
 async function runFreshen(
   out: Out,
@@ -724,10 +727,13 @@ async function runFreshen(
   }
   const trust =
     source === "calldata"
-      ? "from the on-chain publish calldata — sealer-signed, no tiles"
-      : "from the retained checkpoint chain — genesis-verifiable, no tiles";
+      ? "climb from on-chain publishCheckpoint calldata (authority checked on-chain at publish), emitted under the supplied latest .sth"
+      : "climb from the retained .sth chain, emitted under its own tail checkpoint";
   const unit = source === "calldata" ? "calldata link(s)" : ".sth link(s)";
-  out.print("resolve-receipt: freshen    — stale receipt re-anchored %s", trust);
+  out.print(
+    "resolve-receipt: freshen    — re-anchored to the current accumulator, no tiles; %s",
+    trust,
+  );
   out.print(
     "resolve-receipt: leaf       — mmrIndex %s",
     details.leafMmrIndex.toString(10),
