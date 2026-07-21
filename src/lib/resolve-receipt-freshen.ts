@@ -4,23 +4,31 @@
  * "Freshen" is `resolve-receipt --receipt <stale> + a tile-free source`: re-anchor
  * a stale receipt to the CURRENT sealed state without massif tiles. The stale
  * receipt supplies the leaf's MMR index and its old inclusion path (leaf → old
- * peak); a checkpoint chain supplies the climb from that old peak to the latest
- * accumulator; the latest checkpoint supplies the signature to emit under. The
- * result is a native receipt that verifies with the offline verifier.
+ * peak); a checkpoint chain supplies the climb from that old peak to the current
+ * accumulator; the latest checkpoint supplies the emission signature. The result
+ * is a native receipt that verifies with the offline verifier.
+ *
+ * A freshened receipt is a NEW attestation of the CURRENT accumulator, so the
+ * only signature it can carry is one over a checkpoint at the current size — the
+ * latest checkpoint's signer, necessarily (anything else would be forgery). This
+ * is not a signer "downgrade": the log authorises a SET of sealers and the
+ * contract enforces membership at publish; ranking them is out-of-band verify-
+ * time policy, not a freshen concern. See TRUST-MODEL.md.
  *
  * The leaf VALUE is not in the stale receipt (its payload is detached — verify
- * recomputes it), so freshen recomputes it exactly as `verify-grant` does:
- * `univocityLeafHash(idtimestamp, grantCommitmentHash(grant))`. `freshenReceipt`
- * needs it for its fail-closed self-check (recomputed peak == folded accumulator
- * peak), so a bad chain/leaf throws here rather than minting a bad receipt.
+ * recomputes it), so freshen recomputes it exactly as `verify` does:
+ * `univocityLeafHash(idtimestamp, inner)` (see the `inner` note below).
+ * `freshenReceipt` needs it for its fail-closed self-check (recomputed peak ==
+ * folded accumulator peak), so a bad chain/leaf throws here rather than minting
+ * a bad receipt.
  *
- * Two tile-free sources, both folding to `freshenReceipt`:
- * - **`.sth` chain** (`freshenFromSthChain`): retained checkpoints → genesis-
- *   verifiable. The last checkpoint in the chain is the emission checkpoint.
+ * Two tile-free climb sources, both folding to `freshenReceipt`:
+ * - **`.sth` chain** (`freshenFromSthChain`): retained checkpoints; the chain's
+ *   own tail is the emission checkpoint (self-contained, no separate artifact).
  * - **chain calldata** (`freshenFromCalldataChain`): the `publishCheckpoint`
- *   transactions carry the consistency-proof chain (known-key rung). Calldata
- *   carries no pre-signed peak receipts / cert, so emission still needs a latest
- *   `.sth` supplied separately (plan-2607-32 Phase 3 finding).
+ *   transactions carry the consistency-proof chain (authority already checked
+ *   on-chain at publish). Calldata carries no pre-signed peak receipts / cert, so
+ *   emission still needs a latest `.sth` supplied separately.
  */
 import {
   freshenReceipt,
@@ -75,12 +83,12 @@ export type FreshenResult = {
  *
  * When a `knownAccumulator` is supplied, the folded latest accumulator is bound
  * to that trusted snapshot BEFORE the receipt is returned: the state we folded
- * must equal the snapshot at the same size, or we fail closed. This is the
- * accumulator trust rung (a chain-captured `logState`, `fetch-accumulator`) — it
- * confirms the leaf roots into the genuine current state without a genesis walk,
- * and, for the calldata source (whose fold is already cross-checked against the
- * on-chain `CheckpointPublished` accumulator), adds an independent, RPC-agnostic
- * anchor that catches a lying/stale RPC.
+ * must equal the snapshot at the same size, or we fail closed. This anchors
+ * FRESHNESS (a chain-captured `logState`, `fetch-accumulator`) — it confirms the
+ * leaf roots into the genuine current state, orthogonal to signer provenance and
+ * needing no genesis walk. For the calldata source (whose fold is already cross-
+ * checked against the on-chain `CheckpointPublished` accumulator), it adds an
+ * independent, RPC-agnostic anchor that catches a lying/stale RPC.
  */
 async function emitFreshened(opts: {
   oldReceiptBytes: Uint8Array;
@@ -168,11 +176,13 @@ export async function freshenFromSthChain(opts: {
  * Freshen a stale receipt against the on-chain `publishCheckpoint` calldata.
  *
  * Reads the log's checkpoint chain from the `CheckpointPublished` transactions
- * (trustless climb material), then re-emits under `latestCheckpointBytes` — a
- * latest `.sth` supplied by the caller, because the calldata carries no
- * pre-signed peak receipts or delegation cert. The calldata chain's sealed size
- * must equal the latest checkpoint's (enforced by `freshenReceipt`). This is the
- * known-key rung: trust flows from the sealer key in the seal, not genesis.
+ * (trustless climb material — the on-chain publish already discharged sealing +
+ * grant authority), then re-emits under `latestCheckpointBytes` — a latest `.sth`
+ * supplied by the caller, because the calldata carries no pre-signed peak
+ * receipts or delegation cert. The calldata chain's sealed size must equal the
+ * latest checkpoint's (enforced by `freshenReceipt`). Freshness is anchored by
+ * the fold (and, if supplied, `--known-accumulator`); signer provenance is a
+ * verify-time question. See TRUST-MODEL.md.
  */
 export async function freshenFromCalldataChain(opts: {
   oldReceiptBytes: Uint8Array;

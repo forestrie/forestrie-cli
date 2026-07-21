@@ -18,7 +18,7 @@ export default defineForestrieCommand({
     "known-log-key": {
       type: "string",
       description:
-        "Caller-known log OWNER key (the delegation issuer), base64 x||y (64 bytes) (env KNOWN_LOG_KEY). Offline trust anchor that replaces --genesis; asserts (does not prove) the key-to-log binding — the genesis grant-chain walk derives it, and chain anchoring adds split-view protection",
+        "Caller-known log OWNER key (the delegation issuer), base64 x||y (64 bytes) (env KNOWN_LOG_KEY). Offline signer-provenance anchor that replaces --genesis; asserts (does not prove) the key-to-log binding — --genesis derives it from the grant chain, while the accumulator anchors (--known-accumulator / --rpc-url) supply freshness / split-view. See TRUST-MODEL.md",
       valueHint: "base64",
     },
     receipt: {

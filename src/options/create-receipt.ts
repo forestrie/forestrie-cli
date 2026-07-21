@@ -19,11 +19,17 @@ import {
  *   exactly one of `--mmr-index` / `--entry-id`.
  * - **`.sth` chain** (`--checkpoint-chain`): tile-free FRESHEN of a stale
  *   `--receipt` — fold the retained checkpoint chain, extend the receipt's old
- *   path to the latest peak, re-emit under the latest `.sth`. Genesis-verifiable.
+ *   path to the current peak, re-emit under the chain's own tail checkpoint.
+ * - **calldata** (`--rpc-url`/`--univocity`/`--log-id` + `--checkpoint`):
+ *   tile-free FRESHEN reading the climb material from the on-chain
+ *   `publishCheckpoint` calldata; emission borrows the separately-supplied
+ *   latest `--checkpoint` (calldata carries no per-peak receipts).
  *
- * Freshen (`--receipt` + a tile-free source) recomputes the leaf value exactly
- * as `verify-grant` does, so it takes the same grant inputs: `--committed-grant`
- * / `--committed-grant-file` + `--entry-id`.
+ * Both freshen sources re-anchor to the current accumulator; the trust posture
+ * (freshness vs signer provenance) is chosen at verify — see TRUST-MODEL.md.
+ * Freshen recomputes the leaf value exactly as `verify` does, from `--payload`
+ * (statement receipts) or the committed grant (`--committed-grant` /
+ * `--committed-grant-file`) + `--entry-id`.
  *
  * Multiple sources → error ("choose one source"); an under-specified source →
  * error naming what's missing. No implicit pick — every ambiguous invocation
@@ -62,7 +68,8 @@ export type CreateReceiptOptions = ForestrieCommonOptions & {
    * only; mutually exclusive with `--out`). */
   inPlace: boolean;
   /** Trusted accumulator snapshot (`fetch-accumulator` output) to bind the
-   * freshened state against — the accumulator trust rung, freshen only. */
+   * freshened state against — anchors freshness (not signer provenance), fails
+   * closed on mismatch; freshen only. See TRUST-MODEL.md. */
   knownAccumulator: string | undefined;
 };
 

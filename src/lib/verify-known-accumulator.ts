@@ -15,8 +15,9 @@ import {
  * Known-accumulator snapshot (FOR-297 D5): a cached, auditable chain read of
  * the log's `logState`, letting chain-anchored verification run fully offline.
  *
- * Trust model: `--rpc-url` was never trust-free — the RPC provider is itself
- * a trusted chain reader. The snapshot makes that trust explicit, portable,
+ * Trust model (freshness / split-view — see TRUST-MODEL.md): `--rpc-url` was
+ * never trust-free — the RPC provider is itself a trusted chain reader. The
+ * snapshot makes that trust explicit, portable,
  * and cacheable. It binds `(chainId, univocity, logId, size, block)` so anyone
  * with RPC can re-run the read at that block and confirm or disprove it —
  * auditable, falsifiable trust, unlike a bare known key.

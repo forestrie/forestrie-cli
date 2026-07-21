@@ -232,7 +232,7 @@ receipts, or `--committed-grant`/`--committed-grant-file` for grant receipts
 (both with `--entry-id`).
 
 ```bash
-# a STATEMENT receipt from a retained .sth chain (genesis-verifiable)
+# a STATEMENT receipt from a retained .sth chain (emitted under the chain's tail)
 forestrie resolve-receipt \
   --receipt stale.cbor --checkpoint-chain ./checkpoints/ \
   --payload statement.cose --entry-id <hex> \
@@ -244,9 +244,9 @@ forestrie resolve-receipt \
   --committed-grant-file grant.cbor --entry-id <hex> \
   --in-place
 
-# from on-chain publishCheckpoint calldata (known-key rung); calldata carries
-# no peak receipts, so the latest .sth is supplied for emission, and
-# --known-accumulator binds the folded state to a trusted snapshot
+# from on-chain publishCheckpoint calldata; calldata carries no peak receipts,
+# so the latest .sth is supplied for emission, and --known-accumulator binds
+# the folded state to a trusted snapshot
 forestrie resolve-receipt \
   --receipt stale.cbor \
   --rpc-url $RPC_URL --univocity <address> --log-id <id> \
@@ -263,31 +263,21 @@ recomputed peak does not match the folded latest accumulator).
 
 #### Bind the freshened state (`--known-accumulator`)
 
-Both sources fold a consistency-proof chain to the latest accumulator, but the
-**source authenticates that state differently**, and the emission checkpoint's
-role differs:
-
-- **`--checkpoint-chain` (retained `.sth`)** is the safer source because the
-  checkpoint the receipt is emitted under **is the chain's own tail** — there is
-  no separate artifact to mismatch, and the sealer-signed, genesis-rooted `.sth`
-  makes the freshened receipt **genesis-verifiable** offline. Reach for this by
-  default.
-- **calldata (`--rpc-url`/`--univocity`/`--log-id` + `--checkpoint`)** reads the
-  climb material trustlessly from the `publishCheckpoint` transactions (the fold
-  is cross-checked against the on-chain `CheckpointPublished` accumulator), but
-  emission borrows a **separately-supplied** latest `.sth` for its signature.
-  This is the **known-key rung**.
-
-Because the calldata `--checkpoint` is a separate input, pass
+Both freshen sources fold a consistency-proof chain to the current accumulator;
+they differ only in the **emission checkpoint**. `--checkpoint-chain` emits under
+the chain's own tail (self-contained — reach for it by default). The calldata
+source borrows a **separately-supplied** latest `--checkpoint`, so pass
 **`--known-accumulator <snapshot>`** (a `fetch-accumulator` capture) to bind the
-freshened state to a trusted accumulator: freshen asserts the folded latest
-accumulator **equals your snapshot at the same size**, failing closed on any
-disagreement. This is the accumulator trust rung — a chain-captured `logState`
-is a direct, falsifiable attestation of the current state, stronger than a
-genesis walk for "is this the real log," and it needs no genesis (non-root logs
-would otherwise have to walk the grant hierarchy to find it). It also catches a
-lying/stale RPC on the calldata path, since the snapshot is an independent
-read. `--known-accumulator` works with either source.
+folded state to a trusted chain read: freshen asserts it **equals your snapshot
+at the same size** and fails closed otherwise (this also catches a lying/stale
+RPC). `--known-accumulator` works with either source.
+
+`--known-accumulator` anchors **freshness** — that the leaf roots into the
+genuine current log — which is a *different* question from who sealed the state
+or whether the log's authority chains back to genesis. Freshen never re-opens
+those; it re-anchors an already-issued receipt to the current accumulator. Which
+anchor proves what is the trust model: see
+**[TRUST-MODEL.md](./TRUST-MODEL.md#freshen-and-the-attestor)**.
 
 ### `decode-receipt`
 
@@ -324,32 +314,26 @@ signature — no operator trust required.
 
 #### Trust anchors (FOR-297)
 
-`verify` supports four explicitly-named trust anchors; each rung of the
-ladder needs strictly less trust than the one before it:
+`verify` takes four named trust anchors — pass whichever you hold:
 
-1. **`--known-log-key`** — a caller-known log OWNER key (base64 `x||y`,
-   env `KNOWN_LOG_KEY`), obtained out of band: the standard SCITT
-   relying-party posture and the SSH known-hosts model. Fully offline, no
-   genesis; but the "key K owns log L" binding is *asserted* by the key's
-   provenance, not proven, and there is no grant-lifecycle visibility and
-   no split-view protection.
-2. **`--genesis`** — genesis-derived roots; the planned grant-chain walk
-   (approach A) will *derive* per-log bindings from `genesis.cbor` +
-   public tiles, adding lifecycle visibility with no key distribution.
-3. **`--known-accumulator`** — a cached, auditable chain read of the log's
-   on-chain `logState` (produced by `forestrie fetch-accumulator`):
-   contract-enforced state — signature, grant chain AND split-view for
-   covered entries — fully offline. Older receipts extend to a newer
-   snapshot via `--massif` proof-path extension; newer receipts fail
-   closed. Never source the snapshot unauthenticated from the log
-   operator's tile store — that re-internalises the operator trust this
-   anchor removes.
-4. **`--rpc-url`** (live chain read) — same as 3 plus freshness; the RPC
-   provider is itself a trusted chain reader, a trust the snapshot merely
-   makes explicit and portable.
+- **`--known-log-key`** — a caller-known log owner key (base64 `x||y`, env
+  `KNOWN_LOG_KEY`); fully offline, checks the signature under a key you trust
+  out of band (the SCITT / SSH-known-hosts posture).
+- **`--genesis`** — a cached `genesis.cbor` (the univocity-instance root
+  registration). Roots a receipt whose signer chains to that root owner; for a
+  child log deeper in the hierarchy, reaching genesis is the grant-chain walk
+  (still open) or the on-chain path below.
+- **`--known-accumulator`** — a cached chain read (`forestrie fetch-accumulator`):
+  verifies the peak against the on-chain accumulator, no operator trust and no
+  signature needed. Never source it unauthenticated from the operator's tile
+  store. Older receipts extend to a newer snapshot via `--massif`.
+- **`--rpc-url`** — a live chain read; same as `--known-accumulator`, current.
 
-The receipt never expires, and the anchor never needs to be current —
-only trusted.
+What each actually proves — and how forestrie separates **freshness** (does the
+leaf root into the real current log) from **sealing** (who signed) from
+**authority** (does the log chain to genesis, via grants — not `genesis.cbor`) —
+is the trust model: see **[TRUST-MODEL.md](./TRUST-MODEL.md)**. The receipt never
+expires, and the anchor never needs to be current — only trusted.
 
 ### `fetch-accumulator`
 

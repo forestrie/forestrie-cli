@@ -14,7 +14,10 @@ import { PUBLISH_CHECKPOINT_ABI } from "../src/lib/decode-checkpoint-calldata.js
 import { runCli } from "./support.js";
 import { parseCreateReceiptOptions } from "../src/options/create-receipt.js";
 import { runCreateReceipt } from "../src/main/create-receipt.js";
-import type { KnownAccumulator } from "../src/lib/verify-known-accumulator.js";
+import {
+  encodeKnownAccumulator,
+  type KnownAccumulator,
+} from "../src/lib/verify-known-accumulator.js";
 import {
   freshenFromCalldataChain,
   freshenFromSthChain,
@@ -730,5 +733,79 @@ describe("resolve-receipt freshen | verify (CLI end-to-end, FOR-418)", () => {
       entryIdHex,
     ]);
     expect(verified.exitCode).toBe(0);
+  });
+
+  // The accumulator rung (TRUST-MODEL.md): freshen binds the folded current
+  // state to a trusted chain read, then the receipt still verifies. This is the
+  // "freshness" anchor exercised end-to-end through the real CLI.
+  test("`--known-accumulator` binds the freshened state and the result still verifies", async () => {
+    const { fx, dir, chain, stale, grant, genesis } =
+      await writeFreshenArtifacts();
+    const fresh = path.join(dir, "fresh-bound.cbor");
+    const snapPath = path.join(dir, "accumulator.cbor");
+    // A trusted snapshot at the current sealed size (7) whose accumulator is the
+    // folded peak — what `fetch-accumulator` would capture from chain.
+    writeFileSync(snapPath, encodeKnownAccumulator(snap(7n, [fx.peak7])));
+
+    const created = runCli([
+      "resolve-receipt",
+      "--receipt",
+      stale,
+      "--checkpoint-chain",
+      chain,
+      "--committed-grant-file",
+      grant,
+      "--entry-id",
+      fx.entryIdHex,
+      "--known-accumulator",
+      snapPath,
+      "--out",
+      fresh,
+      "--json",
+    ]);
+    expect(created.exitCode).toBe(0);
+    const report = JSON.parse(created.stdout);
+    expect(report.source).toBe("checkpoint-chain");
+    expect(report.knownAccumulator).toEqual({ matched: true });
+
+    const verified = runCli([
+      "verify-grant",
+      "--genesis",
+      genesis,
+      "--receipt",
+      fresh,
+      "--committed-grant-file",
+      grant,
+      "--entry-id",
+      fx.entryIdHex,
+    ]);
+    expect(verified.exitCode).toBe(0);
+    expect(verified.stdout).toContain("PASS");
+  });
+
+  test("`--known-accumulator` fails closed when the trusted snapshot disagrees", async () => {
+    const { fx, dir, chain, stale, grant } = await writeFreshenArtifacts();
+    const snapPath = path.join(dir, "accumulator-wrong.cbor");
+    writeFileSync(
+      snapPath,
+      encodeKnownAccumulator(snap(7n, [new Uint8Array(32).fill(0x99)])),
+    );
+    const created = runCli([
+      "resolve-receipt",
+      "--receipt",
+      stale,
+      "--checkpoint-chain",
+      chain,
+      "--committed-grant-file",
+      grant,
+      "--entry-id",
+      fx.entryIdHex,
+      "--known-accumulator",
+      snapPath,
+      "--out",
+      path.join(dir, "nope.cbor"),
+    ]);
+    expect(created.exitCode).toBe(1);
+    expect(created.stderr).toContain("does not match --known-accumulator");
   });
 });
