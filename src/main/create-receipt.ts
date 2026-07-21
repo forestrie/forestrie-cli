@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { Out } from "@forestrie/cli-kit/reporting";
 import type { CreateReceiptOptions } from "../options/create-receipt.js";
 import {
@@ -12,8 +12,17 @@ import {
   loadCreateReceiptArtifacts,
   type CreateReceiptArtifacts,
 } from "../lib/create-receipt-inputs.js";
-import { loadVerifyArtifacts } from "../lib/verify-inputs.js";
+import { grantCommitmentHashFromGrant } from "@forestrie/receipt-verify";
+import {
+  loadPayloadVerifyArtifacts,
+  loadVerifyArtifacts,
+} from "../lib/verify-inputs.js";
 import { loadCheckpointChainFiles } from "../lib/verify-checkpoint-chain.js";
+import {
+  assertSnapshotBinding,
+  decodeKnownAccumulator,
+  type KnownAccumulator,
+} from "../lib/verify-known-accumulator.js";
 import {
   freshenFromCalldataChain,
   freshenFromSthChain,
@@ -502,6 +511,10 @@ export type ResolveReceiptFreshenReport = {
   receiptBytes: number;
   out?: string;
   receiptB64?: string;
+  /** True when the `--receipt` file was rewritten in place. */
+  inPlace?: boolean;
+  /** Present when `--known-accumulator` bound the freshened state. */
+  knownAccumulator?: { matched: boolean };
 };
 
 /** `--json` freshen operational-error shape. */
@@ -536,33 +549,93 @@ function reportFreshenError(
   process.exitCode = 1;
 }
 
+/** Load + bind the optional `--known-accumulator` snapshot for the freshen run. */
+function loadFreshenSnapshot(
+  options: CreateReceiptOptions,
+): KnownAccumulator | undefined {
+  if (options.knownAccumulator === undefined) return undefined;
+  const snapshot = decodeKnownAccumulator(
+    new Uint8Array(readFileSync(options.knownAccumulator)),
+  );
+  // Reject a snapshot for the wrong log/contract before it can anchor anything.
+  // (Only calldata freshen supplies --univocity/--log-id; the `.sth` path skips
+  // the binding it has no target for.)
+  assertSnapshotBinding(snapshot, {
+    univocity: options.univocity,
+    logId: options.logId,
+  });
+  return snapshot;
+}
+
+/** The stale receipt + its leaf inputs, from whichever leaf source was given. */
+type FreshenLeaf = {
+  receiptCbor: Uint8Array;
+  /** Leaf ContentHash: `SHA-256(payload)` (statement) or the grant commitment. */
+  inner: Uint8Array;
+  idtimestampBe8: Uint8Array;
+};
+
+/**
+ * Load the stale receipt + recompute the leaf ContentHash the same way `verify`
+ * does — from `--payload` (statement: `SHA-256(payload)`) or the committed grant
+ * (`--committed-grant`/`-file`). Options parsing guarantees exactly one.
+ */
+async function loadFreshenLeaf(
+  options: CreateReceiptOptions,
+): Promise<FreshenLeaf> {
+  if (options.payload !== undefined) {
+    const a = loadPayloadVerifyArtifacts({
+      genesis: undefined,
+      receipt: options.receipt!,
+      payload: options.payload,
+      entryId: options.entryId!,
+    });
+    const inner = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new Uint8Array(a.payload)),
+    );
+    return { receiptCbor: a.receiptCbor, inner, idtimestampBe8: a.idtimestampBe8 };
+  }
+  const a = loadVerifyArtifacts({
+    genesis: undefined,
+    receipt: options.receipt!,
+    committedGrant: options.committedGrant,
+    committedGrantFile: options.committedGrantFile,
+    entryId: options.entryId,
+  });
+  const inner = await grantCommitmentHashFromGrant(a.grant);
+  return { receiptCbor: a.receiptCbor, inner, idtimestampBe8: a.idtimestampBe8 };
+}
+
 /** Build the FreshenResult from whichever tile-free source the flags selected. */
 async function freshenFromSource(
   options: CreateReceiptOptions,
-  loaded: ReturnType<typeof loadVerifyArtifacts>,
+  leaf: FreshenLeaf,
 ): Promise<FreshenResult> {
+  const knownAccumulator = loadFreshenSnapshot(options);
   if (options.anchor === "freshen-calldata") {
     // Options parsing guarantees these in calldata-freshen mode.
     const latestCheckpointBytes = new Uint8Array(
       readFileSync(options.checkpoint!),
     );
     return freshenFromCalldataChain({
-      oldReceiptBytes: loaded.receiptCbor,
-      grant: loaded.grant,
-      idtimestampBe8: loaded.idtimestampBe8,
+      oldReceiptBytes: leaf.receiptCbor,
+      inner: leaf.inner,
+      idtimestampBe8: leaf.idtimestampBe8,
       univocity: options.univocity!,
       logId: options.logId!,
       rpcUrl: options.rpcUrl!,
       latestCheckpointBytes,
+      knownAccumulator,
     });
   }
   const chain = loadCheckpointChainFiles(options.checkpointChain!);
   return freshenFromSthChain({
-    oldReceiptBytes: loaded.receiptCbor,
-    grant: loaded.grant,
-    idtimestampBe8: loaded.idtimestampBe8,
+    oldReceiptBytes: leaf.receiptCbor,
+    inner: leaf.inner,
+    idtimestampBe8: leaf.idtimestampBe8,
     checkpoints: chain.checkpoints,
     sourceRefs: chain.files.map((f) => basename(f)),
+    knownAccumulator,
   });
 }
 
@@ -581,16 +654,9 @@ async function runFreshen(
   const source: FreshenSource =
     options.anchor === "freshen-calldata" ? "calldata" : "checkpoint-chain";
 
-  let loaded: ReturnType<typeof loadVerifyArtifacts>;
+  let leaf: FreshenLeaf;
   try {
-    loaded = loadVerifyArtifacts({
-      genesis: undefined,
-      // Options parsing guarantees these in freshen mode.
-      receipt: options.receipt!,
-      committedGrant: options.committedGrant,
-      committedGrantFile: options.committedGrantFile,
-      entryId: options.entryId,
-    });
+    leaf = await loadFreshenLeaf(options);
   } catch (err) {
     reportFreshenError(out, options, source, "input", err);
     return;
@@ -598,7 +664,7 @@ async function runFreshen(
 
   let result: FreshenResult;
   try {
-    result = await freshenFromSource(options, loaded);
+    result = await freshenFromSource(options, leaf);
   } catch (err) {
     // Chain read / fold / self-check failures are the freshen stage; a bad
     // --checkpoint / --checkpoint-chain path surfaces here too but reads as
@@ -608,9 +674,17 @@ async function runFreshen(
   }
 
   const { receiptCbor, details } = result;
+  // --in-place rewrites the stale receipt file; otherwise --out, else stdout.
+  const writeTarget = options.inPlace ? options.receipt! : options.out;
   try {
-    if (options.out !== undefined) {
-      writeFileSync(options.out, receiptCbor);
+    if (options.inPlace) {
+      // Crash-safe overwrite of the source receipt: write a sibling temp then
+      // atomically rename, so a failed write never truncates the original.
+      const tmp = `${writeTarget}.freshen.tmp`;
+      writeFileSync(tmp, receiptCbor);
+      renameSync(tmp, writeTarget!);
+    } else if (writeTarget !== undefined) {
+      writeFileSync(writeTarget, receiptCbor);
     }
   } catch (err) {
     reportFreshenError(out, options, source, "input", err);
@@ -632,15 +706,19 @@ async function runFreshen(
       },
       proof: { length: details.proofLength },
       receiptBytes: receiptCbor.length,
-      ...(options.out !== undefined
-        ? { out: options.out }
+      ...(writeTarget !== undefined
+        ? { out: writeTarget }
         : { receiptB64: Buffer.from(receiptCbor).toString("base64") }),
+      ...(options.inPlace ? { inPlace: true } : {}),
+      ...(details.knownAccumulatorMatched !== undefined
+        ? { knownAccumulator: { matched: details.knownAccumulatorMatched } }
+        : {}),
     };
     out.out(JSON.stringify(report, null, 2));
     return;
   }
 
-  if (options.out === undefined) {
+  if (writeTarget === undefined) {
     // Raw CBOR to stdout (pipeable); narration stays on stderr.
     writeFileSync(1, receiptCbor);
   }
@@ -660,13 +738,19 @@ async function runFreshen(
     unit,
     details.sealedSize.toString(10),
   );
+  if (details.knownAccumulatorMatched) {
+    out.print(
+      "resolve-receipt: anchor     — folded state matches --known-accumulator (trusted)",
+    );
+  }
   out.print(
     "resolve-receipt: proof      — %d node(s) in the extended path",
     details.proofLength,
   );
   out.print(
-    "resolve-receipt: receipt    — %d bytes -> %s",
+    "resolve-receipt: receipt    — %d bytes -> %s%s",
     receiptCbor.length,
-    options.out ?? "stdout",
+    writeTarget ?? "stdout",
+    options.inPlace ? " (in place)" : "",
   );
 }

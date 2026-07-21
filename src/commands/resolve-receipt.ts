@@ -67,6 +67,12 @@ export default defineForestrieCommand({
         "Committed grant CBOR file — recomputes the leaf value (freshen; needs --entry-id)",
       valueHint: "path",
     },
+    payload: {
+      type: "string",
+      description:
+        "Registered statement payload — the leaf ContentHash (freshen statement receipts; alternative to --committed-grant, needs --entry-id)",
+      valueHint: "path",
+    },
     // --- shared ---
     "entry-id": {
       type: "string",
@@ -77,6 +83,17 @@ export default defineForestrieCommand({
     out: {
       type: "string",
       description: "Receipt output path (default: stdout)",
+      valueHint: "path",
+    },
+    "in-place": {
+      type: "boolean",
+      description:
+        "Rewrite the --receipt file with the freshened receipt (freshen only; mutually exclusive with --out)",
+    },
+    "known-accumulator": {
+      type: "string",
+      description:
+        "Trusted accumulator snapshot (fetch-accumulator output) — bind the freshened state to it (freshen only; the accumulator trust rung, no genesis)",
       valueHint: "path",
     },
   },

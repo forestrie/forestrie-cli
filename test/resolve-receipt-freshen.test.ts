@@ -1,15 +1,37 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { encodeAbiParameters, encodeFunctionData } from "viem";
-import { encodeCborDeterministic } from "@forestrie/encoding";
-import { verifyGrantReceiptOffline } from "@forestrie/receipt-verify";
+import { createCaptureOut } from "@forestrie/cli-kit/reporting";
+import { encodeCborDeterministic, encodeGrantPayload } from "@forestrie/encoding";
+import {
+  grantCommitmentHashFromGrant,
+  verifyGrantReceiptOffline,
+  type Grant,
+} from "@forestrie/receipt-verify";
 import { PUBLISH_CHECKPOINT_ABI } from "../src/lib/decode-checkpoint-calldata.js";
+import { runCli } from "./support.js";
 import { parseCreateReceiptOptions } from "../src/options/create-receipt.js";
+import { runCreateReceipt } from "../src/main/create-receipt.js";
+import type { KnownAccumulator } from "../src/lib/verify-known-accumulator.js";
 import {
   freshenFromCalldataChain,
   freshenFromSthChain,
 } from "../src/lib/resolve-receipt-freshen.js";
-import { buildVerifyFixture, grantWithData } from "./verify-fixture.js";
-import { signDetachedPeakReceipt } from "./create-receipt-fixture.js";
+import {
+  buildGenesisCbor,
+  buildPeakReceipt,
+  buildVerifyFixture,
+  entryIdHexFor,
+  generateP256KeyPair,
+  grantWithData,
+  univocityLeafHash,
+} from "./verify-fixture.js";
+import {
+  positionCommittedInteriorHash,
+  signDetachedPeakReceipt,
+} from "./create-receipt-fixture.js";
 
 /**
  * FOR-418 Phase 3c: `resolve-receipt` freshen over a retained `.sth` chain.
@@ -26,6 +48,9 @@ import { signDetachedPeakReceipt } from "./create-receipt-fixture.js";
  * this is the latest checkpoint to emit under, the pre-signed peak receipts at
  * label -65931. (Freshen does not use the checkpoint's own outer signature.)
  */
+/** Leaf ContentHash for a grant, as freshen's `inner` (grant path). */
+const innerOf = (g: Grant): Promise<Uint8Array> => grantCommitmentHashFromGrant(g);
+
 function buildSth(opts: {
   consistency: [bigint, bigint, Uint8Array[][], Uint8Array[]];
   peakReceipts?: Uint8Array[];
@@ -59,7 +84,7 @@ describe("resolve-receipt freshen via .sth chain (FOR-418)", () => {
 
     const result = await freshenFromSthChain({
       oldReceiptBytes: fx.receiptCbor,
-      grant: fx.grant,
+      inner: await innerOf(fx.grant),
       idtimestampBe8: fx.idtimestampBe8,
       checkpoints: [sth0, sth1],
       sourceRefs: ["0000.sth", "0001.sth"],
@@ -94,7 +119,7 @@ describe("resolve-receipt freshen via .sth chain (FOR-418)", () => {
     await expect(
       freshenFromSthChain({
         oldReceiptBytes: fx.receiptCbor,
-        grant: wrongGrant,
+        inner: await innerOf(wrongGrant),
         idtimestampBe8: fx.idtimestampBe8,
         checkpoints: [sth0, sth1],
       }),
@@ -241,7 +266,7 @@ describe("resolve-receipt freshen via calldata (FOR-418)", () => {
 
     const result = await freshenFromCalldataChain({
       oldReceiptBytes: fx.receiptCbor,
-      grant: fx.grant,
+      inner: await innerOf(fx.grant),
       idtimestampBe8: fx.idtimestampBe8,
       univocity: "0x" + "ab".repeat(20),
       logId: "660e8400-e29b-41d4-a716-446655440001",
@@ -266,6 +291,34 @@ describe("resolve-receipt freshen via calldata (FOR-418)", () => {
     });
     expect(verified).toEqual({ ok: true, stage: "binding" });
   });
+
+  test("fails closed when --checkpoint size disagrees with the calldata chain", async () => {
+    const fx = await buildVerifyFixture();
+    const calldata03 = encodeCalldata([
+      { treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak] },
+    ]);
+    const calldata37 = encodeCalldata([
+      { treeSize1: 3n, treeSize2: 7n, paths: [[fx.node5]], rightPeaks: [] },
+    ]);
+    const mockFetch = makeMockChain([
+      { size: 3n, accumulator: [fx.peak], txHash: "0x" + "11".repeat(32), calldata: calldata03 },
+      { size: 7n, accumulator: [fx.peak7], txHash: "0x" + "22".repeat(32), calldata: calldata37 },
+    ]);
+    // Emission checkpoint sealed size 4 — does not match the size-7 chain.
+    const wrongSth = buildSth({ consistency: [0n, 4n, [], []] });
+    await expect(
+      freshenFromCalldataChain({
+        oldReceiptBytes: fx.receiptCbor,
+        inner: await innerOf(fx.grant),
+        idtimestampBe8: fx.idtimestampBe8,
+        univocity: "0x" + "ab".repeat(20),
+        logId: "660e8400-e29b-41d4-a716-446655440001",
+        rpcUrl: "http://rpc.mock",
+        latestCheckpointBytes: wrongSth,
+        fetchImpl: mockFetch,
+      }),
+    ).rejects.toThrow(/ends at size 7 but the checkpoint sealed size 4/);
+  });
 });
 
 type LooseArgs = Parameters<typeof parseCreateReceiptOptions>[0];
@@ -285,10 +338,38 @@ describe("resolve-receipt freshen source dispatch (D3)", () => {
     ).toThrow(/needs a tile-free source/);
   });
 
-  test("freshen without a grant errors", () => {
+  test("freshen without a leaf source (grant or payload) errors", () => {
     expect(() =>
       parse({ receipt: "r.cbor", "checkpoint-chain": "chain/" }),
-    ).toThrow(/needs the committed grant/);
+    ).toThrow(/needs the leaf's content/);
+  });
+
+  test("--payload + --committed-grant is a leaf-source conflict", () => {
+    expect(() =>
+      parse({
+        receipt: "r.cbor",
+        "checkpoint-chain": "chain/",
+        payload: "stmt.cose",
+        "committed-grant-file": "g.cbor",
+        "entry-id": "ab",
+      }),
+    ).toThrow(/choose one leaf source/);
+  });
+
+  test("--payload without --entry-id errors", () => {
+    expect(() =>
+      parse({ receipt: "r.cbor", "checkpoint-chain": "chain/", payload: "stmt.cose" }),
+    ).toThrow(/--payload needs the SCRAPI entry id/);
+  });
+
+  test("--payload + --checkpoint-chain resolves to freshen-sth", () => {
+    const o = parse({
+      receipt: "r.cbor",
+      "checkpoint-chain": "chain/",
+      payload: "stmt.cose",
+      "entry-id": "ab",
+    });
+    expect(o.anchor).toBe("freshen-sth");
   });
 
   test("--checkpoint-chain resolves to freshen-sth", () => {
@@ -337,5 +418,317 @@ describe("resolve-receipt freshen source dispatch (D3)", () => {
       "entry-id": "ab",
     });
     expect(o.anchor).toBe("freshen-calldata");
+  });
+
+  test("--in-place + --out is rejected", () => {
+    expect(() =>
+      parse({
+        receipt: "r.cbor",
+        "checkpoint-chain": "chain/",
+        "committed-grant-file": "g.cbor",
+        "entry-id": "ab",
+        "in-place": true,
+        out: "o.cbor",
+      }),
+    ).toThrow(/--out or --in-place, not both/);
+  });
+
+  test("--in-place without --receipt (tiles) is rejected", () => {
+    expect(() =>
+      parse({ massif: "m.log", checkpoint: "c.sth", "entry-id": "ab", "in-place": true }),
+    ).toThrow(/--in-place only applies to freshen/);
+  });
+
+  test("--known-accumulator without --receipt (tiles) is rejected", () => {
+    expect(() =>
+      parse({
+        massif: "m.log",
+        checkpoint: "c.sth",
+        "entry-id": "ab",
+        "known-accumulator": "acc.cbor",
+      }),
+    ).toThrow(/--known-accumulator only applies to freshen/);
+  });
+});
+
+/** A minimal known-accumulator snapshot at `size` with `accumulator`. */
+const snap = (size: bigint, accumulator: Uint8Array[]): KnownAccumulator => ({
+  version: 1,
+  chainId: 84532n,
+  univocity: new Uint8Array(20).fill(0xab),
+  logId: new Uint8Array(32).fill(0x11),
+  size,
+  accumulator,
+  blockNumber: 1n,
+  blockHash: new Uint8Array(32).fill(0xbb),
+});
+
+describe("resolve-receipt freshen --known-accumulator (C1)", () => {
+  async function sthSetup() {
+    const fx = await buildVerifyFixture();
+    const sth0 = buildSth({ consistency: [0n, 3n, [], [fx.peak]] });
+    const sth1 = buildSth({
+      consistency: [3n, 7n, [[fx.node5]], []],
+      peakReceipts: [await signDetachedPeakReceipt(fx.rootKeyPair, fx.peak7)],
+    });
+    return { fx, checkpoints: [sth0, sth1] };
+  }
+
+  test("binds the freshened state to a matching snapshot", async () => {
+    const { fx, checkpoints } = await sthSetup();
+    const result = await freshenFromSthChain({
+      oldReceiptBytes: fx.receiptCbor,
+      inner: await innerOf(fx.grant),
+      idtimestampBe8: fx.idtimestampBe8,
+      checkpoints,
+      knownAccumulator: snap(7n, [fx.peak7]),
+    });
+    expect(result.details.knownAccumulatorMatched).toBe(true);
+  });
+
+  test("fails closed when the snapshot accumulator disagrees", async () => {
+    const { fx, checkpoints } = await sthSetup();
+    await expect(
+      freshenFromSthChain({
+        oldReceiptBytes: fx.receiptCbor,
+        inner: await innerOf(fx.grant),
+        idtimestampBe8: fx.idtimestampBe8,
+        checkpoints,
+        knownAccumulator: snap(7n, [new Uint8Array(32).fill(0x99)]),
+      }),
+    ).rejects.toThrow(/does not match --known-accumulator/);
+  });
+
+  test("fails closed when the snapshot is a different size", async () => {
+    const { fx, checkpoints } = await sthSetup();
+    await expect(
+      freshenFromSthChain({
+        oldReceiptBytes: fx.receiptCbor,
+        inner: await innerOf(fx.grant),
+        idtimestampBe8: fx.idtimestampBe8,
+        checkpoints,
+        knownAccumulator: snap(3n, [fx.peak]),
+      }),
+    ).rejects.toThrow(/is size 3 but the freshened state is size 7/);
+  });
+});
+
+describe("resolve-receipt freshen --in-place (FOR-418)", () => {
+  test("rewrites the stale --receipt file with the freshened receipt", async () => {
+    const fx = await buildVerifyFixture();
+    const sth0 = buildSth({ consistency: [0n, 3n, [], [fx.peak]] });
+    const sth1 = buildSth({
+      consistency: [3n, 7n, [[fx.node5]], []],
+      peakReceipts: [await signDetachedPeakReceipt(fx.rootKeyPair, fx.peak7)],
+    });
+
+    const dir = mkdtempSync(path.join(tmpdir(), "forestrie-freshen-inplace-"));
+    const receiptPath = path.join(dir, "receipt.cbor");
+    writeFileSync(receiptPath, fx.receiptCbor);
+    writeFileSync(path.join(dir, "0000.sth"), sth0);
+    writeFileSync(path.join(dir, "0001.sth"), sth1);
+
+    const options = parseCreateReceiptOptions({
+      receipt: receiptPath,
+      "checkpoint-chain": dir,
+      "committed-grant": fx.grantCoseB64,
+      "entry-id": fx.entryIdHex,
+      "in-place": true,
+    } as Parameters<typeof parseCreateReceiptOptions>[0]);
+    await runCreateReceipt(createCaptureOut(0), options);
+
+    const rewritten = new Uint8Array(readFileSync(receiptPath));
+    // The file was replaced by the (larger) freshened receipt, not the stale one.
+    expect(rewritten).not.toEqual(new Uint8Array(fx.receiptCbor));
+    const verified = await verifyGrantReceiptOffline({
+      genesisCbor: fx.genesisCbor,
+      receiptCbor: rewritten,
+      grant: fx.grant,
+      idtimestampBe8: fx.idtimestampBe8,
+    });
+    expect(verified).toEqual({ ok: true, stage: "binding" });
+  });
+});
+
+describe("resolve-receipt freshen | verify (CLI end-to-end, FOR-418)", () => {
+  /** Write a stale receipt + a genesis-rooted 0->3->7 `.sth` chain + grant +
+   * genesis to disk; return the paths for a real `forestrie` invocation. */
+  async function writeFreshenArtifacts() {
+    const fx = await buildVerifyFixture();
+    const dir = mkdtempSync(path.join(tmpdir(), "forestrie-freshen-e2e-"));
+    // .sth chain in its own directory so --checkpoint-chain sees only checkpoints.
+    const chain = path.join(dir, "chain");
+    mkdirSync(chain);
+    const stale = path.join(dir, "stale.cbor");
+    const grant = path.join(dir, "grant.cbor");
+    const genesis = path.join(dir, "genesis.cbor");
+    writeFileSync(stale, fx.receiptCbor);
+    writeFileSync(grant, encodeGrantPayload(fx.grant));
+    writeFileSync(genesis, fx.genesisCbor);
+    writeFileSync(
+      path.join(chain, "0000.sth"),
+      buildSth({ consistency: [0n, 3n, [], [fx.peak]] }),
+    );
+    writeFileSync(
+      path.join(chain, "0001.sth"),
+      buildSth({
+        consistency: [3n, 7n, [[fx.node5]], []],
+        peakReceipts: [await signDetachedPeakReceipt(fx.rootKeyPair, fx.peak7)],
+      }),
+    );
+    return { fx, dir, chain, stale, grant, genesis };
+  }
+
+  test("`resolve-receipt --receipt --checkpoint-chain` freshens and the result passes `forestrie verify-grant`", async () => {
+    const { fx, dir, chain, stale, grant, genesis } =
+      await writeFreshenArtifacts();
+    const fresh = path.join(dir, "fresh.cbor");
+
+    const created = runCli([
+      "resolve-receipt",
+      "--receipt",
+      stale,
+      "--checkpoint-chain",
+      chain,
+      "--committed-grant-file",
+      grant,
+      "--entry-id",
+      fx.entryIdHex,
+      "--out",
+      fresh,
+    ]);
+    expect(created.exitCode).toBe(0);
+    expect(created.stderr).toContain("resolve-receipt: freshen");
+
+    const verified = runCli([
+      "verify-grant",
+      "--genesis",
+      genesis,
+      "--receipt",
+      fresh,
+      "--committed-grant-file",
+      grant,
+      "--entry-id",
+      fx.entryIdHex,
+    ]);
+    expect(verified.exitCode).toBe(0);
+    expect(verified.stdout).toContain("PASS");
+  });
+
+  test("the `create-receipt` alias routes to the same freshen path", async () => {
+    const { fx, dir, chain, stale, grant } = await writeFreshenArtifacts();
+    const fresh = path.join(dir, "fresh-alias.cbor");
+    const created = runCli([
+      "create-receipt",
+      "--receipt",
+      stale,
+      "--checkpoint-chain",
+      chain,
+      "--committed-grant-file",
+      grant,
+      "--entry-id",
+      fx.entryIdHex,
+      "--out",
+      fresh,
+    ]);
+    expect(created.exitCode).toBe(0);
+    expect(new Uint8Array(readFileSync(fresh)).length).toBeGreaterThan(0);
+  });
+
+  // A STATEMENT receipt (leaf ContentHash = SHA-256(payload)) freshened via
+  // --payload — the path the demo's self-serve statement receipts use.
+  async function writeStatementFreshenArtifacts(payloadBytes: Uint8Array) {
+    const rootKeyPair = await generateP256KeyPair();
+    const rootRaw = new Uint8Array(
+      (await crypto.subtle.exportKey(
+        "raw",
+        rootKeyPair.publicKey,
+      )) as ArrayBuffer,
+    );
+    const genesisCbor = buildGenesisCbor(rootRaw.slice(1));
+    const idt = new Uint8Array(8).fill(0x02);
+    const inner = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new Uint8Array(payloadBytes)),
+    );
+    const n0 = await univocityLeafHash(
+      new Uint8Array(8).fill(0x01),
+      new Uint8Array(32).fill(0xaa),
+    );
+    const n1 = await univocityLeafHash(idt, inner); // the statement leaf (idx 1)
+    const n3 = new Uint8Array(32).fill(0xbb);
+    const n4 = new Uint8Array(32).fill(0xcc);
+    const n2 = await positionCommittedInteriorHash(3n, n0, n1);
+    const n5 = await positionCommittedInteriorHash(6n, n3, n4);
+    const n6 = await positionCommittedInteriorHash(7n, n2, n5);
+    const stale = await buildPeakReceipt({
+      signer: rootKeyPair,
+      peak: n2,
+      proof: { path: [n0], mmrIndex: 1n },
+    });
+
+    const dir = mkdtempSync(path.join(tmpdir(), "forestrie-freshen-stmt-"));
+    const chain = path.join(dir, "chain");
+    mkdirSync(chain);
+    const stalePath = path.join(dir, "stale.cbor");
+    const payloadPath = path.join(dir, "stmt.bin");
+    const genesisPath = path.join(dir, "genesis.cbor");
+    writeFileSync(stalePath, stale);
+    writeFileSync(payloadPath, payloadBytes);
+    writeFileSync(genesisPath, genesisCbor);
+    writeFileSync(
+      path.join(chain, "0000000000000000.sth"),
+      buildSth({ consistency: [0n, 3n, [], [n2]] }),
+    );
+    writeFileSync(
+      path.join(chain, "0000000000000001.sth"),
+      buildSth({
+        consistency: [3n, 7n, [[n5]], []],
+        peakReceipts: [await signDetachedPeakReceipt(rootKeyPair, n6)],
+      }),
+    );
+    return {
+      dir,
+      chain,
+      stalePath,
+      payloadPath,
+      genesisPath,
+      entryIdHex: entryIdHexFor(idt, 1n),
+    };
+  }
+
+  test("`resolve-receipt --payload` freshens a STATEMENT receipt and it passes `forestrie verify`", async () => {
+    const payload = new TextEncoder().encode('{"demo":"a statement, not a grant"}');
+    const { dir, chain, stalePath, payloadPath, genesisPath, entryIdHex } =
+      await writeStatementFreshenArtifacts(payload);
+    const fresh = path.join(dir, "fresh.cbor");
+
+    const created = runCli([
+      "resolve-receipt",
+      "--receipt",
+      stalePath,
+      "--checkpoint-chain",
+      chain,
+      "--payload",
+      payloadPath,
+      "--entry-id",
+      entryIdHex,
+      "--out",
+      fresh,
+    ]);
+    expect(created.exitCode).toBe(0);
+    expect(created.stderr).toContain("resolve-receipt: freshen");
+
+    const verified = runCli([
+      "verify",
+      "--genesis",
+      genesisPath,
+      "--receipt",
+      fresh,
+      "--payload",
+      payloadPath,
+      "--entry-id",
+      entryIdHex,
+    ]);
+    expect(verified.exitCode).toBe(0);
   });
 });
