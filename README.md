@@ -226,12 +226,19 @@ receipt.
 When log growth buries the peak a receipt commits to, **freshen** re-anchors
 it to the current sealed state without tiles. `resolve-receipt --receipt
 <stale>` plus a tile-free source extends the receipt's old inclusion path to
-the latest peak and re-emits it. The leaf value is recomputed from the grant
-exactly as `verify-grant` does, so freshen takes the same grant inputs
-(`--committed-grant`/`--committed-grant-file` + `--entry-id`).
+the latest peak and re-emits it. The leaf value is recomputed exactly as
+`verify` does, from the same leaf inputs: `--payload <statement>` for statement
+receipts, or `--committed-grant`/`--committed-grant-file` for grant receipts
+(both with `--entry-id`).
 
 ```bash
-# from a retained .sth chain (genesis-verifiable)
+# a STATEMENT receipt from a retained .sth chain (genesis-verifiable)
+forestrie resolve-receipt \
+  --receipt stale.cbor --checkpoint-chain ./checkpoints/ \
+  --payload statement.cose --entry-id <hex> \
+  --in-place
+
+# a GRANT receipt, same chain source
 forestrie resolve-receipt \
   --receipt stale.cbor --checkpoint-chain ./checkpoints/ \
   --committed-grant-file grant.cbor --entry-id <hex> \

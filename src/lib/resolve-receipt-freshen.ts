@@ -24,9 +24,7 @@
  */
 import {
   freshenReceipt,
-  grantCommitmentHashFromGrant,
   parseReceipt,
-  type Grant,
 } from "@forestrie/receipt-verify";
 import {
   calldataCheckpointChain,
@@ -65,14 +63,10 @@ export type FreshenResult = {
   details: FreshenDetails;
 };
 
-/** The leaf's committed value, recomputed exactly as `verify-grant` does. */
-async function leafValueFor(
-  grant: Grant,
-  idtimestampBe8: Uint8Array,
-): Promise<Uint8Array> {
-  const inner = await grantCommitmentHashFromGrant(grant);
-  return univocityLeafHash(idtimestampBe8, inner);
-}
+// The leaf value the freshened receipt must root to is recomputed exactly as
+// `verify` does: `univocityLeafHash(idtimestamp, inner)`, where `inner` is the
+// leaf ContentHash — `SHA-256(payload)` for a statement, or the grant commitment
+// hash for a grant. The caller supplies `inner`, so freshen is source-agnostic.
 
 /**
  * Shared emission: take the provider's links + a latest checkpoint, extend the
@@ -145,7 +139,8 @@ async function emitFreshened(opts: {
  */
 export async function freshenFromSthChain(opts: {
   oldReceiptBytes: Uint8Array;
-  grant: Grant;
+  /** Leaf ContentHash: `SHA-256(payload)` (statement) or the grant commitment. */
+  inner: Uint8Array;
   idtimestampBe8: Uint8Array;
   checkpoints: readonly Uint8Array[];
   sourceRefs?: readonly string[];
@@ -154,7 +149,7 @@ export async function freshenFromSthChain(opts: {
   if (opts.checkpoints.length === 0) {
     throw new Error("--checkpoint-chain resolved to no checkpoints");
   }
-  const leafValue = await leafValueFor(opts.grant, opts.idtimestampBe8);
+  const leafValue = await univocityLeafHash(opts.idtimestampBe8, opts.inner);
   const links = await sthCheckpointChain(
     opts.checkpoints,
     opts.sourceRefs !== undefined ? { sourceRefs: opts.sourceRefs } : {},
@@ -181,7 +176,8 @@ export async function freshenFromSthChain(opts: {
  */
 export async function freshenFromCalldataChain(opts: {
   oldReceiptBytes: Uint8Array;
-  grant: Grant;
+  /** Leaf ContentHash: `SHA-256(payload)` (statement) or the grant commitment. */
+  inner: Uint8Array;
   idtimestampBe8: Uint8Array;
   univocity: string;
   logId: string;
@@ -190,7 +186,7 @@ export async function freshenFromCalldataChain(opts: {
   knownAccumulator?: KnownAccumulator | undefined;
   fetchImpl?: typeof fetch;
 }): Promise<FreshenResult> {
-  const leafValue = await leafValueFor(opts.grant, opts.idtimestampBe8);
+  const leafValue = await univocityLeafHash(opts.idtimestampBe8, opts.inner);
   const links = await calldataCheckpointChain({
     univocity: opts.univocity,
     logId: opts.logId,

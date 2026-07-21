@@ -5,7 +5,11 @@ import path from "node:path";
 import { encodeAbiParameters, encodeFunctionData } from "viem";
 import { createCaptureOut } from "@forestrie/cli-kit/reporting";
 import { encodeCborDeterministic, encodeGrantPayload } from "@forestrie/encoding";
-import { verifyGrantReceiptOffline } from "@forestrie/receipt-verify";
+import {
+  grantCommitmentHashFromGrant,
+  verifyGrantReceiptOffline,
+  type Grant,
+} from "@forestrie/receipt-verify";
 import { PUBLISH_CHECKPOINT_ABI } from "../src/lib/decode-checkpoint-calldata.js";
 import { runCli } from "./support.js";
 import { parseCreateReceiptOptions } from "../src/options/create-receipt.js";
@@ -15,8 +19,19 @@ import {
   freshenFromCalldataChain,
   freshenFromSthChain,
 } from "../src/lib/resolve-receipt-freshen.js";
-import { buildVerifyFixture, grantWithData } from "./verify-fixture.js";
-import { signDetachedPeakReceipt } from "./create-receipt-fixture.js";
+import {
+  buildGenesisCbor,
+  buildPeakReceipt,
+  buildVerifyFixture,
+  entryIdHexFor,
+  generateP256KeyPair,
+  grantWithData,
+  univocityLeafHash,
+} from "./verify-fixture.js";
+import {
+  positionCommittedInteriorHash,
+  signDetachedPeakReceipt,
+} from "./create-receipt-fixture.js";
 
 /**
  * FOR-418 Phase 3c: `resolve-receipt` freshen over a retained `.sth` chain.
@@ -33,6 +48,9 @@ import { signDetachedPeakReceipt } from "./create-receipt-fixture.js";
  * this is the latest checkpoint to emit under, the pre-signed peak receipts at
  * label -65931. (Freshen does not use the checkpoint's own outer signature.)
  */
+/** Leaf ContentHash for a grant, as freshen's `inner` (grant path). */
+const innerOf = (g: Grant): Promise<Uint8Array> => grantCommitmentHashFromGrant(g);
+
 function buildSth(opts: {
   consistency: [bigint, bigint, Uint8Array[][], Uint8Array[]];
   peakReceipts?: Uint8Array[];
@@ -66,7 +84,7 @@ describe("resolve-receipt freshen via .sth chain (FOR-418)", () => {
 
     const result = await freshenFromSthChain({
       oldReceiptBytes: fx.receiptCbor,
-      grant: fx.grant,
+      inner: await innerOf(fx.grant),
       idtimestampBe8: fx.idtimestampBe8,
       checkpoints: [sth0, sth1],
       sourceRefs: ["0000.sth", "0001.sth"],
@@ -101,7 +119,7 @@ describe("resolve-receipt freshen via .sth chain (FOR-418)", () => {
     await expect(
       freshenFromSthChain({
         oldReceiptBytes: fx.receiptCbor,
-        grant: wrongGrant,
+        inner: await innerOf(wrongGrant),
         idtimestampBe8: fx.idtimestampBe8,
         checkpoints: [sth0, sth1],
       }),
@@ -248,7 +266,7 @@ describe("resolve-receipt freshen via calldata (FOR-418)", () => {
 
     const result = await freshenFromCalldataChain({
       oldReceiptBytes: fx.receiptCbor,
-      grant: fx.grant,
+      inner: await innerOf(fx.grant),
       idtimestampBe8: fx.idtimestampBe8,
       univocity: "0x" + "ab".repeat(20),
       logId: "660e8400-e29b-41d4-a716-446655440001",
@@ -291,7 +309,7 @@ describe("resolve-receipt freshen via calldata (FOR-418)", () => {
     await expect(
       freshenFromCalldataChain({
         oldReceiptBytes: fx.receiptCbor,
-        grant: fx.grant,
+        inner: await innerOf(fx.grant),
         idtimestampBe8: fx.idtimestampBe8,
         univocity: "0x" + "ab".repeat(20),
         logId: "660e8400-e29b-41d4-a716-446655440001",
@@ -320,10 +338,38 @@ describe("resolve-receipt freshen source dispatch (D3)", () => {
     ).toThrow(/needs a tile-free source/);
   });
 
-  test("freshen without a grant errors", () => {
+  test("freshen without a leaf source (grant or payload) errors", () => {
     expect(() =>
       parse({ receipt: "r.cbor", "checkpoint-chain": "chain/" }),
-    ).toThrow(/needs the committed grant/);
+    ).toThrow(/needs the leaf's content/);
+  });
+
+  test("--payload + --committed-grant is a leaf-source conflict", () => {
+    expect(() =>
+      parse({
+        receipt: "r.cbor",
+        "checkpoint-chain": "chain/",
+        payload: "stmt.cose",
+        "committed-grant-file": "g.cbor",
+        "entry-id": "ab",
+      }),
+    ).toThrow(/choose one leaf source/);
+  });
+
+  test("--payload without --entry-id errors", () => {
+    expect(() =>
+      parse({ receipt: "r.cbor", "checkpoint-chain": "chain/", payload: "stmt.cose" }),
+    ).toThrow(/--payload needs the SCRAPI entry id/);
+  });
+
+  test("--payload + --checkpoint-chain resolves to freshen-sth", () => {
+    const o = parse({
+      receipt: "r.cbor",
+      "checkpoint-chain": "chain/",
+      payload: "stmt.cose",
+      "entry-id": "ab",
+    });
+    expect(o.anchor).toBe("freshen-sth");
   });
 
   test("--checkpoint-chain resolves to freshen-sth", () => {
@@ -432,7 +478,7 @@ describe("resolve-receipt freshen --known-accumulator (C1)", () => {
     const { fx, checkpoints } = await sthSetup();
     const result = await freshenFromSthChain({
       oldReceiptBytes: fx.receiptCbor,
-      grant: fx.grant,
+      inner: await innerOf(fx.grant),
       idtimestampBe8: fx.idtimestampBe8,
       checkpoints,
       knownAccumulator: snap(7n, [fx.peak7]),
@@ -445,7 +491,7 @@ describe("resolve-receipt freshen --known-accumulator (C1)", () => {
     await expect(
       freshenFromSthChain({
         oldReceiptBytes: fx.receiptCbor,
-        grant: fx.grant,
+        inner: await innerOf(fx.grant),
         idtimestampBe8: fx.idtimestampBe8,
         checkpoints,
         knownAccumulator: snap(7n, [new Uint8Array(32).fill(0x99)]),
@@ -458,7 +504,7 @@ describe("resolve-receipt freshen --known-accumulator (C1)", () => {
     await expect(
       freshenFromSthChain({
         oldReceiptBytes: fx.receiptCbor,
-        grant: fx.grant,
+        inner: await innerOf(fx.grant),
         idtimestampBe8: fx.idtimestampBe8,
         checkpoints,
         knownAccumulator: snap(3n, [fx.peak]),
@@ -587,5 +633,102 @@ describe("resolve-receipt freshen | verify (CLI end-to-end, FOR-418)", () => {
     ]);
     expect(created.exitCode).toBe(0);
     expect(new Uint8Array(readFileSync(fresh)).length).toBeGreaterThan(0);
+  });
+
+  // A STATEMENT receipt (leaf ContentHash = SHA-256(payload)) freshened via
+  // --payload — the path the demo's self-serve statement receipts use.
+  async function writeStatementFreshenArtifacts(payloadBytes: Uint8Array) {
+    const rootKeyPair = await generateP256KeyPair();
+    const rootRaw = new Uint8Array(
+      (await crypto.subtle.exportKey(
+        "raw",
+        rootKeyPair.publicKey,
+      )) as ArrayBuffer,
+    );
+    const genesisCbor = buildGenesisCbor(rootRaw.slice(1));
+    const idt = new Uint8Array(8).fill(0x02);
+    const inner = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new Uint8Array(payloadBytes)),
+    );
+    const n0 = await univocityLeafHash(
+      new Uint8Array(8).fill(0x01),
+      new Uint8Array(32).fill(0xaa),
+    );
+    const n1 = await univocityLeafHash(idt, inner); // the statement leaf (idx 1)
+    const n3 = new Uint8Array(32).fill(0xbb);
+    const n4 = new Uint8Array(32).fill(0xcc);
+    const n2 = await positionCommittedInteriorHash(3n, n0, n1);
+    const n5 = await positionCommittedInteriorHash(6n, n3, n4);
+    const n6 = await positionCommittedInteriorHash(7n, n2, n5);
+    const stale = await buildPeakReceipt({
+      signer: rootKeyPair,
+      peak: n2,
+      proof: { path: [n0], mmrIndex: 1n },
+    });
+
+    const dir = mkdtempSync(path.join(tmpdir(), "forestrie-freshen-stmt-"));
+    const chain = path.join(dir, "chain");
+    mkdirSync(chain);
+    const stalePath = path.join(dir, "stale.cbor");
+    const payloadPath = path.join(dir, "stmt.bin");
+    const genesisPath = path.join(dir, "genesis.cbor");
+    writeFileSync(stalePath, stale);
+    writeFileSync(payloadPath, payloadBytes);
+    writeFileSync(genesisPath, genesisCbor);
+    writeFileSync(
+      path.join(chain, "0000000000000000.sth"),
+      buildSth({ consistency: [0n, 3n, [], [n2]] }),
+    );
+    writeFileSync(
+      path.join(chain, "0000000000000001.sth"),
+      buildSth({
+        consistency: [3n, 7n, [[n5]], []],
+        peakReceipts: [await signDetachedPeakReceipt(rootKeyPair, n6)],
+      }),
+    );
+    return {
+      dir,
+      chain,
+      stalePath,
+      payloadPath,
+      genesisPath,
+      entryIdHex: entryIdHexFor(idt, 1n),
+    };
+  }
+
+  test("`resolve-receipt --payload` freshens a STATEMENT receipt and it passes `forestrie verify`", async () => {
+    const payload = new TextEncoder().encode('{"demo":"a statement, not a grant"}');
+    const { dir, chain, stalePath, payloadPath, genesisPath, entryIdHex } =
+      await writeStatementFreshenArtifacts(payload);
+    const fresh = path.join(dir, "fresh.cbor");
+
+    const created = runCli([
+      "resolve-receipt",
+      "--receipt",
+      stalePath,
+      "--checkpoint-chain",
+      chain,
+      "--payload",
+      payloadPath,
+      "--entry-id",
+      entryIdHex,
+      "--out",
+      fresh,
+    ]);
+    expect(created.exitCode).toBe(0);
+    expect(created.stderr).toContain("resolve-receipt: freshen");
+
+    const verified = runCli([
+      "verify",
+      "--genesis",
+      genesisPath,
+      "--receipt",
+      fresh,
+      "--payload",
+      payloadPath,
+      "--entry-id",
+      entryIdHex,
+    ]);
+    expect(verified.exitCode).toBe(0);
   });
 });

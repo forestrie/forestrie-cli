@@ -12,7 +12,11 @@ import {
   loadCreateReceiptArtifacts,
   type CreateReceiptArtifacts,
 } from "../lib/create-receipt-inputs.js";
-import { loadVerifyArtifacts } from "../lib/verify-inputs.js";
+import { grantCommitmentHashFromGrant } from "@forestrie/receipt-verify";
+import {
+  loadPayloadVerifyArtifacts,
+  loadVerifyArtifacts,
+} from "../lib/verify-inputs.js";
 import { loadCheckpointChainFiles } from "../lib/verify-checkpoint-chain.js";
 import {
   assertSnapshotBinding,
@@ -563,10 +567,49 @@ function loadFreshenSnapshot(
   return snapshot;
 }
 
+/** The stale receipt + its leaf inputs, from whichever leaf source was given. */
+type FreshenLeaf = {
+  receiptCbor: Uint8Array;
+  /** Leaf ContentHash: `SHA-256(payload)` (statement) or the grant commitment. */
+  inner: Uint8Array;
+  idtimestampBe8: Uint8Array;
+};
+
+/**
+ * Load the stale receipt + recompute the leaf ContentHash the same way `verify`
+ * does — from `--payload` (statement: `SHA-256(payload)`) or the committed grant
+ * (`--committed-grant`/`-file`). Options parsing guarantees exactly one.
+ */
+async function loadFreshenLeaf(
+  options: CreateReceiptOptions,
+): Promise<FreshenLeaf> {
+  if (options.payload !== undefined) {
+    const a = loadPayloadVerifyArtifacts({
+      genesis: undefined,
+      receipt: options.receipt!,
+      payload: options.payload,
+      entryId: options.entryId!,
+    });
+    const inner = new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new Uint8Array(a.payload)),
+    );
+    return { receiptCbor: a.receiptCbor, inner, idtimestampBe8: a.idtimestampBe8 };
+  }
+  const a = loadVerifyArtifacts({
+    genesis: undefined,
+    receipt: options.receipt!,
+    committedGrant: options.committedGrant,
+    committedGrantFile: options.committedGrantFile,
+    entryId: options.entryId,
+  });
+  const inner = await grantCommitmentHashFromGrant(a.grant);
+  return { receiptCbor: a.receiptCbor, inner, idtimestampBe8: a.idtimestampBe8 };
+}
+
 /** Build the FreshenResult from whichever tile-free source the flags selected. */
 async function freshenFromSource(
   options: CreateReceiptOptions,
-  loaded: ReturnType<typeof loadVerifyArtifacts>,
+  leaf: FreshenLeaf,
 ): Promise<FreshenResult> {
   const knownAccumulator = loadFreshenSnapshot(options);
   if (options.anchor === "freshen-calldata") {
@@ -575,9 +618,9 @@ async function freshenFromSource(
       readFileSync(options.checkpoint!),
     );
     return freshenFromCalldataChain({
-      oldReceiptBytes: loaded.receiptCbor,
-      grant: loaded.grant,
-      idtimestampBe8: loaded.idtimestampBe8,
+      oldReceiptBytes: leaf.receiptCbor,
+      inner: leaf.inner,
+      idtimestampBe8: leaf.idtimestampBe8,
       univocity: options.univocity!,
       logId: options.logId!,
       rpcUrl: options.rpcUrl!,
@@ -587,9 +630,9 @@ async function freshenFromSource(
   }
   const chain = loadCheckpointChainFiles(options.checkpointChain!);
   return freshenFromSthChain({
-    oldReceiptBytes: loaded.receiptCbor,
-    grant: loaded.grant,
-    idtimestampBe8: loaded.idtimestampBe8,
+    oldReceiptBytes: leaf.receiptCbor,
+    inner: leaf.inner,
+    idtimestampBe8: leaf.idtimestampBe8,
     checkpoints: chain.checkpoints,
     sourceRefs: chain.files.map((f) => basename(f)),
     knownAccumulator,
@@ -611,16 +654,9 @@ async function runFreshen(
   const source: FreshenSource =
     options.anchor === "freshen-calldata" ? "calldata" : "checkpoint-chain";
 
-  let loaded: ReturnType<typeof loadVerifyArtifacts>;
+  let leaf: FreshenLeaf;
   try {
-    loaded = loadVerifyArtifacts({
-      genesis: undefined,
-      // Options parsing guarantees these in freshen mode.
-      receipt: options.receipt!,
-      committedGrant: options.committedGrant,
-      committedGrantFile: options.committedGrantFile,
-      entryId: options.entryId,
-    });
+    leaf = await loadFreshenLeaf(options);
   } catch (err) {
     reportFreshenError(out, options, source, "input", err);
     return;
@@ -628,7 +664,7 @@ async function runFreshen(
 
   let result: FreshenResult;
   try {
-    result = await freshenFromSource(options, loaded);
+    result = await freshenFromSource(options, leaf);
   } catch (err) {
     // Chain read / fold / self-check failures are the freshen stage; a bad
     // --checkpoint / --checkpoint-chain path surfaces here too but reads as

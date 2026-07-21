@@ -67,6 +67,12 @@ export default defineForestrieCommand({
         "Committed grant CBOR file — recomputes the leaf value (freshen; needs --entry-id)",
       valueHint: "path",
     },
+    payload: {
+      type: "string",
+      description:
+        "Registered statement payload — the leaf ContentHash (freshen statement receipts; alternative to --committed-grant, needs --entry-id)",
+      valueHint: "path",
+    },
     // --- shared ---
     "entry-id": {
       type: "string",

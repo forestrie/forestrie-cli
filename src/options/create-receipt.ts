@@ -49,10 +49,13 @@ export type CreateReceiptOptions = ForestrieCommonOptions & {
   receipt: string | undefined;
   /** Retained `.sth` checkpoint chain (dir or comma-separated files). */
   checkpointChain: string | undefined;
-  /** Committed grant, base64 (freshen leaf-value source). */
+  /** Committed grant, base64 (freshen leaf-value source, grant receipts). */
   committedGrant: string | undefined;
-  /** Committed grant CBOR file (freshen leaf-value source). */
+  /** Committed grant CBOR file (freshen leaf-value source, grant receipts). */
   committedGrantFile: string | undefined;
+  /** Registered statement payload (freshen leaf-value source, statement
+   * receipts) — the leaf ContentHash is `SHA-256(payload)`, as in `verify`. */
+  payload: string | undefined;
   /** Receipt output path (default: stdout). */
   out: string | undefined;
   /** Rewrite the `--receipt` file in place with the freshened receipt (freshen
@@ -84,6 +87,7 @@ export function parseCreateReceiptOptions(
   const rpcUrl = optionalStringOption(args, "rpc-url", "RPC_URL");
   const committedGrant = optionalStringOption(args, "committed-grant");
   const committedGrantFile = optionalStringOption(args, "committed-grant-file");
+  const payload = optionalStringOption(args, "payload");
   const entryId = optionalStringOption(args, "entry-id");
   const out = optionalStringOption(args, "out");
   const inPlace = args["in-place"] === true;
@@ -100,6 +104,7 @@ export function parseCreateReceiptOptions(
     checkpointChain,
     committedGrant,
     committedGrantFile,
+    payload,
     entryId,
     out,
     inPlace,
@@ -129,11 +134,24 @@ export function parseCreateReceiptOptions(
 
   // --- FRESHEN source (--receipt + a tile-free chain) ---
   if (receipt !== undefined) {
-    // The grant recomputes the leaf value (same as verify-grant) — both
-    // sub-sources need it.
-    if (committedGrant === undefined && committedGrantFile === undefined) {
+    // Leaf value: a statement payload (--payload, as in `verify`) or a committed
+    // grant (--committed-grant/-file, as in `verify-grant`) — exactly one.
+    const hasGrant =
+      committedGrant !== undefined || committedGrantFile !== undefined;
+    const hasPayload = payload !== undefined;
+    if (hasGrant && hasPayload) {
       throw new Error(
-        "freshen needs the committed grant to recompute the leaf value: --committed-grant or --committed-grant-file",
+        "choose one leaf source: --payload (statement) or --committed-grant/--committed-grant-file (grant)",
+      );
+    }
+    if (!hasGrant && !hasPayload) {
+      throw new Error(
+        "freshen needs the leaf's content: --payload (statement) or --committed-grant/--committed-grant-file (grant)",
+      );
+    }
+    if (hasPayload && entryId === undefined) {
+      throw new Error(
+        "freshen from --payload needs the SCRAPI entry id (idtimestamp): --entry-id",
       );
     }
     if (committedGrantFile !== undefined && entryId === undefined) {
