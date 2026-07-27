@@ -29,6 +29,8 @@ export default defineForestrieCommand({
     delegate: () => import("./commands/delegate.js").then((m) => m.default),
     "onboard-genesis": () =>
       import("./commands/onboard-genesis.js").then((m) => m.default),
+    "onboard-request": () =>
+      import("./commands/onboard-request.js").then((m) => m.default),
     "complete-grant": () =>
       import("./commands/complete-grant.js").then((m) => m.default),
     "resolve-receipt": () =>
