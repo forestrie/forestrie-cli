@@ -96,6 +96,11 @@ export async function runAdminOnboardToken(
   try {
     if (options.deployment !== undefined) {
       const record = readDeploymentRecord(options.deployment);
+      if (record.chainId === undefined) {
+        throw new Error(
+          `${options.deployment}: deployment carries no chainId; pass --chain-id`,
+        );
+      }
       chainId = record.chainId;
       univocityAddr = univocityAddrHex(record);
     } else if (options.chainId !== undefined && options.univocityAddr !== undefined) {

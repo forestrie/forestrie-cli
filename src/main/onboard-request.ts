@@ -127,6 +127,11 @@ export async function runOnboardRequest(
   let attestation: Uint8Array;
   try {
     const record = readDeploymentRecord(options.deployment);
+    if (record.chainId === undefined) {
+      throw new Error(
+        `${options.deployment}: deployment carries no chainId (re-run forestrie deploy)`,
+      );
+    }
     chainId = record.chainId;
     univocityAddr = univocityAddrHex(record);
     const aud = new URL(options.baseUrl).origin;

@@ -9,8 +9,12 @@ import { readFileSync } from "node:fs";
 export type DeploymentRecord = {
   imutableUnivocity: string;
   genesisLogId: string;
-  /** Bare decimal string (the file stores a JSON number; coerced here). */
-  chainId: string;
+  /**
+   * Bare decimal string (the file stores a JSON number; coerced here).
+   * Optional: hand-crafted two-field artifacts remain valid for
+   * onboard-genesis, which sources chainId from its own flag.
+   */
+  chainId?: string | undefined;
   bootstrapAlg?: "es256" | "ks256" | undefined;
   txHash?: string | undefined;
 };
@@ -36,14 +40,15 @@ export function readDeploymentRecord(path: string): DeploymentRecord {
     typeof chainIdRaw === "number"
       ? String(chainIdRaw)
       : (chainIdRaw?.trim() ?? "");
-  if (!/^[0-9]+$/.test(chainId)) {
+  if (chainId && !/^[0-9]+$/.test(chainId)) {
     throw new Error(`${path}: expected a numeric chainId`);
   }
   const bootstrapAlg =
     parsed.bootstrapAlg === "es256" || parsed.bootstrapAlg === "ks256"
       ? parsed.bootstrapAlg
       : undefined;
-  const record: DeploymentRecord = { imutableUnivocity, genesisLogId, chainId };
+  const record: DeploymentRecord = { imutableUnivocity, genesisLogId };
+  if (chainId) record.chainId = chainId;
   if (bootstrapAlg !== undefined) record.bootstrapAlg = bootstrapAlg;
   const txHash = parsed.txHash?.trim();
   if (txHash) record.txHash = txHash;
