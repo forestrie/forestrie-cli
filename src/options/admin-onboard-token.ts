@@ -21,6 +21,13 @@ export type AdminOnboardTokenOptions = ForestrieCommonOptions & {
   opsToken: string;
   /** Token label recorded by the mint endpoint. */
   label: string;
+  /**
+   * Chain binding (mandatory on every token since ADR-0059 D7): either read
+   * from a `forestrie deploy --out` artifact, or given explicitly.
+   */
+  deployment: string | undefined;
+  chainId: string | undefined;
+  univocityAddr: string | undefined;
   /** Write the minted token here instead of stdout. */
   out: string | undefined;
 };
@@ -33,6 +40,9 @@ export function parseAdminOnboardTokenOptions(
     baseUrl: requiredStringOption(args, "base-url", "FORESTRIE_BASE_URL"),
     opsToken: requiredStringOption(args, "ops-token", "CANOPY_OPS_ADMIN_TOKEN"),
     label: optionalStringOption(args, "label") ?? DEFAULT_ONBOARD_TOKEN_LABEL,
+    deployment: optionalStringOption(args, "deployment"),
+    chainId: optionalStringOption(args, "chain-id"),
+    univocityAddr: optionalStringOption(args, "univocity"),
     out: optionalStringOption(args, "out"),
   };
 }

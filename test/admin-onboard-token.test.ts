@@ -11,12 +11,18 @@ import { runCli } from "./support.js";
 const OPS_TOKEN = "ops-secret-never-printed";
 const MINTED = "onboard-token-abc123";
 
+const CHAIN_ID = "84532";
+const UNIVOCITY = "0x7a4e8ad88d6df29febec0d546d148ed4bea8cb94";
+
 const baseOptions: AdminOnboardTokenOptions = {
   json: false,
   verbosity: 0,
   baseUrl: "https://api.example.dev",
   opsToken: OPS_TOKEN,
   label: "unit-test",
+  deployment: undefined,
+  chainId: CHAIN_ID,
+  univocityAddr: UNIVOCITY,
   out: undefined,
 };
 
@@ -82,11 +88,16 @@ describe("admin onboard-token", () => {
     );
     expect(seen[0]!.auth).toBe(`Bearer ${OPS_TOKEN}`);
     expect(seen[0]!.contentType).toBe("application/cbor");
-    // Exact wire bytes: {1: "unit-test"} — A1 01 69 "unit-test".
+    // Exact wire bytes (ADR-0059 D7 — binding mandatory):
+    // {1: "unit-test", 3: "84532", 4: <40-hex addr>}.
     expect(Buffer.from(seen[0]!.body)).toEqual(
       Buffer.concat([
-        Buffer.from([0xa1, 0x01, 0x69]),
+        Buffer.from([0xa3, 0x01, 0x69]),
         Buffer.from("unit-test", "utf8"),
+        Buffer.from([0x03, 0x65]),
+        Buffer.from("84532", "utf8"),
+        Buffer.from([0x04, 0x78, 0x28]),
+        Buffer.from("7a4e8ad88d6df29febec0d546d148ed4bea8cb94", "utf8"),
       ]),
     );
     // Round-trip sanity through the sanctioned decoder.

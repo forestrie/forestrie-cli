@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { readDeploymentRecord } from "../lib/deployment-record.js";
 import type { Out } from "@forestrie/cli-kit/reporting";
 import {
   buildEs256GenesisBody,
@@ -53,19 +54,8 @@ type ResolvedTarget = { univocity: string; logId: string };
 
 function resolveTarget(options: OnboardGenesisOptions): ResolvedTarget {
   if (options.deployment !== undefined) {
-    const parsed = JSON.parse(readFileSync(options.deployment, "utf8")) as {
-      imutableUnivocity?: string;
-      genesisLogId?: string;
-    };
-    const univocity = parsed.imutableUnivocity?.trim();
-    const logId = parsed.genesisLogId?.trim();
-    if (!univocity || !logId) {
-      throw new Error(
-        `${options.deployment}: expected imutableUnivocity and genesisLogId ` +
-          "(a forestrie deploy --out artifact)",
-      );
-    }
-    return { univocity, logId };
+    const record = readDeploymentRecord(options.deployment);
+    return { univocity: record.imutableUnivocity, logId: record.genesisLogId };
   }
   return { univocity: options.univocity!, logId: options.logId! };
 }

@@ -4,6 +4,10 @@ import {
   encodeCborDeterministic,
 } from "@forestrie/encoding";
 import type { AdminOnboardTokenOptions } from "../options/admin-onboard-token.js";
+import {
+  readDeploymentRecord,
+  univocityAddrHex,
+} from "../lib/deployment-record.js";
 
 /**
  * FOR-406 (plan-2607-27 W1): mint a forest onboard token from
@@ -16,8 +20,10 @@ import type { AdminOnboardTokenOptions } from "../options/admin-onboard-token.js
  * feeding the same `onboard-genesis --onboard-token` input.
  */
 
-/** Mint request body label key (canopy payments onboard-tokens contract). */
+/** Mint request body keys (canopy payments onboard-tokens contract). */
 const MINT_LABEL_KEY = 1;
+const MINT_CHAIN_ID_KEY = 3;
+const MINT_UNIVOCITY_ADDR_KEY = 4;
 
 /** `--json` success shape (the token itself; cref for operator records). */
 export type AdminOnboardTokenReport = {
@@ -31,7 +37,7 @@ export type AdminOnboardTokenReport = {
 };
 
 export type AdminOnboardTokenErrorReport = {
-  error: "mint_failed" | "network_failed" | "response_malformed";
+  error: "input_failed" | "mint_failed" | "network_failed" | "response_malformed";
   command: "admin onboard-token";
   message: string;
   httpStatus?: number;
@@ -82,8 +88,46 @@ export async function runAdminOnboardToken(
   deps: AdminOnboardTokenDeps = {},
 ): Promise<void> {
   const fetchImpl = deps.fetchImpl ?? fetch;
+
+  // Bindings are mandatory on every token (ADR-0059 D7): the mint reserves
+  // the named univocity instance, and canopy 400s an unbound mint.
+  let chainId: string;
+  let univocityAddr: string;
+  try {
+    if (options.deployment !== undefined) {
+      const record = readDeploymentRecord(options.deployment);
+      if (record.chainId === undefined) {
+        throw new Error(
+          `${options.deployment}: deployment carries no chainId; pass --chain-id`,
+        );
+      }
+      chainId = record.chainId;
+      univocityAddr = univocityAddrHex(record);
+    } else if (options.chainId !== undefined && options.univocityAddr !== undefined) {
+      chainId = options.chainId.trim();
+      univocityAddr = univocityAddrHex({
+        imutableUnivocity: options.univocityAddr,
+      });
+    } else {
+      throw new Error(
+        "chain binding required: pass --deployment, or --chain-id with --univocity",
+      );
+    }
+  } catch (err) {
+    reportError(out, options, {
+      error: "input_failed",
+      command: "admin onboard-token",
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
+
   const body = encodeCborDeterministic(
-    new Map<number, string>([[MINT_LABEL_KEY, options.label]]),
+    new Map<number, string>([
+      [MINT_LABEL_KEY, options.label],
+      [MINT_CHAIN_ID_KEY, chainId],
+      [MINT_UNIVOCITY_ADDR_KEY, univocityAddr],
+    ]),
   );
 
   let res: Response;
