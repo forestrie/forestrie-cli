@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -149,6 +149,13 @@ function challengeB64(): string {
     }),
   ).toString("base64");
 }
+
+// Error-path tests set process.exitCode = 1 via reportError; without a reset
+// the LAST such test poisons bun's own exit code and CI fails with 0 failed
+// tests. Reset per test.
+afterEach(() => {
+  process.exitCode = 0;
+});
 
 describe("onboard-request", () => {
   test("creates an attested request and redeems it (approved path)", async () => {
