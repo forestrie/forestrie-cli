@@ -30,6 +30,9 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: CBOR codec gate
+        run: bun run check:cbor
+
       - name: Test
         run: bun run test
 
