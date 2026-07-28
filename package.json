@@ -14,6 +14,7 @@
     "build:binary:linux-x64": "bun scripts/build-binary.ts --target bun-linux-x64",
     "build:binary:darwin-arm64": "bun scripts/build-binary.ts --target bun-darwin-arm64",
     "typecheck": "tsc --noEmit",
+		"check:cbor": "bun scripts/check-cbor-codec.ts",
     "test": "bun test"
   },
   "dependencies": {
