@@ -3,8 +3,8 @@
 Terms and the authority model behind the `forestrie` subcommands. Read this
 before adding or changing a command; the verb you reach for is determined by
 *which authority* the caller is exercising, not by convenience flags. The
-platform decision is [devdocs ADR-0052](https://github.com/forestrie/devdocs/blob/main/adr/adr-0052-cli-authority-taxonomy.md);
-the delegation model is [ADR-0050](https://github.com/forestrie/devdocs/blob/main/adr/adr-0050-delegation-in-advance.md).
+platform decision is [devdocs ADR-0052](https://github.com/forestrie/devdocs/blob/main/archive/2607/adr/adr-0052-cli-authority-taxonomy.md);
+the delegation model is [ADR-0050](https://github.com/forestrie/devdocs/blob/main/archive/2607/adr/adr-0050-delegation-in-advance.md).
 
 ## The four authorities → four verbs
 
