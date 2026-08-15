@@ -10,7 +10,7 @@
         "@forestrie/delegation-cose": "^0.1.5",
         "@forestrie/deploy-core": "^0.6.0",
         "@forestrie/encoding": "^0.5.0",
-        "@forestrie/grant-builder": "^0.2.1",
+        "@forestrie/grant-builder": "^0.3.0",
         "@forestrie/merklelog": "^0.2.0",
         "@forestrie/receipt-verify": "^0.9.0",
         "@forestrie/scrapi-client": "^0.1.3",
@@ -36,7 +36,7 @@
 
     "@forestrie/encoding": ["@forestrie/encoding@0.5.0", "", { "dependencies": { "@noble/curves": "^1.8.1" } }, "sha512-vMuiY1qmYu5tPGPj0a/DmoOIF99QNdshp8lsug7IMMZBFLRq7d7UFIMTdOBvo5g3Diz5etSXXjBJJG+fWiLftQ=="],
 
-    "@forestrie/grant-builder": ["@forestrie/grant-builder@0.2.1", "", { "dependencies": { "@forestrie/encoding": "0.5.0", "@noble/curves": "^1.9.7", "@noble/hashes": "^1.7.1" } }, "sha512-UW0mzJyqRCumfF/Gr0SQUwBaHw2nZMp3mtmYuAKUTgMu3M1r/9TXlb/l6MttDKayn4s5HoAADs2+ry2YNliZ/Q=="],
+    "@forestrie/grant-builder": ["@forestrie/grant-builder@0.3.0", "", { "dependencies": { "@forestrie/encoding": "0.5.0", "@noble/curves": "^1.9.7", "@noble/hashes": "^1.7.1" } }, "sha512-TaRBKK/QmEtpu/tU3+MRoJx9SGngvHiDFhpoIawpAuWmY8f0YFYpQ7CuEgvsBCU9tSGA+hFm+L3z9JWoMxEz/g=="],
 
     "@forestrie/merklelog": ["@forestrie/merklelog@0.2.0", "", {}, "sha512-Zelz0mdSrIMrFKZ8kqhOno5W8meKhXR1fXqwCpnPv2ob+LJqeYrX4dJiucpG3u2qUgMdQPjH1355J67smleStw=="],
 

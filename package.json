@@ -23,7 +23,7 @@
     "@forestrie/delegation-cose": "^0.1.5",
     "@forestrie/deploy-core": "^0.6.0",
     "@forestrie/encoding": "^0.5.0",
-    "@forestrie/grant-builder": "^0.2.1",
+    "@forestrie/grant-builder": "^0.3.0",
     "@forestrie/merklelog": "^0.2.0",
     "@forestrie/receipt-verify": "^0.9.0",
     "@forestrie/scrapi-client": "^0.1.3",

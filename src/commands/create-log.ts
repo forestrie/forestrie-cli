@@ -32,6 +32,12 @@ export default defineForestrieCommand({
       description: "Create a child auth log rather than a data log",
       default: false,
     },
+    "child-payment-required": {
+      type: "boolean",
+      description:
+        "Mark the creation grant GF_DERIVED|GF_CHILD_PAYMENT_REQUIRED: child grants registered under the new log's authority require an x402 payment (auth logs only) [adr-0062]",
+      default: false,
+    },
     "self-referential": {
       type: "boolean",
       description:
