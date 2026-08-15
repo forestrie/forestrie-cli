@@ -28,6 +28,12 @@ export type CreateLogOptions = ForestrieCommonOptions & {
   newLog: string;
   /** Create a child auth log rather than a data log. */
   authLog: boolean;
+  /**
+   * Mark the creation grant `GF_DERIVED | GF_CHILD_PAYMENT_REQUIRED`
+   * (adr-0062): child grants registered under the new log's authority require
+   * an x402 payment. Auth-shaped grants only.
+   */
+  childPaymentRequired: boolean;
   /** Root bootstrap self-referential grant (`--new-log == --owner-log`). */
   selfReferential: boolean;
   /** PEM of the new log's owner (grantData = ES256 x||y); required unless self-referential. */
@@ -64,6 +70,7 @@ export function parseCreateLogOptions(args: LooseParsedArgs): CreateLogOptions {
     ownerLog,
     newLog: requiredStringOption(args, "new-log"),
     authLog: args["auth-log"] === true,
+    childPaymentRequired: args["child-payment-required"] === true,
     selfReferential: args["self-referential"] === true,
     signerPem: optionalStringOption(args, "signer-pem"),
     signWith: requiredStringOption(args, "sign-with"),

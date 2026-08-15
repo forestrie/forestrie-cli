@@ -8,6 +8,7 @@ import {
   hasAuthLogClass,
   hasCreateAndExtend,
   hasDataLogClass,
+  requiresChildPayment,
 } from "@forestrie/grant-builder";
 import {
   coseUnprotectedToMap,
@@ -117,6 +118,52 @@ describe("buildCreateLogGrant", () => {
     expect(built.grantBase64.length).toBeGreaterThan(0);
   });
 
+  test("auth-log + child-payment-required: GF_DERIVED|GF_CHILD_PAYMENT_REQUIRED added, shape preserved", () => {
+    const built = buildCreateLogGrant({
+      newLog: NEW_LOG,
+      ownerLog: OWNER_LOG,
+      signWithPem: OWNER_PRIV_PEM,
+      signerPem: SIGNER_PRIV_PEM,
+      selfReferential: false,
+      authLog: true,
+      childPaymentRequired: true,
+    });
+    // byte 3: GF_CREATE|GF_EXTEND (0x03) | GF_DERIVED (0x04) | GF_CHILD_PAYMENT_REQUIRED (0x08)
+    expect(built.flags[3]).toBe(0x0f);
+    expect(hasCreateAndExtend(built.flags)).toBe(true);
+    expect(hasAuthLogClass(built.flags)).toBe(true);
+    expect(requiresChildPayment(built.flags)).toBe(true);
+  });
+
+  test("self-referential + child-payment-required: policy bits on the root bootstrap grant", () => {
+    const built = buildCreateLogGrant({
+      newLog: BOOT_LOG,
+      ownerLog: BOOT_LOG,
+      signWithPem: OWNER_PRIV_PEM,
+      signerPem: undefined,
+      selfReferential: true,
+      authLog: false,
+      childPaymentRequired: true,
+    });
+    expect(built.flags[3]).toBe(0x0f);
+    expect(hasAuthLogClass(built.flags)).toBe(true);
+    expect(requiresChildPayment(built.flags)).toBe(true);
+  });
+
+  test("data-log + child-payment-required is rejected (auth-shaped grants only)", () => {
+    expect(() =>
+      buildCreateLogGrant({
+        newLog: NEW_LOG,
+        ownerLog: OWNER_LOG,
+        signWithPem: OWNER_PRIV_PEM,
+        signerPem: SIGNER_PRIV_PEM,
+        selfReferential: false,
+        authLog: false,
+        childPaymentRequired: true,
+      }),
+    ).toThrow(/--child-payment-required/);
+  });
+
   test("self-referential with differing logs is rejected", () => {
     expect(() =>
       buildCreateLogGrant({
@@ -218,6 +265,7 @@ describe("runCreateLog (main)", () => {
     ownerLog: OWNER_LOG,
     newLog: NEW_LOG,
     authLog: false,
+    childPaymentRequired: false,
     selfReferential: false,
     signerPem: SIGNER_PEM_PATH,
     signWith: OWNER_PEM_PATH,

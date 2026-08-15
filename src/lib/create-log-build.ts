@@ -13,6 +13,11 @@
  * - default — create a data log; grantData = `--signer-pem`. Data-log shaped
  *   (`dataLogCreateExtendFlags`).
  *
+ * Auth-shaped grants may additionally carry
+ * `GF_DERIVED | GF_CHILD_PAYMENT_REQUIRED` (`--child-payment-required`,
+ * adr-0062/plan-2608-09): child grants registered under the new log's
+ * authority are then x402 payment-gated when a lane enables admission.
+ *
  * grantData is the new log owner's ES256 `x||y`. Reuses the register-grant
  * ES256 PEM parser and error class. Node-only (node:crypto PEM handling); no
  * HTTP, no env.
@@ -22,6 +27,7 @@ import {
   bytesToForestrieGrantBase64,
   dataLogCreateExtendFlags,
   signGrantPayloadWithEs256Pem,
+  withChildPaymentRequired,
 } from "@forestrie/grant-builder";
 import {
   encodeGrantPayloadV0Canonical,
@@ -51,6 +57,13 @@ export type BuildCreateLogGrantParams = {
   selfReferential: boolean;
   /** Create a child auth log (auth-log flag class) rather than a data log. */
   authLog: boolean;
+  /**
+   * Set `GF_DERIVED | GF_CHILD_PAYMENT_REQUIRED` (univocity bits 34/35) on the
+   * creation grant, declaring that child grants registered under this log's
+   * authority require an x402 payment (adr-0062, plan-2608-09). Auth-shaped
+   * grants only — a data log is never the parent authority of a child grant.
+   */
+  childPaymentRequired?: boolean | undefined;
 };
 
 export type BuiltCreateLogGrant = {
@@ -114,10 +127,18 @@ export function buildCreateLogGrant(
     params.signerPem ?? params.signWithPem,
   );
 
-  const flags =
+  let flags =
     params.authLog || params.selfReferential
       ? authLogBootstrapShapedFlags()
       : dataLogCreateExtendFlags();
+  if (params.childPaymentRequired === true) {
+    if (!params.authLog && !params.selfReferential) {
+      throw new RegisterGrantBuildError(
+        "--child-payment-required applies to auth logs (--auth-log or --self-referential); a data log is never the parent authority of a child grant",
+      );
+    }
+    flags = withChildPaymentRequired(flags);
+  }
 
   const grant: Grant = {
     logId,

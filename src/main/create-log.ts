@@ -204,6 +204,7 @@ export async function runCreateLog(
       signerPem,
       selfReferential: options.selfReferential,
       authLog: options.authLog,
+      childPaymentRequired: options.childPaymentRequired,
     });
   } catch (err) {
     if (err instanceof RegisterGrantBuildError) {
