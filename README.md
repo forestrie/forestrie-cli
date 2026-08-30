@@ -277,7 +277,7 @@ genuine current log — which is a *different* question from who sealed the stat
 or whether the log's authority chains back to genesis. Freshen never re-opens
 those; it re-anchors an already-issued receipt to the current accumulator. Which
 anchor proves what is the trust model: see
-**[TRUST-MODEL.md](./TRUST-MODEL.md#freshen-and-the-attestor)**.
+**[the trust model](https://github.com/forestrie/devdocs/blob/main/protocol/receipt-trust-model.md#freshen-and-the-attestor)**.
 
 ### `decode-receipt`
 
@@ -329,11 +329,20 @@ signature — no operator trust required.
   store. Older receipts extend to a newer snapshot via `--massif`.
 - **`--rpc-url`** — a live chain read; same as `--known-accumulator`, current.
 
-What each actually proves — and how forestrie separates **freshness** (does the
-leaf root into the real current log) from **sealing** (who signed) from
-**authority** (does the log chain to genesis, via grants — not `genesis.cbor`) —
-is the trust model: see **[TRUST-MODEL.md](./TRUST-MODEL.md)**. The receipt never
-expires, and the anchor never needs to be current — only trusted.
+What each actually proves — and how forestrie separates **split-view** (is this
+a single, un-forked history) from **sealing** (who signed this state) from
+**authority** (does the log chain to genesis, via grants — not `genesis.cbor`)
+from **attribution** (who was authorised to sign this leaf) — is the trust
+model: see
+**[the trust model](https://github.com/forestrie/devdocs/blob/main/protocol/receipt-trust-model.md)**.
+The receipt never expires, and the anchor never needs to be current — only
+trusted.
+
+Note that **freshness is not one of the four**. It is a weaker axis that bears
+only on *coverage* — whether a given accumulator snapshot reaches your leaf —
+and collapsing it into split-view is the specific confusion the trust model
+warns against. Split-view is the load-bearing property; currency is at most the
+`--rpc-url` "as of now" delta.
 
 ### `fetch-accumulator`
 
