@@ -735,7 +735,7 @@ describe("resolve-receipt freshen | verify (CLI end-to-end, FOR-418)", () => {
     expect(verified.exitCode).toBe(0);
   });
 
-  // The accumulator rung (TRUST-MODEL.md): freshen binds the folded current
+  // The accumulator rung (the receipt trust model, devdocs protocol/): freshen binds the folded current
   // state to a trusted chain read, then the receipt still verifies. This is the
   // "freshness" anchor exercised end-to-end through the real CLI.
   test("`--known-accumulator` binds the freshened state and the result still verifies", async () => {

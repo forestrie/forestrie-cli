@@ -648,7 +648,8 @@ async function freshenFromSource(
  * a separately-supplied latest `--checkpoint` for emission) — extends the
  * receipt's old path to the current peak, and re-emits. Both sources produce a
  * receipt re-anchored to the current accumulator; the trust posture (freshness
- * vs signer provenance) is chosen at verify. See TRUST-MODEL.md.
+ * vs signer provenance) is chosen at verify. See the receipt trust model:
+ * https://github.com/forestrie/devdocs/blob/main/protocol/receipt-trust-model.md
  */
 async function runFreshen(
   out: Out,

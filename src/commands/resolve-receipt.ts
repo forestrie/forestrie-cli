@@ -6,7 +6,7 @@ export default defineForestrieCommand({
   meta: {
     name: "resolve-receipt",
     description:
-      "Produce or freshen a COSE receipt (SCRAPI §2.4) — source by flags: --massif (tiles), --receipt + --checkpoint-chain (.sth freshen), or --receipt + --rpc-url/--univocity/--log-id + --checkpoint (calldata freshen). Freshen re-anchors a stale receipt to the current accumulator; the trust posture is set at verify (TRUST-MODEL.md) [FOR-345/FOR-418]. Alias: create-receipt.",
+      "Produce or freshen a COSE receipt (SCRAPI §2.4) — source by flags: --massif (tiles), --receipt + --checkpoint-chain (.sth freshen), or --receipt + --rpc-url/--univocity/--log-id + --checkpoint (calldata freshen). Freshen re-anchors a stale receipt to the current accumulator; the trust posture is set at verify (https://github.com/forestrie/devdocs/blob/main/protocol/receipt-trust-model.md) [FOR-345/FOR-418]. Alias: create-receipt.",
   },
   args: {
     // --- tiles source (--massif) ---
@@ -93,7 +93,7 @@ export default defineForestrieCommand({
     "known-accumulator": {
       type: "string",
       description:
-        "Trusted accumulator snapshot (fetch-accumulator output) — binds the freshened state to a trusted chain read, failing closed on mismatch (freshen only; anchors freshness, not signer provenance — TRUST-MODEL.md)",
+        "Trusted accumulator snapshot (fetch-accumulator output) — binds the freshened state to a trusted chain read, failing closed on mismatch (freshen only; anchors freshness, not signer provenance — https://github.com/forestrie/devdocs/blob/main/protocol/receipt-trust-model.md)",
       valueHint: "path",
     },
   },

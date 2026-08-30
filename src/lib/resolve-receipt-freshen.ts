@@ -13,7 +13,8 @@
  * latest checkpoint's signer, necessarily (anything else would be forgery). This
  * is not a signer "downgrade": the log authorises a SET of sealers and the
  * contract enforces membership at publish; ranking them is out-of-band verify-
- * time policy, not a freshen concern. See TRUST-MODEL.md.
+ * time policy, not a freshen concern. See the receipt trust model:
+ * https://github.com/forestrie/devdocs/blob/main/protocol/receipt-trust-model.md
  *
  * The leaf VALUE is not in the stale receipt (its payload is detached — verify
  * recomputes it), so freshen recomputes it exactly as `verify` does:
@@ -182,7 +183,8 @@ export async function freshenFromSthChain(opts: {
  * receipts or delegation cert. The calldata chain's sealed size must equal the
  * latest checkpoint's (enforced by `freshenReceipt`). Freshness is anchored by
  * the fold (and, if supplied, `--known-accumulator`); signer provenance is a
- * verify-time question. See TRUST-MODEL.md.
+ * verify-time question. See the receipt trust model:
+ * https://github.com/forestrie/devdocs/blob/main/protocol/receipt-trust-model.md
  */
 export async function freshenFromCalldataChain(opts: {
   oldReceiptBytes: Uint8Array;
