@@ -277,7 +277,7 @@ genuine current log — which is a *different* question from who sealed the stat
 or whether the log's authority chains back to genesis. Freshen never re-opens
 those; it re-anchors an already-issued receipt to the current accumulator. Which
 anchor proves what is the trust model: see
-**[TRUST-MODEL.md](./TRUST-MODEL.md#freshen-and-the-attestor)**.
+**[the trust model](https://github.com/forestrie/devdocs/blob/main/protocol/receipt-trust-model.md#freshen-and-the-attestor)**.
 
 ### `decode-receipt`
 
@@ -332,8 +332,10 @@ signature — no operator trust required.
 What each actually proves — and how forestrie separates **freshness** (does the
 leaf root into the real current log) from **sealing** (who signed) from
 **authority** (does the log chain to genesis, via grants — not `genesis.cbor`) —
-is the trust model: see **[TRUST-MODEL.md](./TRUST-MODEL.md)**. The receipt never
-expires, and the anchor never needs to be current — only trusted.
+is the trust model: see
+**[the trust model](https://github.com/forestrie/devdocs/blob/main/protocol/receipt-trust-model.md)**.
+The receipt never expires, and the anchor never needs to be current — only
+trusted.
 
 ### `fetch-accumulator`
 
