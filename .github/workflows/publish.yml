@@ -1,0 +1,136 @@
+# Publish @forestrie/forestrie-cli to public npmjs.org via trusted
+# publishing (OIDC): no registry token — npmjs is configured to trust
+# this repo + workflow, and provenance is attested. Ported from mandate
+# .github/workflows/publish-mandate-register.yml (FOR-360/FOR-365).
+#
+# The FIRST publish of the package must be done manually from a clean
+# checkout (`npm publish --provenance`); this workflow handles every
+# subsequent release.
+#
+# Relationship to release.yml — both fire on `v*` tags, deliberately, and
+# they do not conflict:
+#   * release.yml builds the static Bun binaries and creates/updates the
+#     GitHub release. It needs `contents: write` and no registry identity;
+#     it is idempotent (`gh release upload --clobber`).
+#   * publish.yml (this file) builds the Node bundle and publishes the npm
+#     tarball. It needs `id-token: write` and the `npm-publish`
+#     environment, and no `contents` write at all.
+# Neither reads the other's outputs, neither can start the other, and each
+# gates itself on the same `scripts/assert-tag-version.ts` check, so one
+# failing never half-publishes the other. Re-running this one over an
+# already-published version fails closed at the assert step (--registry).
+#
+# Release discipline (FOR-365 pattern):
+# - Tags (`v<version>`) are the normal trigger; workflow_dispatch is
+#   recovery-only and must be dispatched with a v* tag ref (the assert
+#   script refuses a branch ref). Both run in the `npm-publish` GitHub
+#   environment, whose deployment branch/tag policy must allow only `main`
+#   and `v*` tags. Paired with the npm trusted-publisher registration
+#   requiring that environment, this closes ref laundering.
+# - Actions are SHA-pinned, the npm client is pinned exactly, the install
+#   is frozen-lockfile, and tag <-> package.json version agreement is
+#   asserted before anything is built.
+#
+# Pattern notes:
+# - `id-token: write` is required for the OIDC exchange.
+# - Trusted publishing needs npm >= 11.5.1; node 22 ships npm 10, so npm
+#   is upgraded explicitly.
+# - bun builds the tarball (`prepack` -> `bun run build`); npm does the
+#   OIDC publish of that tarball.
+name: Publish
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+# No workflow-level permissions: grant the minimum at job level (FOR-366 M5).
+permissions: {}
+
+jobs:
+  publish:
+    name: Publish @forestrie/forestrie-cli to npmjs
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: read # checkout only
+      id-token: write # OIDC exchange for npm trusted publishing
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.14.0
+          registry-url: https://registry.npmjs.org
+          scope: "@forestrie"
+
+      - name: Upgrade npm for trusted publishing
+        # Pinned to an exact version (not a floating `npm@11`) so the
+        # release path is reproducible and cannot pick up a brand-new
+        # client at release time (FOR-365 C1). Trusted publishing needs
+        # npm >= 11.5.1; npm@12 requires a newer node than the pinned
+        # 22.14.0 toolchain.
+        run: |
+          npm install -g npm@11.18.0
+          npm --version
+
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          install: true
+
+      - name: Assert publish version discipline
+        # Tag builds: the tag must name exactly the package.json version.
+        # --registry additionally refuses a version already on npmjs, so a
+        # re-run cannot fail half-way through the publish. Runs before
+        # install/build so a mismatch fails fast.
+        run: bun scripts/assert-tag-version.ts --registry
+
+      # No registry credentials are mounted for the install: the tarball is
+      # buildable tokenless from public npmjs (plan-2607-12). The publish
+      # step's identity is OIDC, not a token.
+      - name: Install dependencies (tokenless, frozen)
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: CBOR codec gate
+        run: bun run check:cbor
+
+      - name: Test
+        run: bun run test
+
+      - name: Pack the tarball
+        # `prepack` runs `bun run build` (clean + tsc library emit + the
+        # Node CLI bundle), so the tarball can never carry a stale dist.
+        run: npm pack
+
+      - name: Assert the tarball carries the published entry points
+        run: |
+          set -euo pipefail
+          tgz=$(ls forestrie-forestrie-cli-*.tgz)
+          for want in \
+            package/dist/cli.js \
+            package/dist/index.js \
+            package/dist/index.d.ts \
+            package/dist/decode-receipt.js \
+            package/dist/decode-receipt.d.ts \
+            package/LICENSE \
+            package/README.md \
+            package/TRUST-MODEL.md
+          do
+            tar -tzf "$tgz" | grep -qx "$want" \
+              || { echo "::error::${want} missing from ${tgz}"; exit 1; }
+          done
+          echo "tarball entry points OK"
+
+      - name: Publish to npmjs (trusted publishing)
+        # --provenance is explicit so a silent regression is impossible;
+        # publishConfig sets it too, and they must agree.
+        run: npm publish --provenance ./forestrie-forestrie-cli-*.tgz
