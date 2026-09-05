@@ -1,4 +1,5 @@
 import type { Out } from "@forestrie/cli-kit/reporting";
+import { readTextFile, writeOutputFile } from "../lib/fsio.js";
 import type { CreateLogOptions } from "../options/create-log.js";
 import {
   RegisterGrantBuildError,
@@ -77,11 +78,7 @@ const FLOW_ERROR_CODES = {
 } as const;
 
 async function readPemFile(path: string, flag: string): Promise<string> {
-  const file = Bun.file(path);
-  if (!(await file.exists())) {
-    throw new Error(`${flag} key file not found: ${path}`);
-  }
-  return file.text();
+  return readTextFile(path, `${flag} key file not found: ${path}`);
 }
 
 function reportError(
@@ -132,7 +129,7 @@ async function reportCompletedGrant(
 ): Promise<void> {
   const ownerHex = Buffer.from(built.grantData).toString("hex");
   if (options.outB64 !== undefined) {
-    await Bun.write(options.outB64, completedB64);
+    await writeOutputFile(options.outB64, completedB64);
   }
   if (options.json) {
     const report: CreateLogReport = {
@@ -242,7 +239,7 @@ export async function runCreateLog(
         { fetchImpl: deps.fetchImpl },
       );
       if (options.outB64 !== undefined) {
-        await Bun.write(options.outB64, built.grantBase64);
+        await writeOutputFile(options.outB64, built.grantBase64);
       }
       if (options.json) {
         const report = {

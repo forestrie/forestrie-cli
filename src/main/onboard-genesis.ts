@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { writeOutputFile } from "../lib/fsio.js";
 import { readDeploymentRecord } from "../lib/deployment-record.js";
 import type { Out } from "@forestrie/cli-kit/reporting";
 import {
@@ -157,7 +158,7 @@ export async function runOnboardGenesis(
       return;
     }
     const genesis = new Uint8Array(await genesisRes.arrayBuffer());
-    await Bun.write(options.out, genesis);
+    await writeOutputFile(options.out, genesis);
     genesisBytes = genesis.length;
   }
 

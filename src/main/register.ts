@@ -1,4 +1,9 @@
 import type { Out } from "@forestrie/cli-kit/reporting";
+import {
+  readBytesFile,
+  readStdinBytes,
+  writeOutputFile,
+} from "../lib/fsio.js";
 import type { RegisterOptions } from "../options/register.js";
 import {
   RegisterFlowError,
@@ -67,11 +72,7 @@ async function readStatementBytes(
   if (statement === undefined || statement === "-") {
     return readStdin();
   }
-  const file = Bun.file(statement);
-  if (!(await file.exists())) {
-    throw new Error(`statement file not found: ${statement}`);
-  }
-  return new Uint8Array(await file.arrayBuffer());
+  return readBytesFile(statement, `statement file not found: ${statement}`);
 }
 
 function reportError(
@@ -119,7 +120,7 @@ async function reportReceipt(
   result: RegisterFlowResult,
 ): Promise<void> {
   if (options.out !== undefined) {
-    await Bun.write(options.out, result.receipt);
+    await writeOutputFile(options.out, result.receipt);
   }
   if (options.json) {
     const report: RegisterReport = {
@@ -163,9 +164,7 @@ export async function runRegister(
   options: RegisterOptions,
   deps: RegisterRunDeps = {},
 ): Promise<void> {
-  const readStdin =
-    deps.readStdin ??
-    (async () => new Uint8Array(await Bun.stdin.arrayBuffer()));
+  const readStdin = deps.readStdin ?? readStdinBytes;
 
   let statement: Uint8Array;
   try {

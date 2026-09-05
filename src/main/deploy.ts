@@ -1,4 +1,5 @@
 import type { Out } from "@forestrie/cli-kit/reporting";
+import { writeOutputFile } from "../lib/fsio.js";
 import { getAddress, type Hex } from "viem";
 import type { BootstrapAlg, DeployOptions } from "../options/deploy.js";
 import {
@@ -128,7 +129,7 @@ async function reportDeployed(
 ): Promise<void> {
   const json = JSON.stringify(record, null, 2);
   if (options.out !== undefined) {
-    await Bun.write(options.out, `${json}\n`);
+    await writeOutputFile(options.out, `${json}\n`);
   }
   if (options.json) {
     const report: DeployReport = {

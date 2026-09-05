@@ -1,4 +1,5 @@
 import type { Out } from "@forestrie/cli-kit/reporting";
+import { writeOutputFile } from "../lib/fsio.js";
 import {
   decodeCborDeterministic,
   encodeCborDeterministic,
@@ -302,7 +303,7 @@ export async function runOnboardRequest(
   }
 
   if (options.out !== undefined) {
-    await Bun.write(options.out, token);
+    await writeOutputFile(options.out, token);
   }
   if (options.json) {
     const report: OnboardRequestReport = {

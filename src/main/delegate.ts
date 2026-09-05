@@ -1,4 +1,5 @@
 import type { Out } from "@forestrie/cli-kit/reporting";
+import { readTextFile, writeOutputFile } from "../lib/fsio.js";
 import type { DelegateOptions } from "../options/delegate.js";
 import {
   DelegateFlowError,
@@ -41,11 +42,7 @@ export type DelegateErrorReport = {
 export type DelegateRunDeps = DelegateFlowDeps;
 
 async function readPemFile(path: string, flag: string): Promise<string> {
-  const file = Bun.file(path);
-  if (!(await file.exists())) {
-    throw new Error(`${flag} key file not found: ${path}`);
-  }
-  return file.text();
+  return readTextFile(path, `${flag} key file not found: ${path}`);
 }
 
 function reportError(
@@ -67,7 +64,10 @@ async function reportResult(
   result: DelegateFlowResult,
 ): Promise<void> {
   if (options.outB64 !== undefined) {
-    await Bun.write(options.outB64, Buffer.from(result.certificate).toString("base64"));
+    await writeOutputFile(
+      options.outB64,
+      Buffer.from(result.certificate).toString("base64"),
+    );
   }
   if (options.json) {
     const report: DelegateReport = {
