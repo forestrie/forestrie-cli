@@ -1,6 +1,6 @@
 {
   "name": "@forestrie/forestrie-cli",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "forestrie — participant CLI for forestrie transparency logs (SCITT / COSE receipts)",
   "keywords": [
     "forestrie",
