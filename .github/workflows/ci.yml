@@ -161,6 +161,12 @@ jobs:
         run: |
           set -euo pipefail
           tgz=$(ls forestrie-forestrie-cli-*.tgz)
+          # List once into a file rather than piping into `grep -q` per
+          # entry: grep -q exits as soon as it matches, SIGPIPEing tar
+          # mid-stream ("tar: stdout: write error"), and with `pipefail`
+          # that broken-pipe failure — not a real missing-entry failure —
+          # fails the whole step.
+          tar -tzf "$tgz" > listing.txt
           for want in \
             package/dist/cli.js \
             package/dist/index.js \
@@ -173,7 +179,7 @@ jobs:
             package/README.md \
             package/TRUST-MODEL.md
           do
-            tar -tzf "$tgz" | grep -qx "$want" \
+            grep -qx "$want" listing.txt \
               || { echo "::error::${want} missing from ${tgz}"; exit 1; }
           done
           echo "tarball entry points OK"
