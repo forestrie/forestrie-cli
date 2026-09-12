@@ -1,41 +1,83 @@
 {
   "name": "@forestrie/forestrie-cli",
-  "version": "0.7.0",
-  "private": true,
-  "description": "forestrie \u2014 single-binary participant CLI for forestrie transparency logs",
+  "version": "0.8.0",
+  "description": "forestrie — participant CLI for forestrie transparency logs (SCITT / COSE receipts)",
+  "keywords": [
+    "forestrie",
+    "scitt",
+    "cose",
+    "receipt",
+    "transparency-log",
+    "merkle",
+    "cli"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/forestrie/forestrie-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/forestrie/forestrie-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/forestrie/forestrie-cli/issues"
+  },
   "type": "module",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "bin": {
     "forestrie": "./dist/cli.js"
   },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./decode-receipt": {
+      "types": "./dist/decode-receipt.d.ts",
+      "import": "./dist/decode-receipt.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "LICENSE",
+    "README.md",
+    "TRUST-MODEL.md"
+  ],
   "scripts": {
     "dev": "bun run ./src/cli.ts",
-    "build": "bun build ./src/cli.ts --outdir dist --target bun",
+    "clean": "rm -rf dist",
+    "build": "bun run clean && bun run build:lib && bun run build:cli",
+    "build:cli": "bun build ./src/cli.ts --outdir dist --target node",
+    "build:lib": "tsc -p tsconfig.lib.json",
     "build:binary": "bun scripts/build-binary.ts",
     "build:binary:linux-x64": "bun scripts/build-binary.ts --target bun-linux-x64",
     "build:binary:darwin-arm64": "bun scripts/build-binary.ts --target bun-darwin-arm64",
     "typecheck": "tsc --noEmit",
-		"check:cbor": "bun scripts/check-cbor-codec.ts",
-    "test": "bun test"
+    "check:cbor": "bun scripts/check-cbor-codec.ts",
+    "test": "bun test",
+    "prepack": "bun run build"
   },
   "dependencies": {
-    "@forestrie/chain-rpc": "^0.1.1",
-    "@forestrie/cli-kit": "^0.1.0",
-    "@forestrie/delegation-cose": "^0.1.5",
-    "@forestrie/deploy-core": "^0.6.0",
-    "@forestrie/encoding": "^0.5.0",
-    "@forestrie/grant-builder": "^0.3.0",
-    "@forestrie/merklelog": "^0.2.0",
-    "@forestrie/receipt-verify": "^0.9.0",
-    "@forestrie/scrapi-client": "^0.1.3",
+    "@forestrie/chain-rpc": "^0.2.0",
+    "@forestrie/cli-kit": "^0.1.1",
+    "@forestrie/delegation-cose": "^0.3.1",
+    "@forestrie/deploy-core": "^0.7.1",
+    "@forestrie/encoding": "^0.7.0",
+    "@forestrie/grant-builder": "^0.4.1",
+    "@forestrie/merklelog": "^0.3.0",
+    "@forestrie/receipt-verify": "^1.0.0",
+    "@forestrie/scrapi-client": "^0.1.4",
     "citty": "^0.2.2",
     "viem": "^2.31.0"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5.9.2"
-  },
-  "files": [
-    "dist"
-  ],
-  "license": "MIT"
+  }
 }

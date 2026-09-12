@@ -9,6 +9,7 @@
  * `resolveBootstrapKey`, which also accepts public-only SPKI PEMs.
  */
 import { readFileSync } from "node:fs";
+import { writeOutputFile } from "./fsio.js";
 import {
   generateEs256BootstrapKey,
   resolveBootstrapKey,
@@ -35,7 +36,7 @@ export type DeployBootstrapInput = {
   pemPath?: string | undefined;
 };
 
-/** Test seam: PEM persistence (real `Bun.write` by default). */
+/** Test seam: PEM persistence (real file write by default). */
 export type WritePem = (path: string, pem: string) => Promise<unknown>;
 
 /**
@@ -47,7 +48,7 @@ export type WritePem = (path: string, pem: string) => Promise<unknown>;
  */
 export async function resolveDeployBootstrapKey(
   input: DeployBootstrapInput,
-  writePem: WritePem = (path, pem) => Bun.write(path, pem),
+  writePem: WritePem = writeOutputFile,
 ): Promise<ResolvedDeployBootstrap> {
   if (input.generate) {
     if (input.pemOut === undefined) {

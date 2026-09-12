@@ -1,0 +1,23 @@
+{
+  // Library emit for the published subpath exports (`.` and
+  // `./decode-receipt`). The CLI bundle is built separately by
+  // `bun build` — this config exists only so the pure decode-receipt
+  // renderer ships as real ESM plus .d.ts that consumers
+  // (e.g. @forestrie/mcp-verify) can type against.
+  //
+  // Its inputs are deliberately narrow: only what src/index.ts reaches,
+  // which is the decode-receipt module group and nothing else. If a
+  // node:*/Bun import ever creeps into that group, this build starts
+  // dragging CLI internals into the library and the tarball assertions
+  // in ci.yml notice.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "rootDir": "./src",
+    "outDir": "./dist"
+  },
+  "include": ["./src/index.ts", "./src/decode-receipt.ts"]
+}

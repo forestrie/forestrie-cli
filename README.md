@@ -1,9 +1,10 @@
 # forestrie-cli
 
-`forestrie` — the single-binary **participant CLI** for forestrie
-transparency logs (SCITT / COSE receipts). One static Bun binary hosts the
-subcommands a participant needs to deploy, sign, register, and verify
-against a forestrie log:
+`forestrie` — the **participant CLI** for forestrie transparency logs
+(SCITT / COSE receipts). Ships two ways — an npm package that runs on Node
+(`npx @forestrie/forestrie-cli`) and a dependency-free static binary on
+every GitHub release — both hosting the subcommands a participant needs to
+deploy, sign, register, and verify against a forestrie log:
 
 | Subcommand | What it does |
 |---|---|
@@ -21,6 +22,20 @@ against a forestrie log:
 surface and parse it, then exit non-zero with a structured `not_implemented`
 error. `--json` emits that report as JSON on stdout. Implementations land
 per-subcommand.
+
+## Install from npm
+
+```bash
+npx @forestrie/forestrie-cli --help          # no install
+npm install -g @forestrie/forestrie-cli      # then: forestrie --help
+forestrie verify --help
+```
+
+**Runtime:** the npm package is a **Node** program — Node **>= 20.10** and
+nothing else. Bun is the development and static-binary toolchain, not a
+runtime requirement: nothing under `src/` uses a Bun-only API, and
+`dist/cli.js` is built with `--target node`. If you would rather have no
+runtime at all, take the static binary below.
 
 ## Install from a release
 
@@ -41,7 +56,10 @@ chmod +x "forestrie-${target}"
 
 Releases are cut by pushing a `v*` tag; the workflow fails closed unless
 the tag matches the `package.json` version
-([.github/workflows/release.yml](./.github/workflows/release.yml)).
+([release.yml](https://github.com/forestrie/forestrie-cli/blob/main/.github/workflows/release.yml)).
+The same tag publishes the npm package
+([publish.yml](https://github.com/forestrie/forestrie-cli/blob/main/.github/workflows/publish.yml)),
+with npm trusted publishing and provenance attestation.
 
 ## Install from source
 
@@ -356,6 +374,40 @@ Reads `logState(logId)` pinned to a block and writes the
 `--known-accumulator` snapshot: canonical CBOR binding
 `(chainId, univocity, logId, size, blockNumber, blockHash)` — anyone with
 RPC can re-run the read at that block and confirm or disprove it.
+
+## Use as a library: `decode-receipt`
+
+The receipt decoder behind `forestrie decode-receipt` is exported as a
+subpath so other tools can render receipts without shelling out to the CLI
+or vendoring a copy:
+
+```ts
+import {
+  decodeReceipt,
+  renderReceipt,
+  HEADER_LABELS,
+} from "@forestrie/forestrie-cli/decode-receipt";
+
+const decoded = decodeReceipt(receiptBytes);  // Uint8Array in
+console.log(renderReceipt(decoded));          // the annotated tree
+console.log(JSON.stringify(decoded, null, 2)); // the same model as --json
+```
+
+The entry point is pure: no `node:*`, no `Bun.*`, no I/O and no network, so
+it runs unchanged in Node, Bun, Deno, a worker or a browser. Its only
+dependencies are `@forestrie/receipt-verify` (the load-bearing receipt
+parse) and `@forestrie/encoding`. Ships with `.d.ts`.
+
+Also exported: `DecodeReceiptError` (carries the failing `stage`), the
+display-model types (`DecodedReceipt`, `DecodedHeaderEntry`, `DecodedClaim`,
+`Json`), the label tables (`HEADER_LABELS`, `ALG_NAMES`, `VDS_NAMES`,
+`CWT_CLAIM_NAMES`, `COSE_KEY_PARAM_NAMES`, `PROOF_KIND_NAMES`,
+`headerLabelInfo`) and the minimal CBOR reader (`decodeCborValue`,
+`decodeCborMap`, `isCborTagged`). The bare `@forestrie/forestrie-cli`
+specifier re-exports the same surface; prefer the subpath.
+
+Decoding is **display only** — it does not check signatures or inclusion.
+That is `forestrie verify` (and `@forestrie/receipt-verify` in-process).
 
 ## Built on (published packages)
 

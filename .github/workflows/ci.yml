@@ -100,3 +100,112 @@ jobs:
 
       - name: Smoke test forestrie --help
         run: ./dist/forestrie-darwin-arm64 --help
+
+  publish-dry-run:
+    name: npm publish dry-run
+    runs-on: ubuntu-latest
+    # PR/push gate for the npm release path (canopy publish-dry-run.yml
+    # pattern): run the exact build/pack sequence publish.yml runs, assert
+    # the tarball carries every published entry point, dry-run the publish,
+    # then install the tarball into a scratch project and run the installed
+    # `forestrie` bin under **Node** — the runtime npx/`npm i -g` users get.
+    # The release path is exercised on every PR, before a live tag exists.
+    #
+    # Actions here are SHA-pinned (unlike the rest of this file) because
+    # this job mirrors the release path, where pinning is policy.
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.14.0
+
+      - name: Upgrade npm (same pinned client as publish.yml)
+        run: |
+          npm install -g npm@11.18.0
+          npm --version
+
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          install: true
+
+      - name: Install dependencies (tokenless)
+        run: bun install --frozen-lockfile
+
+      - name: Self-test assert-tag-version.ts
+        # publish.yml and release.yml both gate on this script; prove both
+        # the pass and the fail path of its tag mode on every run.
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          bun scripts/assert-tag-version.ts "v${version}"
+          if bun scripts/assert-tag-version.ts v0.0.0-mismatch; then
+            echo "::error::assert-tag-version.ts accepted a mismatched tag"
+            exit 1
+          fi
+          echo "self-test OK: matching tag accepted, mismatched tag rejected"
+
+      - name: Stamp a never-published dry-run version
+        # npm refuses `publish --dry-run` over an already-published
+        # version, and once the package is live the repo version usually
+        # is. Stamping keeps the full pack + publish validation running.
+        run: npm pkg set version="0.0.0-dryrun-${GITHUB_SHA}"
+
+      - name: Pack
+        # `prepack` runs the full build (tsc library emit + Node bundle).
+        run: npm pack
+
+      - name: Assert the tarball carries the published entry points
+        run: |
+          set -euo pipefail
+          tgz=$(ls forestrie-forestrie-cli-*.tgz)
+          # List once into a file rather than piping into `grep -q` per
+          # entry: grep -q exits as soon as it matches, SIGPIPEing tar
+          # mid-stream ("tar: stdout: write error"), and with `pipefail`
+          # that broken-pipe failure — not a real missing-entry failure —
+          # fails the whole step.
+          tar -tzf "$tgz" > listing.txt
+          for want in \
+            package/dist/cli.js \
+            package/dist/index.js \
+            package/dist/index.d.ts \
+            package/dist/decode-receipt.js \
+            package/dist/decode-receipt.d.ts \
+            package/dist/lib/decode-receipt-decode.js \
+            package/dist/lib/decode-receipt-decode.d.ts \
+            package/LICENSE \
+            package/README.md \
+            package/TRUST-MODEL.md
+          do
+            grep -qx "$want" listing.txt \
+              || { echo "::error::${want} missing from ${tgz}"; exit 1; }
+          done
+          echo "tarball entry points OK"
+
+      - name: Dry-run publish
+        run: npm publish --dry-run --tag dryrun ./forestrie-forestrie-cli-*.tgz
+
+      - name: Install the tarball into a scratch project and run it under Node
+        run: |
+          set -euo pipefail
+          tgz="$PWD/$(ls forestrie-forestrie-cli-*.tgz)"
+          scratch=$(mktemp -d)
+          cd "$scratch"
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund "$tgz"
+          node "$scratch/node_modules/.bin/forestrie" --help
+          node "$scratch/node_modules/.bin/forestrie" verify --help
+          # The subpath export mcp-verify depends on must resolve from a
+          # plain consumer, with no bundler and no Bun in sight.
+          cat > probe.mjs <<'PROBE'
+          import { decodeReceipt, renderReceipt, HEADER_LABELS } from "@forestrie/forestrie-cli/decode-receipt";
+          import { decodeReceipt as viaRoot } from "@forestrie/forestrie-cli";
+          if (typeof decodeReceipt !== "function") throw new Error("decodeReceipt missing");
+          if (typeof renderReceipt !== "function") throw new Error("renderReceipt missing");
+          if (typeof viaRoot !== "function") throw new Error("root export missing");
+          if (HEADER_LABELS.size === 0) throw new Error("label table empty");
+          console.log("subpath export OK");
+          PROBE
+          node probe.mjs
