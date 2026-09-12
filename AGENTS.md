@@ -1,7 +1,7 @@
 # forestrie-cli — agent guidance
 
 Shared Forestrie team conventions:
-[forestrie-agents](https://github.com/forestrie/forestrie-agents).
+`forestrie-agents` (private org repo).
 
 ## This repo
 
