@@ -27,7 +27,7 @@ import {
  *
  * Both freshen sources re-anchor to the current accumulator; the trust posture
  * (freshness vs signer provenance) is chosen at verify — see the receipt trust model:
- * https://github.com/forestrie/devdocs/blob/main/protocol/receipt-trust-model.md
+ * https://github.com/forestrie/protocol/blob/main/spec/receipt-trust-model.md
  * Freshen recomputes the leaf value exactly as `verify` does, from `--payload`
  * (statement receipts) or the committed grant (`--committed-grant` /
  * `--committed-grant-file`) + `--entry-id`.
@@ -71,7 +71,7 @@ export type CreateReceiptOptions = ForestrieCommonOptions & {
   /** Trusted accumulator snapshot (`fetch-accumulator` output) to bind the
    * freshened state against — anchors freshness (not signer provenance), fails
    * closed on mismatch; freshen only. See the receipt trust model:
-   * https://github.com/forestrie/devdocs/blob/main/protocol/receipt-trust-model.md */
+   * https://github.com/forestrie/protocol/blob/main/spec/receipt-trust-model.md */
   knownAccumulator: string | undefined;
 };
 
