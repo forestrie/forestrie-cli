@@ -5,14 +5,14 @@
     "": {
       "name": "@forestrie/forestrie-cli",
       "dependencies": {
-        "@forestrie/chain-rpc": "^0.2.0",
+        "@forestrie/chain-rpc": "^0.3.0",
         "@forestrie/cli-kit": "^0.1.1",
         "@forestrie/delegation-cose": "^0.3.1",
         "@forestrie/deploy-core": "^0.7.1",
         "@forestrie/encoding": "^0.7.0",
         "@forestrie/grant-builder": "^0.4.1",
         "@forestrie/merklelog": "^0.3.0",
-        "@forestrie/receipt-verify": "^1.0.0",
+        "@forestrie/receipt-verify": "^1.1.0",
         "@forestrie/scrapi-client": "^0.1.4",
         "citty": "^0.2.2",
         "viem": "^2.31.0",
@@ -26,7 +26,7 @@
   "packages": {
     "@adraffy/ens-normalize": ["@adraffy/ens-normalize@1.11.1", "", {}, "sha512-nhCBV3quEgesuf7c7KYfperqSS14T8bYuvJ8PcLJp6znkZpFc0AuW4qBtr8eKVyPPe/8RSr7sglCWPU5eaxwKQ=="],
 
-    "@forestrie/chain-rpc": ["@forestrie/chain-rpc@0.2.0", "", {}, "sha512-StFJkBnoEn5HV/rKdkyi/+d2qQrmTwyUZ6y+ux+7eebJgMitEa3lj9b7BlcgvORTcddvh/IIHOCHmENZswOZiA=="],
+    "@forestrie/chain-rpc": ["@forestrie/chain-rpc@0.3.0", "", {}, "sha512-HLLu2EiIJ5sfEtyNwK7f8lCfJQBzZd/BiTZk7lMLwQe4EAA8Ju/RvqqmDyKgf2VqlsnCZi4oJoR6gzVOTmIxDg=="],
 
     "@forestrie/cli-kit": ["@forestrie/cli-kit@0.1.1", "", { "dependencies": { "citty": "^0.2.2" } }, "sha512-jjUV90cFKxWjJt/jMZHX8m8cgD8x05NxpOUI0VzmgB4R1E+87msr/ZwFeBGv6YTac/hdgJzQnsUt+skVrJ195Q=="],
 
@@ -40,7 +40,7 @@
 
     "@forestrie/merklelog": ["@forestrie/merklelog@0.3.0", "", {}, "sha512-u2bFI8u2cW9uZij/x0aKBRT+asnpaqJCFMPGitQfOJSY8hGmNSbAP0LuFDVO9mtB2M/Ata/lABBur49g5ZxfcA=="],
 
-    "@forestrie/receipt-verify": ["@forestrie/receipt-verify@1.0.0", "", { "dependencies": { "@forestrie/chain-rpc": "0.2.0", "@forestrie/encoding": "0.7.0", "@forestrie/merklelog": "0.3.0", "@noble/hashes": "^1.7.1" } }, "sha512-ygL2tvo4FgJVJPPOA6c2dd6CwcpTf1G1RAbP2MldQ1NWhhReXe1bGtjkZHVZl+37csvSNrq6YTQTPmbOgOjcGQ=="],
+    "@forestrie/receipt-verify": ["@forestrie/receipt-verify@1.1.0", "", { "dependencies": { "@forestrie/chain-rpc": "0.3.0", "@forestrie/encoding": "0.7.0", "@forestrie/merklelog": "0.3.0", "@noble/hashes": "^1.7.1" } }, "sha512-QN9btyw94eSF+j/3F5TMEhvTgLlqkxWBgvI8Thm+N1n30po5cQeS7kCtEQWZhym54zEGO+cCxQxQMsmvsih50w=="],
 
     "@forestrie/scrapi-client": ["@forestrie/scrapi-client@0.1.4", "", { "dependencies": { "@forestrie/encoding": "0.7.0" } }, "sha512-kaBvolrzzgaJpgIq141Z2taUKXb9ktPsLuB9x9dzbQOVpQ4r2NSx2h8dAK07QAqsYkqhM+tO0morQ8rI4f25Ww=="],
 
