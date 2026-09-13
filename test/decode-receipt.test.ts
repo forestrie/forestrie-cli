@@ -14,6 +14,7 @@ import {
   buildSign1WithBadProtected,
   buildSign1WithoutProof,
   cbor,
+  filled,
 } from "./decode-receipt-fixture.js";
 import { runCli } from "./support.js";
 
@@ -112,6 +113,56 @@ describe("renderReceipt (human tree)", () => {
 
   test("unknown labels appear in the tree", () => {
     expect(text).toContain('-70000 (unknown label): "mystery"');
+  });
+});
+
+describe("forestrie private-use labels -65800 / -65801 (label-registry.md)", () => {
+  test("algorithm -65800 is named ES256-WebAuthn", () => {
+    const decoded = decodeReceipt(buildReceiptFixture({ alg: -65800 }));
+    expect(decoded.protected.alg?.value).toBe(-65800);
+    expect(decoded.protected.alg?.name).toContain("ES256-WebAuthn");
+  });
+
+  test("header label -65801 is named the session key endorsement", () => {
+    const decoded = decodeReceipt(
+      buildReceiptFixture({
+        extraUnprotected: [[cbor.int(-65801), cbor.bstr(filled(0xee, 16))]],
+      }),
+    );
+    const entry = decoded.unprotected.entries.find(
+      (e) => e.label === -65801,
+    );
+    expect(entry?.name).toBe("session key endorsement");
+  });
+
+  test("header label -65800 is named the WebAuthn assertion envelope", () => {
+    const decoded = decodeReceipt(
+      buildReceiptFixture({
+        extraUnprotected: [
+          [
+            cbor.int(-65800),
+            cbor.array(cbor.bstr(filled(0xaa, 4)), cbor.bstr(filled(0xbb, 4))),
+          ],
+        ],
+      }),
+    );
+    const entry = decoded.unprotected.entries.find(
+      (e) => e.label === -65800,
+    );
+    expect(entry?.name).toBe("WebAuthn assertion envelope");
+  });
+
+  test("renderReceipt shows the new labels' names in the tree", () => {
+    const text = renderReceipt(
+      decodeReceipt(
+        buildReceiptFixture({
+          alg: -65800,
+          extraUnprotected: [[cbor.int(-65801), cbor.bstr(filled(0xee, 16))]],
+        }),
+      ),
+    );
+    expect(text).toContain("1 (alg): -65800 — ES256-WebAuthn");
+    expect(text).toContain("-65801 (session key endorsement):");
   });
 });
 

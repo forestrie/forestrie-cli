@@ -67,17 +67,23 @@ export const FIXTURE = {
   unknownValue: "mystery",
 };
 
-/** Protected header map bytes: {1: ES256, 4: kid, 395: vds 3}. */
-export function protectedMapBytes(): Uint8Array {
+/** Protected header map bytes: {1: alg, 4: kid, 395: vds 3}. */
+export function protectedMapBytes(alg = -7): Uint8Array {
   return cbor.map(
-    [cbor.uint(1), cbor.nint(7)], // alg: ES256 (-7)
+    [cbor.uint(1), cbor.int(alg)], // alg: ES256 (-7) by default
     [cbor.uint(4), cbor.bstr(FIXTURE.kid)],
     [cbor.uint(395), cbor.uint(3)], // vds: MMRIVER
   );
 }
 
-/** Unprotected header: inclusion proof (396), delegation (1000), unknown. */
-function unprotectedMap(delegationCert: Uint8Array): Uint8Array {
+/**
+ * Unprotected header: inclusion proof (396), delegation (1000), unknown,
+ * plus any caller-supplied extra entries (e.g. to exercise a label).
+ */
+function unprotectedMap(
+  delegationCert: Uint8Array,
+  extraEntries: [Uint8Array, Uint8Array][] = [],
+): Uint8Array {
   const proofEntry = cbor.map(
     [cbor.uint(1), cbor.uint(FIXTURE.mmrIndex)],
     [cbor.uint(2), cbor.array(...FIXTURE.path.map((h) => cbor.bstr(h)))],
@@ -90,6 +96,7 @@ function unprotectedMap(delegationCert: Uint8Array): Uint8Array {
     [cbor.uint(396), verifiableProofs],
     [cbor.uint(1000), cbor.bstr(delegationCert)],
     [cbor.int(FIXTURE.unknownLabel), cbor.tstr(FIXTURE.unknownValue)],
+    ...extraEntries,
   );
 }
 
@@ -108,16 +115,25 @@ export type ReceiptFixtureOptions = {
   tagged?: boolean;
   /** Attach the 32-byte peak as payload instead of detached nil. */
   attachedPayload?: boolean;
+  /** Protected header `alg` value (default -7, ES256). */
+  alg?: number;
+  /** Extra unprotected header entries, e.g. to exercise a label. */
+  extraUnprotected?: [Uint8Array, Uint8Array][];
 };
 
 /** Build the golden receipt fixture bytes. */
 export function buildReceiptFixture(
   options: ReceiptFixtureOptions = {},
 ): Uint8Array {
-  const { tagged = true, attachedPayload = false } = options;
+  const {
+    tagged = true,
+    attachedPayload = false,
+    alg = -7,
+    extraUnprotected = [],
+  } = options;
   const sign1 = cbor.array(
-    cbor.bstr(protectedMapBytes()),
-    unprotectedMap(nestedDelegationCert()),
+    cbor.bstr(protectedMapBytes(alg)),
+    unprotectedMap(nestedDelegationCert(), extraUnprotected),
     attachedPayload ? cbor.bstr(FIXTURE.peak) : cbor.nil(),
     cbor.bstr(FIXTURE.signature),
   );
