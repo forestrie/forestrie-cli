@@ -29,7 +29,7 @@
     "provenance": true
   },
   "bin": {
-    "forestrie": "./dist/cli.js"
+    "forestrie": "dist/cli.js"
   },
   "exports": {
     ".": {
