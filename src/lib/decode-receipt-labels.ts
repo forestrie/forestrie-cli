@@ -7,7 +7,11 @@
  * RFC 8392 (CWT claim keys), draft-ietf-cose-merkle-tree-proofs
  * (395 vds / 396 verifiable proofs), and the forestrie private-use
  * labels (canopy grants.md, ADR-0046, plan-0033 format v3,
- * `@forestrie/receipt-verify` forest-genesis-labels).
+ * `@forestrie/receipt-verify` forest-genesis-labels). The forestrie
+ * private-use codepoints are normatively registered in
+ * forestrie/protocol's spec/label-registry.md — see that doc for
+ * -65800 (ALG_ES256_WEBAUTHN / TBD1), -65801 (TBD2), and -66535
+ * (SealDelegationProofLabel).
  */
 
 /** CBOR tag for COSE_Sign1 (RFC 9052 §2). */
@@ -62,10 +66,35 @@ export const HEADER_LABELS: ReadonlyMap<number, LabelInfo> = new Map([
   [-65537, { name: "idtimestamp", note: "forestrie private-use" }],
   [-65538, { name: "forestrie grant v0", note: "forestrie private-use" }],
   [
+    -65800,
+    {
+      name: "WebAuthn assertion envelope",
+      note:
+        "forestrie TBD1: [authenticatorData, clientDataJSON] (unprotected; " +
+        "reuses the -65800 algorithm codepoint, label-registry.md §4)",
+    },
+  ],
+  [
+    -65801,
+    {
+      name: "session key endorsement",
+      note:
+        "forestrie TBD2: the endorsement COSE_Sign1, embedded as a bstr " +
+        "(unprotected, leaf-admission-and-session-endorsement.md)",
+    },
+  ],
+  [
     SEAL_PEAK_RECEIPTS_LABEL,
     {
       name: "pre-signed peak receipts",
       note: "forestrie SealPeakReceiptsLabel (checkpoint header)",
+    },
+  ],
+  [
+    -66535,
+    {
+      name: "on-chain delegation proof",
+      note: "forestrie SealDelegationProofLabel (checkpoint header)",
     },
   ],
   [-68009, { name: "forest genesis version", note: "forestrie private-use" }],
@@ -82,6 +111,11 @@ export const ALG_NAMES: ReadonlyMap<number, string> = new Map([
   [-35, "ES384"],
   [-36, "ES512"],
   [-65799, "KS256 (secp256k1 + Keccak-256, forestrie private-use)"],
+  [
+    -65800,
+    "ES256-WebAuthn (forestrie private-use; delegation proofs and " +
+      "certificates only, never checkpoint-signing)",
+  ],
 ]);
 
 /**
