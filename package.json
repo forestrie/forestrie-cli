@@ -64,7 +64,7 @@
     "prepack": "bun run build"
   },
   "dependencies": {
-    "@forestrie/chain-rpc": "^0.2.0",
+    "@forestrie/chain-rpc": "^0.3.0",
     "@forestrie/cli-kit": "^0.1.1",
     "@forestrie/delegation-cose": "^0.3.1",
     "@forestrie/deploy-core": "^0.7.1",
