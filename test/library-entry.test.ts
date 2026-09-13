@@ -105,7 +105,7 @@ describe("published library entry — decode-receipt", () => {
       types: "./dist/decode-receipt.d.ts",
       import: "./dist/decode-receipt.js",
     });
-    expect(pkg.bin["forestrie"]).toBe("./dist/cli.js");
+    expect(pkg.bin["forestrie"]).toBe("dist/cli.js"); // no "./": npm drops a bin whose path it has to normalise
     for (const entry of ["dist", "LICENSE", "README.md", "TRUST-MODEL.md"]) {
       expect(pkg.files).toContain(entry);
     }
