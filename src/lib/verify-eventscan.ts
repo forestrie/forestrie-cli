@@ -11,8 +11,8 @@
  * record of those accumulators (`CheckpointPublished` carries `size` and
  * `accumulator`; the contract stores nothing retrievable historically).
  *
- * This rung depends only on public blockchain data — deliberately
- * independent of the log store (the retained-checkpoint chain rung is its
+ * This route depends only on public blockchain data — deliberately
+ * independent of the log store (the retained-checkpoint chain root is its
  * complement with the opposite dependency; see plan-2607-29).
  */
 import { bytesEqual } from "./bytes.js";

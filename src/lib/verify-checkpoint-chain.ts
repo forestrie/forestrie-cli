@@ -15,7 +15,7 @@ import type { AnchorCheck } from "./verify-anchored.js";
  * (ADR-0056: every checkpoint's embedded consistency proof spans its
  * massif's entry boundary to its seal). `@forestrie/receipt-verify`'s
  * `verifyCheckpointChain` folds that chain from size 0, authenticating the
- * accumulator at EVERY retained seal — this rung depends only on the
+ * accumulator at EVERY retained seal — this root depends only on the
  * public log store: no tiles, no RPC, no holder cache. It is the
  * complement of the `CheckpointPublished` event scan (public chain data
  * only); the two paths are independently sufficient and cross-checkable.
@@ -109,7 +109,7 @@ export type CheckpointChainAnchorCheck = AnchorCheck & {
 
 /**
  * Find the recomputed receipt peak in the authenticated chain. Newest-first
- * (mirrors the event-scan rung): the freshest cover gives the most useful
+ * (mirrors the event-scan route): the freshest cover gives the most useful
  * report, and a match at ANY link is proof — later links' signed
  * consistency proofs commit it forward. Newer-than-chain fails CLOSED with
  * a refresh remedy: retention limits coverage, never validity.

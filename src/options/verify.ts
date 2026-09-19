@@ -23,22 +23,28 @@ import {
  * Both add `--univocity --log-id --rpc-url` for the chain-anchored check (the
  * only networked path).
  *
- * Trust anchors (FOR-297 ladder; each rung needs strictly less trust):
- * 1. `--known-log-key` — caller-known log OWNER key: offline, no genesis;
- *    the key↔log binding is asserted by the key's provenance, not proven;
- *    no lifecycle visibility, no split-view protection.
- * 2. `--genesis` — genesis-derived roots (the grant-chain walk, approach A,
- *    will derive per-log bindings from genesis + public tiles).
- * 3. `--known-accumulator` — cached, auditable chain read: contract-enforced
- *    state (signature + grant chain + split-view for covered entries),
- *    fully offline; `--massif` (tiles) or `--consistency-proof` (portable
- *    top-up artifact) extends older receipts to a newer snapshot.
- * 4. `--checkpoint-chain` — retained `.sth` fold (FOR-368): authenticated
- *    accumulator at every retained seal from the public log store alone;
- *    signatures root in rung 1/2 trust.
- * 5. `--rpc-url` — live chain read: rung 3 plus freshness (the RPC provider
- *    is itself a trusted chain reader); buried peaks resolve via the
- *    CheckpointPublished history scan (public chain data only).
+ * Trust roots (protocol: spec/receipt-trust-model.md). They are alternatives,
+ * not an ordering — each answers a different subset of the four trust
+ * questions, and the report says which root was used:
+ * - `--known-log-key` — the known log key root: an owner key the caller holds
+ *   out of band; offline, no genesis; the key↔log binding is asserted by the
+ *   key's provenance, not proven; no split-view protection.
+ * - `--genesis` — the genesis root: the forest genesis document's bootstrap
+ *   key, which roots the root log or a delegation directly under it. A deeper
+ *   child log's authority needs the off-chain grant-chain walk, which no
+ *   verifier implements (spec/implementation-status.md).
+ * - `--known-accumulator` — the known accumulator root, from a cached,
+ *   auditable chain read: the contract-anchored state, fully offline;
+ *   `--massif` (tiles) or `--consistency-proof` (portable top-up artifact)
+ *   extends older receipts to a newer snapshot.
+ * - `--checkpoint-chain` — the checkpoint chain root: a retained fold of
+ *   checkpoint objects, an authenticated accumulator at every retained seal
+ *   from the public log store alone; signatures root in the genesis or known
+ *   log key root.
+ * - `--rpc-url` — the known accumulator root from a live chain read, plus
+ *   freshness (the RPC provider is itself a trusted chain reader); buried
+ *   peaks resolve via the CheckpointPublished history scan (public chain
+ *   data only).
  */
 
 type AnchorFields = {
@@ -75,8 +81,8 @@ type AnchorFields = {
   /**
    * Caller-known log OWNER key (the delegation-cert issuer), base64 `x||y`
    * (64 bytes, `KNOWN_LOG_KEY`) — FOR-297 D1. An offline trust anchor that
-   * replaces the genesis-derived roots: the "known hosts" rung of the trust
-   * ladder. It asserts (does not prove) the key↔log binding, and gives no
+   * replaces the genesis root: the known log key root of the trust model.
+   * It asserts (does not prove) the key↔log binding, and gives no
    * grant-lifecycle visibility or split-view protection — the grant-chain
    * walk (approach A) derives the binding; chain anchors add split-view.
    */
