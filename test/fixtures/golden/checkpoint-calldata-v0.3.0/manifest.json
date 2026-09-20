@@ -1,0 +1,38 @@
+{
+  "txHash": "0x264aacaddc9e5e766c03b532d478dd4db581ba8006c2723c7675415a5e253aa8",
+  "chainId": 84532,
+  "univocity": "0xe22c8d553f88b2b5f2255d2c2441bcdd0d50cd58",
+  "univocityRelease": "v0.3.0",
+  "block": 47074759,
+  "calldataSha256": "58321054430c00b2d0ec32fa302766bd4b9e342f31c57747e4c8f7fefa8c8f2a",
+  "protectedHeaderHex": "0xa3012619018b033a0001018c03",
+  "signedTreeSize2": "3",
+  "signatureHex": "0xbb28a8f741be5cddfe89e47e30279d05c0ddf2b3dee837fc2e1d161f24fd487325ca79c8c502618e51c5d708177614ab975fc95aba2084b2203a9c7ac6d732cb",
+  "consistencyProofs": [
+    {
+      "treeSize1": "1",
+      "treeSize2": "3",
+      "paths": [
+        [
+          "0x6d68702c8106c2e2e8e69bacd156638dd18b3a92429140af46969f7b06bc5c51"
+        ]
+      ],
+      "rightPeaks": []
+    }
+  ],
+  "baseTx": "0x39ac4f78b647ce997e23b072c6d1e889080e1fbc26a50522d1630d376fcfe522",
+  "baseAccumulator": [
+    "0x39e6b88b6ec1a6280ae778155f5df9a2262aca8fa7822ce1acf97268ef0ec5a9"
+  ],
+  "eventAccumulator": [
+    "0x51564f62b8a87f32d001d54bc7ca40ee7ba8784835c89005d779de4ae9e4189e"
+  ],
+  "delegation": {
+    "protectedHeaderHex": "0xa10126",
+    "delegationKeyHex": "0xba192965b5583008e9400ff799f14afbffa55592fefa3af79b7a30b53c617b2e3439f32e5a7fea6d3a23d89c62bf01f3bb11cd58cb88b412eef896839f69ccb9",
+    "mmrStart": "0",
+    "mmrEnd": "9007199254740991",
+    "signatureHex": "0x7c8e8b527470a87e72614aa2ccb2bf066ebc2a36550967e1d898c55ba2d36a2c208dff3111e7632002f9bdf4c6d5f4cca86c5afd7ae0564017930926f70425d7",
+    "algData": []
+  }
+}

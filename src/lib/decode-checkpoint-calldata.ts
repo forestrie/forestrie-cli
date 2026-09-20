@@ -13,15 +13,20 @@
  * consumes it lands in later phases.
  *
  * The ABI is written in viem's readable form, mirroring univocity
- * `src/interfaces/types.sol`; its selector is asserted against the
- * foundry-generated `0x87ce4c61` in the tests.
+ * `src/interfaces/types.sol` at v0.3.0; its selector is asserted against the
+ * foundry-generated `0x295e6ade` in the tests. `DelegationProof.algData`
+ * (ADR-0008, univocity #36) is the alg-specific material — empty for ES256
+ * and KS256, the WebAuthn assertion parts for ES256-WebAuthn. Transactions
+ * to the pre-ADR-0008 contracts (selector `0x87ce4c61`, five-field
+ * delegation) are not `publishCheckpoint` calls on the current ABI and are
+ * rejected at the selector.
  */
 import { decodeFunctionData, parseAbi } from "viem";
 
 /** `publishCheckpoint` ABI — struct shapes mirror univocity types.sol. */
 export const PUBLISH_CHECKPOINT_ABI = parseAbi([
   "struct ConsistencyProof { uint64 treeSize1; uint64 treeSize2; bytes32[][] paths; bytes32[] rightPeaks; }",
-  "struct DelegationProof { bytes protectedHeader; bytes delegationKey; uint64 mmrStart; uint64 mmrEnd; bytes signature; }",
+  "struct DelegationProof { bytes protectedHeader; bytes delegationKey; uint64 mmrStart; uint64 mmrEnd; bytes signature; bytes[] algData; }",
   "struct ConsistencyReceipt { bytes protectedHeader; bytes signature; ConsistencyProof[] consistencyProofs; DelegationProof delegationProof; }",
   "struct InclusionProof { uint64 index; bytes32[] path; }",
   "struct PublishGrant { bytes32 logId; uint256 grant; uint256 request; uint64 maxHeight; uint64 minGrowth; bytes32 ownerLogId; bytes grantData; }",
@@ -46,6 +51,8 @@ export type CalldataDelegation = {
   mmrStart: bigint;
   mmrEnd: bigint;
   signature: Uint8Array;
+  /** Alg-specific material (ADR-0008); empty for ES256 / KS256. */
+  algData: Uint8Array[];
 };
 
 /** The full `ConsistencyReceipt` recovered from `publishCheckpoint` calldata. */
@@ -98,6 +105,7 @@ export function decodePublishCheckpointCalldata(
       mmrStart: bigint;
       mmrEnd: bigint;
       signature: string;
+      algData: readonly string[];
     };
   };
 
@@ -128,6 +136,7 @@ export function decodePublishCheckpointCalldata(
       mmrStart: receipt.delegationProof.mmrStart,
       mmrEnd: receipt.delegationProof.mmrEnd,
       signature: hexToBytes(receipt.delegationProof.signature),
+      algData: receipt.delegationProof.algData.map(hexToBytes),
     },
   };
 }
