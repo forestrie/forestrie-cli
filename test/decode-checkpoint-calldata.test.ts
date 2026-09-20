@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { encodeFunctionData, toFunctionSelector } from "viem";
+import { encodeCborDeterministic } from "@forestrie/encoding";
+import { checkpointConsistencyProof } from "@forestrie/receipt-verify";
 import {
   PUBLISH_CHECKPOINT_ABI,
   decodePublishCheckpointCalldata,
@@ -95,6 +97,37 @@ describe("publishCheckpoint calldata golden vector (FOR-418 — frozen real tx)"
     const cp = decodePublishCheckpointCalldata(calldataHex);
     expect(cp.consistencyProofs[0]!.paths[0]).toEqual([]);
     expect(cp.consistencyProofs[0]!.rightPeaks.length).toBe(1);
+  });
+
+  test("decodes, but verification fails with the missing-signed-size reason (FOR-568, pre-ADR-0066 tx)", () => {
+    // This tx predates ADR-0066 D1 (amended 2026-09-20): its protected
+    // header is `{1: -7, 395: 3}` — no `-65933` (tree-size-2) label. The
+    // manifest's `protectedHeaderHex` 0xa2012619018b03 has no size label
+    // (2-entry map: alg, vds); decoding it as calldata still succeeds
+    // (asserted above), but reconstructing the checkpoint COSE Sign1 the
+    // `.sth` store would have held and handing it to
+    // `checkpointConsistencyProof` must fail closed — a pre-signed-size
+    // checkpoint is not verifiable under the current protocol.
+    const cp = decodePublishCheckpointCalldata(calldataHex);
+    const proof = cp.consistencyProofs[0]!;
+    const proofBstr = encodeCborDeterministic([
+      proof.treeSize1,
+      proof.treeSize2,
+      proof.paths,
+      proof.rightPeaks,
+    ]);
+    const unprotected = new Map<number, unknown>([
+      [396, new Map<number, unknown>([[-2, proofBstr]])],
+    ]);
+    const checkpointBytes = encodeCborDeterministic([
+      cp.protectedHeader,
+      unprotected,
+      null,
+      cp.signature,
+    ]);
+    expect(() => checkpointConsistencyProof(checkpointBytes)).toThrow(
+      /no signed tree-size-2/,
+    );
   });
 });
 
