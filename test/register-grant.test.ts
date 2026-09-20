@@ -394,7 +394,10 @@ describe("runRegisterGrantFlow", () => {
                 detail: "creation grant already sequenced",
                 status: 409,
               }),
-              { status: 409, headers: { "Content-Type": "application/cbor" } },
+              {
+                status: 409,
+                headers: { "Content-Type": "application/problem+cbor" },
+              },
             )
           : undefined,
       ),

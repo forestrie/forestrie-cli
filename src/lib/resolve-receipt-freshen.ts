@@ -102,7 +102,16 @@ async function emitFreshened(opts: {
   const result = await freshenReceipt({
     oldReceiptBytes: opts.oldReceiptBytes,
     leafValue: opts.leafValue,
-    consistencyProofs: opts.links.map((l) => l.proof),
+    // `freshenReceipt`'s consistency-proof array type carries
+    // `signedTreeSize2` (checked at `.sth` decode time), but the fold itself
+    // never reads it — see `FoldableConsistencyProof`'s doc comment in
+    // checkpoint-provider.ts. Backfilled from `treeSize2` to satisfy the
+    // parameter type for calldata-sourced links, which have no per-proof
+    // signed size.
+    consistencyProofs: opts.links.map((l) => ({
+      ...l.proof,
+      signedTreeSize2: l.proof.treeSize2,
+    })),
     latestCheckpointBytes: opts.latestCheckpointBytes,
   });
 
