@@ -27,6 +27,13 @@ export const CWT_CLAIMS_LABEL = 15;
 export const DELEGATION_CERT_LABEL = 1000;
 /** Pre-signed peak inclusion receipts on a checkpoint (`SealPeakReceiptsLabel`). */
 export const SEAL_PEAK_RECEIPTS_LABEL = -65931;
+/**
+ * Signed `tree-size-2` on a checkpoint's PROTECTED header (ADR-0066 D1 as
+ * amended 2026-09-20, `@forestrie/encoding` `COSE_LABEL_TREE_SIZE_2`): the
+ * only sealed size a checkpoint signs. Label -65932 (`tree-size-1`) was
+ * withdrawn before use and must not be registered here.
+ */
+export const TREE_SIZE_2_LABEL = -65933;
 
 /** Inclusion proofs key inside header 396. */
 export const PROOFS_INCLUSION_KEY = -1;
@@ -88,6 +95,15 @@ export const HEADER_LABELS: ReadonlyMap<number, LabelInfo> = new Map([
     {
       name: "pre-signed peak receipts",
       note: "forestrie SealPeakReceiptsLabel (checkpoint header)",
+    },
+  ],
+  [
+    TREE_SIZE_2_LABEL,
+    {
+      name: "tree-size-2",
+      note:
+        "forestrie: signed sealed size (ADR-0066 D1 as amended, checkpoint " +
+        "protected header)",
     },
   ],
   [
