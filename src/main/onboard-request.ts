@@ -16,6 +16,8 @@ import { loadEs256SigningKey } from "../lib/sign-statement-key.js";
 import { signX402Payment } from "../lib/x402-payment.js";
 import type { OnboardRequestOptions } from "../options/onboard-request.js";
 
+import { responseProblemDetail } from "../lib/http-problem.js";
+
 /**
  * Self-service onboarding (plan-2607-43 slice 06): create → (pay) → redeem.
  *
@@ -183,7 +185,7 @@ export async function runOnboardRequest(
       reportError(out, options, {
         error: "create_failed",
         command: "onboard-request",
-        message: `request rejected: HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`,
+        message: `request rejected: HTTP ${res.status}: ${await responseProblemDetail(res, 300)}`,
         httpStatus: res.status,
       });
       return;
@@ -271,7 +273,7 @@ export async function runOnboardRequest(
     reportError(out, options, {
       error: "redeem_failed",
       command: "onboard-request",
-      message: `redeem rejected: HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`,
+      message: `redeem rejected: HTTP ${res.status}: ${await responseProblemDetail(res, 300)}`,
       httpStatus: res.status,
     });
     return;

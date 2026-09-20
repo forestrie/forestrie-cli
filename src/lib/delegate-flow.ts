@@ -33,6 +33,8 @@ import {
   verifyDelegateKeyVoucher,
 } from "./delegate-voucher.js";
 
+import { responseProblemDetail } from "./http-problem.js";
+
 /** Fixed inclusive MMR start for a horizon delegation lease. */
 const MMR_START = 0;
 
@@ -170,7 +172,7 @@ export async function runDelegateFlow(
   const pendingUrl = `${params.coordinatorUrl}/api/logs/${params.logId}/pending-delegation`;
   const pendingRes = await fetchImpl(pendingUrl);
   if (!pendingRes.ok) {
-    const preview = (await pendingRes.text()).slice(0, 200);
+    const preview = await responseProblemDetail(pendingRes, 200);
     throw new DelegateFlowError(
       `pending-delegation fetch failed: HTTP ${pendingRes.status} ${preview}`,
       pendingRes.status,
@@ -270,7 +272,7 @@ export async function runDelegateFlow(
     }),
   });
   if (!submitRes.ok) {
-    const preview = (await submitRes.text()).slice(0, 200);
+    const preview = await responseProblemDetail(submitRes, 200);
     throw new DelegateFlowError(
       `certificate submit failed: HTTP ${submitRes.status} ${preview}`,
       submitRes.status,
