@@ -10,7 +10,13 @@
  *   nodes: 0=leaf0, 1=leaf1, 2=H(3||n0||n1), 3=leaf2
  *   peaks at size 3: [n2]; peaks at size 4: [n2, n3]
  */
-import { encodeSigStructure, type Grant } from "@forestrie/encoding";
+import {
+  COSE_LABEL_TREE_SIZE_2,
+  COSE_LABEL_VDS,
+  VDS_MMR_CONSISTENCY,
+  encodeSigStructure,
+  type Grant,
+} from "@forestrie/encoding";
 import { encodeCborDeterministic } from "@forestrie/encoding";
 import {
   buildGenesisCbor,
@@ -112,16 +118,29 @@ export function buildV2MassifBytes(opts: {
 }
 
 /**
- * Format-v3 checkpoint (ADR-0046): detached (null) payload; the sealed
- * size travels as tree-size-2 of the consistency proof under the
- * verifiable-proofs unprotected header (label 396, key -2); pre-signed
- * peak receipts under label -65931; optional delegation cert at 1000.
+ * Format-v3 checkpoint (ADR-0046, ADR-0066 D1 as amended 2026-09-20):
+ * detached (null) payload; the sealed size travels as tree-size-2 of the
+ * consistency proof under the verifiable-proofs unprotected header (label
+ * 396, key -2) AND as the SIGNED protected header `{1: alg, 395: 3,
+ * -65933: mmrSize}` — `@forestrie/receipt-verify` derives the checkpoint's
+ * sealed size from the signed label, not the unprotected proof alone.
+ * Pre-signed peak receipts under label -65931; optional delegation cert at
+ * 1000. The signature stays a zero-length placeholder: `create-receipt`
+ * only assembles/derives from a checkpoint, it never verifies the
+ * checkpoint's own signature.
  */
 export function buildV2CheckpointBytes(opts: {
   mmrSize: bigint;
   peakReceipts: Uint8Array[];
   delegationCert?: Uint8Array;
 }): Uint8Array {
+  const protectedInner = cborBytes(
+    new Map<number, unknown>([
+      [1, -7],
+      [COSE_LABEL_VDS, VDS_MMR_CONSISTENCY],
+      [COSE_LABEL_TREE_SIZE_2, opts.mmrSize],
+    ]),
+  );
   const consistencyProof = cborBytes([0n, opts.mmrSize, [], []]);
   const verifiableProofs = new Map<number, unknown>([[-2, consistencyProof]]);
   const checkpointUnprotected = new Map<number, unknown>([
@@ -132,7 +151,7 @@ export function buildV2CheckpointBytes(opts: {
     checkpointUnprotected.set(DELEGATION_CERT_LABEL, opts.delegationCert);
   }
   return cborBytes([
-    new Uint8Array(),
+    protectedInner,
     checkpointUnprotected,
     null,
     new Uint8Array(),

@@ -55,6 +55,23 @@ export type CheckpointSeal =
     }
   | { kind: "sth"; checkpointBytes: Uint8Array };
 
+/**
+ * Fold-relevant fields of a consistency proof, shared by calldata-decoded
+ * proofs (`CalldataConsistencyProof` — no per-proof signed size; on-chain
+ * calldata carries no protected header) and sth-decoded
+ * `CheckpointConsistencyProof` (which adds `signedTreeSize2`, cross-checked
+ * against the checkpoint's protected header at decode time). Neither
+ * `computeCheckpointAccumulator` nor `freshenReceipt` reads `signedTreeSize2`
+ * — only the trusted base SIZE (passed separately, never off the proof) and
+ * `treeSize1`/`treeSize2`/`paths`/`rightPeaks` matter to the fold — so this
+ * provider carries the narrower shape and backfills `signedTreeSize2` with
+ * `treeSize2` only where receipt-verify's stricter parameter type demands it.
+ */
+export type FoldableConsistencyProof = Pick<
+  CheckpointConsistencyProof,
+  "treeSize1" | "treeSize2" | "paths" | "rightPeaks"
+>;
+
 /** One folded link: the accumulator committed at `treeSize2`. */
 export type CheckpointLink = {
   treeSize1: bigint;
@@ -64,7 +81,7 @@ export type CheckpointLink = {
   /** The raw consistency proof this link was folded from — its per-peak `paths`
    * (the tile-free climb material). Retained so a path-extending consumer
    * (freshen) gets it without a re-decode; folding consumers ignore it. */
-  proof: CheckpointConsistencyProof;
+  proof: FoldableConsistencyProof;
   /** The signature material to verify this link's accumulator, when directly
    * signed (see {@link CheckpointSeal}). The provider does NOT verify it. */
   seal?: CheckpointSeal;
@@ -81,7 +98,7 @@ export type CheckpointLink = {
  * start at base 0.
  */
 export async function foldProofChain(
-  proofs: readonly CheckpointConsistencyProof[],
+  proofs: readonly FoldableConsistencyProof[],
   opts: {
     accumulatorFrom?: Uint8Array[];
     accumulatorFromSize?: bigint;
@@ -109,7 +126,16 @@ export async function foldProofChain(
         `checkpoint chain is not contiguous at link ${i}: base ${p.treeSize1} != expected ${expectedBase}`,
       );
     }
-    accumulator = await computeCheckpointAccumulator(p, accumulator);
+    // receipt-verify 2.0.0: the trusted base size is a parameter, never read
+    // off the proof (ADR-0066 D5.4) — `expectedBase` is exactly that, already
+    // checked against `p.treeSize1` above. `signedTreeSize2` is backfilled
+    // from `treeSize2` only to satisfy the parameter type; the fold does not
+    // read it (see `FoldableConsistencyProof`'s doc comment above).
+    accumulator = await computeCheckpointAccumulator(
+      { ...p, signedTreeSize2: p.treeSize2 },
+      accumulator,
+      expectedBase,
+    );
     const link: CheckpointLink = {
       treeSize1: p.treeSize1,
       treeSize2: p.treeSize2,
@@ -220,7 +246,7 @@ export async function calldataCheckpointChain(opts: {
     }),
   );
 
-  const proofs: CheckpointConsistencyProof[] = [];
+  const proofs: FoldableConsistencyProof[] = [];
   const seals: (CheckpointSeal | undefined)[] = [];
   const sourceRefs: string[] = [];
   const finalLinkIndex: number[] = []; // link index of each tx's last proof

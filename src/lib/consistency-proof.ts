@@ -180,10 +180,16 @@ export async function buildConsistencyProofArtifact(opts: {
   // supplied massifs fails HERE, not at the holder.
   const accumulatorTo = peakMMRIndexes(opts.toSize - 1n).map(opts.get);
   const hasher = await createSyncHasher();
+  // merklelog 0.4.0: both sizes are CALLER-TRUSTED state, never read off
+  // `proof` (ADR-0066 D5.4) — `opts.fromSize`/`opts.toSize` are exactly what
+  // this builder already trusts (they seeded `accumulatorFrom`/`accumulatorTo`
+  // above).
   const check = await verifyConsistency(
     hasher,
-    proof,
+    opts.fromSize,
+    opts.toSize,
     accumulatorFrom,
+    proof.paths,
     accumulatorTo,
   );
   if (!check.ok) {
@@ -249,14 +255,16 @@ export async function checkReceiptAnchoredViaConsistencyProof(opts: {
     };
   }
   const hasher = await createSyncHasher();
+  // merklelog 0.4.0: sizes are caller-trusted parameters, not read off a
+  // proof object — `artifact.toSize` was already checked equal to
+  // `opts.trustedSize` above, and `artifact.fromSize` is the base whose
+  // accumulator `recomputedPeak` was just matched against.
   const check = await verifyConsistency(
     hasher,
-    {
-      mmrSizeA: artifact.fromSize,
-      mmrSizeB: artifact.toSize,
-      paths: artifact.paths,
-    },
+    artifact.fromSize,
+    artifact.toSize,
     artifact.accumulatorFrom,
+    artifact.paths,
     opts.trustedAccumulator,
   );
   if (!check.ok) {

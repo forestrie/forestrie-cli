@@ -177,7 +177,10 @@ describe("runRegisterFlow", () => {
                 detail: "grant rejected",
                 status: 401,
               }),
-              { status: 401, headers: { "Content-Type": "application/cbor" } },
+              {
+                status: 401,
+                headers: { "Content-Type": "application/problem+cbor" },
+              },
             )
           : undefined,
       ),
@@ -504,7 +507,10 @@ describe("forestrie register (binary smoke, mock SCRAPI server)", () => {
         ) {
           return new Response(
             cborProblem({ detail: "grant rejected", status: 401 }),
-            { status: 401, headers: { "Content-Type": "application/cbor" } },
+            {
+              status: 401,
+              headers: { "Content-Type": "application/problem+cbor" },
+            },
           );
         }
         return new Response(null, {

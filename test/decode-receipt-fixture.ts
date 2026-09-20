@@ -33,6 +33,21 @@ function head(major: number, arg: number): number[] {
   ];
 }
 
+/**
+ * Canonical key order (ADR-0066 D9, RFC 7049 §3.9): shorter encoded key
+ * first, then bytewise — matches `@forestrie/encoding`'s deterministic
+ * decoder, which the fixture must satisfy even though it hand-rolls bytes
+ * independently of that package's encoder.
+ */
+function compareCanonicalKeys(a: Uint8Array, b: Uint8Array): number {
+  if (a.length !== b.length) return a.length - b.length;
+  for (let i = 0; i < a.length; i++) {
+    const d = a[i]! - b[i]!;
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
 export const cbor = {
   uint: (n: number): Uint8Array => bytes(head(0, n)),
   /** Encode the negative integer `-magnitude` (RFC 8949: head(1, m-1)). */
@@ -45,8 +60,12 @@ export const cbor = {
   },
   array: (...items: Uint8Array[]): Uint8Array =>
     bytes(head(4, items.length), ...items),
-  map: (...pairs: [Uint8Array, Uint8Array][]): Uint8Array =>
-    bytes(head(5, pairs.length), ...pairs.flat()),
+  /** Pairs are re-sorted into canonical key order regardless of call order,
+   * so callers can list entries in whatever order reads best. */
+  map: (...pairs: [Uint8Array, Uint8Array][]): Uint8Array => {
+    const sorted = [...pairs].sort((x, y) => compareCanonicalKeys(x[0], y[0]));
+    return bytes(head(5, sorted.length), ...sorted.flat());
+  },
   tag: (tag: number, value: Uint8Array): Uint8Array =>
     bytes(head(6, tag), value),
   nil: (): Uint8Array => bytes([0xf6]),
