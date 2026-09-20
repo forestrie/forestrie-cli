@@ -156,7 +156,7 @@ describe("verifyCheckpointChain + CLI trust wiring", () => {
     expect(chain.reason).toBe("signature");
   });
 
-  test("suffix chain without a trusted base is the legacy break", async () => {
+  test("suffix chain without a trusted base is a size mismatch (base 0 assumed)", async () => {
     const checkpoints = await buildChain(fx);
     const chain = await verifyCheckpointChain({
       checkpoints: [checkpoints[1]!],
@@ -166,7 +166,11 @@ describe("verifyCheckpointChain + CLI trust wiring", () => {
     });
     expect(chain.ok).toBe(false);
     if (chain.ok) return;
-    expect(chain.reason).toBe("legacy_chain_break");
+    // No `trustedBase` supplied: the fold assumes a whole-log chain (base 0),
+    // and cp2 declares tree-size-1 3 — the "legacy_chain_break" reason was
+    // withdrawn (ADR-0066 D6: no pre-FOR-410 state is supported, so there is
+    // no drift condition to signal separately from any other size disagreement).
+    expect(chain.reason).toBe("size_mismatch");
   });
 });
 
@@ -175,8 +179,8 @@ describe("checkReceiptAnchoredToCheckpointChain (pure)", () => {
   const B = new Uint8Array(32).fill(0xb2);
   const C = new Uint8Array(32).fill(0xc3);
   const links: CheckpointChainLink[] = [
-    { treeSize1: 0n, treeSize2: 4n, accumulator: [A, B], signatureOk: true },
-    { treeSize1: 4n, treeSize2: 10n, accumulator: [C, B], signatureOk: true },
+    { treeSize1: 0n, treeSize2: 4n, signedTreeSize2: 4n, accumulator: [A, B], signatureOk: true },
+    { treeSize1: 4n, treeSize2: 10n, signedTreeSize2: 10n, accumulator: [C, B], signatureOk: true },
   ];
 
   test("newest link wins when the peak appears in both", () => {

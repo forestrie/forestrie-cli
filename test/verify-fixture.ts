@@ -9,6 +9,9 @@
  * `@forestrie/receipt-verify` (test-only convenience; not a package dep).
  */
 import {
+  COSE_LABEL_TREE_SIZE_2,
+  COSE_LABEL_VDS,
+  VDS_MMR_CONSISTENCY,
   encodeGrantPayload,
   encodeSigStructure,
   grantDataToBytes,
@@ -17,6 +20,7 @@ import {
   type Grant,
 } from "@forestrie/encoding";
 import { encodeCborDeterministic } from "@forestrie/encoding";
+import { normalizeEs256SignatureLowS } from "@forestrie/delegation-cose";
 import {
   calculateRoot,
   createSyncHasher,
@@ -48,6 +52,23 @@ function cborBytes(value: unknown): Uint8Array {
   return encoded instanceof Uint8Array
     ? encoded
     : new Uint8Array(encoded as ArrayLike<number>);
+}
+
+/**
+ * Wrap already-encoded CBOR bytes in a `tag(18)` head (COSE_Sign1), matching
+ * the real sealer's wire shape (go-merklelog checkpoints are tag-18 wrapped;
+ * `decodeCborUnwrapCose` in `@forestrie/receipt-verify` unwraps it but also
+ * tolerates an untagged array, so this only affects byte-shape fidelity, not
+ * decode success). `encodeCborDeterministic` never emits tags itself (see its
+ * module doc); tag 18's head is a single byte — major type 6, value 18 < 24
+ * encodes as `0xC0 | 18 = 0xD2` — so prepending it is exact and needs no
+ * separate encoder.
+ */
+function wrapCoseSign1Tag(bytes: Uint8Array): Uint8Array {
+  const out = new Uint8Array(bytes.length + 1);
+  out[0] = 0xd2;
+  out.set(bytes, 1);
+  return out;
 }
 
 async function sha256(bytes: Uint8Array): Promise<Uint8Array> {
@@ -228,11 +249,16 @@ export async function buildPeakReceipt(opts: {
 }
 
 /**
- * v3-style checkpoint (ADR-0046/ADR-0056): COSE Sign1 with DETACHED payload
- * (the raw concat of the tree-size-2 accumulator peaks) and the embedded
- * consistency proof `[tree-size-1, tree-size-2, paths, right-peaks]` as a
- * bstr at vdp 396 key -2 — the shape `verifyCheckpointChain` folds
- * (FOR-368 Phase 3).
+ * v3-style checkpoint (ADR-0046/ADR-0056, ADR-0066 D1 as amended
+ * 2026-09-20): COSE Sign1, tag-18 wrapped, with DETACHED payload (the raw
+ * concat of the tree-size-2 accumulator peaks), a SIGNED protected header
+ * `{1: alg, 395: 3, -65933: tree-size-2}` (only tree-size-2 is signed;
+ * tree-size-1 stays unprotected prover context — label -65932 was
+ * withdrawn), and the embedded consistency proof
+ * `[tree-size-1, tree-size-2, paths, right-peaks]` as a bstr at vdp 396 key
+ * -2 — the shape `verifyCheckpointChain` folds (FOR-368 Phase 3). Signed
+ * low-s (`s <= n/2`): go-merklelog rejects the malleable high-s twin for
+ * checkpoint signatures (FOR-568 rollout item 4).
  */
 export async function buildCheckpoint(opts: {
   signer: CryptoKeyPair;
@@ -244,7 +270,13 @@ export async function buildCheckpoint(opts: {
   accumulator: Uint8Array[];
   delegationCert?: Uint8Array;
 }): Promise<Uint8Array> {
-  const protectedInner = cborBytes(new Map<number, unknown>([[1, -7]]));
+  const protectedInner = cborBytes(
+    new Map<number, unknown>([
+      [1, -7],
+      [COSE_LABEL_VDS, VDS_MMR_CONSISTENCY],
+      [COSE_LABEL_TREE_SIZE_2, opts.treeSize2],
+    ]),
+  );
   const payload = new Uint8Array(
     opts.accumulator.reduce((s, p) => s + p.length, 0),
   );
@@ -253,7 +285,9 @@ export async function buildCheckpoint(opts: {
     payload.set(p, off);
     off += p.length;
   }
-  const sig = await signPeak(opts.signer, protectedInner, payload);
+  const sig = normalizeEs256SignatureLowS(
+    await signPeak(opts.signer, protectedInner, payload),
+  );
   const proofBstr = cborBytes([
     opts.treeSize1,
     opts.treeSize2,
@@ -266,7 +300,9 @@ export async function buildCheckpoint(opts: {
   if (opts.delegationCert !== undefined) {
     unprotEntries.push([1000, opts.delegationCert]);
   }
-  return cborBytes([protectedInner, new Map(unprotEntries), null, sig]);
+  return wrapCoseSign1Tag(
+    cborBytes([protectedInner, new Map(unprotEntries), null, sig]),
+  );
 }
 
 /**

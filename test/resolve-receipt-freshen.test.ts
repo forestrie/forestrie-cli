@@ -4,7 +4,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { encodeAbiParameters, encodeFunctionData } from "viem";
 import { createCaptureOut } from "@forestrie/cli-kit/reporting";
-import { encodeCborDeterministic, encodeGrantPayload } from "@forestrie/encoding";
+import {
+  COSE_LABEL_TREE_SIZE_2,
+  COSE_LABEL_VDS,
+  VDS_MMR_CONSISTENCY,
+  encodeCborDeterministic,
+  encodeGrantPayload,
+} from "@forestrie/encoding";
 import {
   grantCommitmentHashFromGrant,
   verifyGrantReceiptOffline,
@@ -47,9 +53,13 @@ import {
  */
 
 /**
- * A format-v3 `.sth`: the embedded consistency proof at vdp 396 key -2 and, when
- * this is the latest checkpoint to emit under, the pre-signed peak receipts at
- * label -65931. (Freshen does not use the checkpoint's own outer signature.)
+ * A format-v3 `.sth`: the embedded consistency proof at vdp 396 key -2, its
+ * declared tree-size-2 mirrored as the SIGNED protected header
+ * `{1: alg, 395: 3, -65933: treeSize2}` (`@forestrie/receipt-verify` derives
+ * the checkpoint's sealed size from the signed label; ADR-0066 D1 as
+ * amended), and, when this is the latest checkpoint to emit under, the
+ * pre-signed peak receipts at label -65931. (Freshen does not use the
+ * checkpoint's own outer signature, so it stays a zero-length placeholder.)
  */
 /** Leaf ContentHash for a grant, as freshen's `inner` (grant path). */
 const innerOf = (g: Grant): Promise<Uint8Array> => grantCommitmentHashFromGrant(g);
@@ -58,6 +68,14 @@ function buildSth(opts: {
   consistency: [bigint, bigint, Uint8Array[][], Uint8Array[]];
   peakReceipts?: Uint8Array[];
 }): Uint8Array {
+  const treeSize2 = opts.consistency[1];
+  const protectedInner = encodeCborDeterministic(
+    new Map<number, unknown>([
+      [1, -7],
+      [COSE_LABEL_VDS, VDS_MMR_CONSISTENCY],
+      [COSE_LABEL_TREE_SIZE_2, treeSize2],
+    ]),
+  );
   const proofBstr = encodeCborDeterministic(opts.consistency);
   const unprot = new Map<number, unknown>([
     [396, new Map<number, unknown>([[-2, proofBstr]])],
@@ -66,10 +84,10 @@ function buildSth(opts: {
     unprot.set(-65931, opts.peakReceipts);
   }
   return encodeCborDeterministic([
-    new Uint8Array(),
+    protectedInner,
     unprot,
     null,
-    new Uint8Array(64),
+    new Uint8Array(),
   ]);
 }
 
