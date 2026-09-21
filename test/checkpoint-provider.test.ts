@@ -55,6 +55,7 @@ function encodeCalldata(
           mmrStart: 0n,
           mmrEnd: 7n,
           signature: `0x${"ef".repeat(64)}`,
+          algData: [],
         },
       },
       { index: 0n, path: [] },
