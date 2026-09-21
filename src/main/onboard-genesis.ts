@@ -10,6 +10,8 @@ import {
 } from "../lib/onboard-genesis-body.js";
 import type { OnboardGenesisOptions } from "../options/onboard-genesis.js";
 
+import { responseProblemDetail } from "../lib/http-problem.js";
+
 /**
  * FOR-406 (plan-2607-27 W2): operator genesis onboarding — turn a
  * `forestrie deploy` into a usable forest. POSTs the five-label v2
@@ -138,7 +140,7 @@ export async function runOnboardGenesis(
       command: "onboard-genesis",
       message: `genesis POST rejected: HTTP ${res.status}`,
       httpStatus: res.status,
-      detail: (await res.text()).slice(0, 512),
+      detail: await responseProblemDetail(res),
     });
     return;
   }

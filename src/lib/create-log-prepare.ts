@@ -9,6 +9,8 @@
  * the log exists — no operator onboard token, authority flows down the log
  * hierarchy (ADR-0053). Node/Bun HTTP only.
  */
+import { responseProblemDetail } from "./http-problem.js";
+
 
 /** Prepare (child public-root pre-registration) failure. */
 export class PrepareLogError extends Error {
@@ -48,7 +50,7 @@ export async function prepareChildLog(
     headers: { Authorization: `Forestrie-Grant ${params.grantBase64}` },
   });
   if (!res.ok) {
-    const preview = (await res.text().catch(() => "")).slice(0, 300);
+    const preview = await responseProblemDetail(res, 300);
     throw new PrepareLogError(
       `prepare failed: HTTP ${res.status} ${preview}`,
       res.status,
