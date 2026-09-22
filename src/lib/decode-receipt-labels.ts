@@ -57,11 +57,11 @@ export const HEADER_LABELS: ReadonlyMap<number, LabelInfo> = new Map([
   [CWT_CLAIMS_LABEL, { name: "CWT claims", note: "RFC 9597" }],
   [
     VDS_LABEL,
-    { name: "verifiable data structure", note: "COSE receipts (draft)" },
+    { name: "verifiable data structure", note: "COSE receipts (RFC 9942)" },
   ],
   [
     VERIFIABLE_PROOFS_LABEL,
-    { name: "verifiable proofs", note: "COSE receipts (draft)" },
+    { name: "verifiable proofs", note: "COSE receipts (RFC 9942)" },
   ],
   [
     DELEGATION_CERT_LABEL,
@@ -129,18 +129,19 @@ export const ALG_NAMES: ReadonlyMap<number, string> = new Map([
   [-65799, "KS256 (secp256k1 + Keccak-256, forestrie private-use)"],
   [
     -65800,
-    "ES256-WebAuthn (forestrie private-use; delegation proofs and " +
-      "certificates only, never checkpoint-signing)",
+    "ES256-WebAuthn (forestrie private-use; delegation proofs, certificates " +
+      "and session-key endorsements, never checkpoint-signing)",
   ],
 ]);
 
 /**
- * Verifiable data structure ids (draft-ietf-cose-merkle-tree-proofs
- * registry). 3 is NOT a registered codepoint: draft-bryce-cose-merkle-
- * mountain-range-proofs requests TBD_1 (registration pending), and 3 is
- * only the value our test fixtures use — production emitters do not emit
- * header 395 at all. Render it as the draft's unregistered codepoint,
- * never as registry fact (F7, plan-2607-14 W1.5).
+ * Verifiable data structure ids (the COSE receipts registry, RFC 9942).
+ * 3 is NOT a registered codepoint: draft-bryce-cose-receipts-mmr-profile
+ * requests TBD_1 (registration pending). The Go sealer emits `395: 3` on
+ * every checkpoint and peak receipt; the TypeScript exporters do not, so a
+ * verifier must not require it. Render it as the draft's unregistered
+ * codepoint, never as registry fact. The display strings are the protocol
+ * registry's (spec/label-registry.md).
  */
 export const VDS_NAMES: ReadonlyMap<number, string> = new Map([
   [1, "RFC9162_SHA256 (Certificate Transparency)"],

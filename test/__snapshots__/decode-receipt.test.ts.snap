@@ -40,7 +40,7 @@ exports[`forestrie decode-receipt (CLI) --json output is stable (snapshot) 1`] =
       {
         "label": 395,
         "name": "verifiable data structure",
-        "note": "COSE receipts (draft)",
+        "note": "COSE receipts (RFC 9942)",
         "value": 3,
       },
     ],
@@ -67,7 +67,7 @@ exports[`forestrie decode-receipt (CLI) --json output is stable (snapshot) 1`] =
       {
         "label": 396,
         "name": "verifiable proofs",
-        "note": "COSE receipts (draft)",
+        "note": "COSE receipts (RFC 9942)",
         "value": {
           "-1": [
             {

@@ -59,7 +59,7 @@ export type AnchorCheck = OnChainLogState & {
  * - the leaf is at/after the anchored size — the entry simply is not
  *   anchored yet (`receipt_newer_than_anchored_state`).
  * Tampered receipts surface earlier (signature/inclusion) or as a
- * recomputed peak that matches no anchored state ever; the chain rungs
+ * recomputed peak that matches no anchored state ever; the chain roots
  * that PROVE the buried case land in later plan phases.
  */
 export function classifyUnanchoredPeak(
