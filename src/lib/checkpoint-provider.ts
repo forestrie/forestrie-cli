@@ -13,19 +13,22 @@
  * accumulator here is **RPC-/store-asserted, NOT authenticated by this module**.
  * The provider folds and does a cheap self-consistency cross-check (calldata
  * fold vs the `CheckpointPublished` event accumulator), but it does **not**
- * verify the COSE signature. So that the consumer *can*, each directly-signed
- * link carries its `seal` (the signature + delegation for calldata; the
- * checkpoint bytes for `.sth`); the consumer applies the genesis/known-key trust
- * root against those seals (Phase 4). Both sources decode to the identical
- * `CheckpointConsistencyProof` shape and fold identically — the parity that
- * makes them interchangeable (see the tests).
+ * verify the COSE signature. So that the consumer *can*, every link carries its
+ * `seal` (the signature + delegation for calldata; the checkpoint bytes for
+ * `.sth`) — one link per checkpoint / `publishCheckpoint` transaction, whether
+ * it relays one sealed step or several (ADR-0066 D2), matching receipt-verify
+ * 3.0.0's own `CheckpointConsistencyProof` shape (`proofs`, one entry per
+ * relayed step); the consumer applies the genesis/known-key trust root against
+ * those seals (Phase 4). Both sources decode to the identical shape and fold
+ * identically — the parity that makes them interchangeable (see the tests).
  *
- * Each link also carries the raw `proof` it was folded from (its per-peak
- * `paths`), so a consumer that needs the climb material rather than just the
- * folded accumulator — `resolve-receipt`'s freshen (Phase 3c), which extends an
- * old inclusion path to the latest peak — gets it in one pass with no re-decode
- * and no second RPC sweep: `links.map((l) => l.proof)` is exactly freshen's
- * ordered `consistencyProofs`. Consumers that only fold (verify) ignore it.
+ * Each link also carries the raw `proof` it was folded from — every relayed
+ * step's per-peak `paths`, not just the last — so a consumer that needs the
+ * climb material rather than just the folded accumulator —
+ * `resolve-receipt`'s freshen (Phase 3c), which extends an old inclusion path
+ * to the latest peak — gets it in one pass with no re-decode and no second RPC
+ * sweep: `links.map((l) => l.proof)` is exactly freshen's ordered
+ * `consistencyProofs`. Consumers that only fold (verify) ignore it.
  */
 import {
   computeCheckpointAccumulator,
@@ -41,10 +44,10 @@ import { bytesEqual } from "./bytes.js";
 
 /**
  * The signed checkpoint a link's accumulator is sealed by, retained so the
- * consumer can verify it (this module does not). Present on the directly-signed
- * link of each unit — every `.sth`; the FINAL link of each calldata tx's proof
- * segment (intermediate links in a multi-proof tx are unsigned, transitively
- * trusted via the fold to the next sealed link).
+ * consumer can verify it (this module does not). Present on every link —
+ * one per `.sth`, one per calldata `publishCheckpoint` transaction — since a
+ * link now folds a whole relayed proof chain (ADR-0066 D2) under the one
+ * signature that covers its last step.
  */
 export type CheckpointSeal =
   | {
@@ -56,31 +59,41 @@ export type CheckpointSeal =
   | { kind: "sth"; checkpointBytes: Uint8Array };
 
 /**
- * Fold-relevant fields of a consistency proof, shared by calldata-decoded
- * proofs (`CalldataConsistencyProof` — no per-proof signed size; on-chain
- * calldata carries no protected header) and sth-decoded
+ * Fold-relevant fields of a consistency proof (receipt-verify 3.0.0): a
+ * checkpoint's relayed proof CHAIN, one entry per relayed step
+ * (`proofs`, ADR-0066 D2), plus the chain's overall `treeSize1` (the
+ * first step's) and `treeSize2` (the last step's). Shared by
+ * calldata-decoded proofs (`CalldataConsistencyProof[]` — on-chain calldata
+ * carries no protected header, so no per-proof signed size) and sth-decoded
  * `CheckpointConsistencyProof` (which adds `signedTreeSize2`, cross-checked
  * against the checkpoint's protected header at decode time). Neither
  * `computeCheckpointAccumulator` nor `freshenReceipt` reads `signedTreeSize2`
  * — only the trusted base SIZE (passed separately, never off the proof) and
- * `treeSize1`/`treeSize2`/`paths`/`rightPeaks` matter to the fold — so this
- * provider carries the narrower shape and backfills `signedTreeSize2` with
+ * `proofs`/`treeSize1`/`treeSize2` matter to the fold — so this provider
+ * carries the narrower shape and backfills `signedTreeSize2` with
  * `treeSize2` only where receipt-verify's stricter parameter type demands it.
  */
 export type FoldableConsistencyProof = Pick<
   CheckpointConsistencyProof,
-  "treeSize1" | "treeSize2" | "paths" | "rightPeaks"
+  "proofs" | "treeSize1" | "treeSize2"
 >;
 
-/** One folded link: the accumulator committed at `treeSize2`. */
+/**
+ * One folded link: the accumulator committed at `treeSize2`. One link per
+ * checkpoint / calldata transaction, whether it relays one sealed step or
+ * several (ADR-0066 D2) — receipt-verify 3.0.0 folds a checkpoint's whole
+ * relayed chain under one signature, so there is no intermediate,
+ * separately-authenticated accumulator to expose as its own link.
+ */
 export type CheckpointLink = {
   treeSize1: bigint;
   treeSize2: bigint;
   /** Folded accumulator at `treeSize2` (descending-height / contract order). */
   accumulator: Uint8Array[];
-  /** The raw consistency proof this link was folded from — its per-peak `paths`
-   * (the tile-free climb material). Retained so a path-extending consumer
-   * (freshen) gets it without a re-decode; folding consumers ignore it. */
+  /** The raw consistency-proof chain this link was folded from — every
+   * relayed step's per-peak `paths` (the tile-free climb material), not
+   * just the last. Retained so a path-extending consumer (freshen) gets it
+   * without a re-decode; folding consumers ignore it. */
   proof: FoldableConsistencyProof;
   /** The signature material to verify this link's accumulator, when directly
    * signed (see {@link CheckpointSeal}). The provider does NOT verify it. */
@@ -126,11 +139,14 @@ export async function foldProofChain(
         `checkpoint chain is not contiguous at link ${i}: base ${p.treeSize1} != expected ${expectedBase}`,
       );
     }
-    // receipt-verify 2.0.0: the trusted base size is a parameter, never read
+    // receipt-verify 3.0.0: the trusted base size is a parameter, never read
     // off the proof (ADR-0066 D5.4) — `expectedBase` is exactly that, already
     // checked against `p.treeSize1` above. `signedTreeSize2` is backfilled
     // from `treeSize2` only to satisfy the parameter type; the fold does not
     // read it (see `FoldableConsistencyProof`'s doc comment above).
+    // `p.proofs` may hold several relayed steps (ADR-0066 D2);
+    // `computeCheckpointAccumulator` folds them all and requires the result
+    // to land exactly on `p.treeSize2`.
     accumulator = await computeCheckpointAccumulator(
       { ...p, signedTreeSize2: p.treeSize2 },
       accumulator,
@@ -210,12 +226,18 @@ function accumulatorsEqual(a: Uint8Array[], b: Uint8Array[]): boolean {
 
 /**
  * Chain-calldata provider: find the log's `CheckpointPublished` transactions
- * (ascending), read each `publishCheckpoint`'s calldata, concatenate the
- * embedded consistency-proof chains, and fold. Cross-checks each tx's folded
- * accumulator against the `CheckpointPublished` event's accumulator (R3), and
- * retains each tx's seal for the consumer to verify (R1); it does NOT verify
- * signatures here (Phase 4). A bounded `--from-block` scan is only valid with a
- * trusted seed at that block (R2): pass `accumulatorFrom` + `accumulatorFromSize`.
+ * (ascending), read each `publishCheckpoint`'s calldata, and fold. Each tx's
+ * WHOLE relayed proof chain (`ConsistencyProof[]`, one or more steps —
+ * ADR-0066 D2, a relayed transaction has several) becomes ONE
+ * {@link CheckpointLink}, matching how `.sth` decodes and folds
+ * (`checkpointConsistencyProof`, receipt-verify 3.0.0): only the LAST
+ * relayed step is directly signed, so there is no separately-authenticated
+ * accumulator at an intermediate step to expose as its own link. Cross-
+ * checks each tx's folded accumulator against the `CheckpointPublished`
+ * event's accumulator (R3), and retains each tx's seal for the consumer to
+ * verify (R1); it does NOT verify signatures here (Phase 4). A bounded
+ * `--from-block` scan is only valid with a trusted seed at that block (R2):
+ * pass `accumulatorFrom` + `accumulatorFromSize`.
  */
 export async function calldataCheckpointChain(opts: {
   univocity: string;
@@ -246,29 +268,27 @@ export async function calldataCheckpointChain(opts: {
     }),
   );
 
-  const proofs: FoldableConsistencyProof[] = [];
-  const seals: (CheckpointSeal | undefined)[] = [];
-  const sourceRefs: string[] = [];
-  const finalLinkIndex: number[] = []; // link index of each tx's last proof
-  for (let t = 0; t < published.length; t++) {
-    const d = decoded[t]!;
-    const n = d.consistencyProofs.length;
-    d.consistencyProofs.forEach((p, k) => {
-      proofs.push(p);
-      sourceRefs.push(published[t]!.txHash);
-      seals.push(
-        k === n - 1
-          ? {
-              kind: "calldata",
-              protectedHeader: d.protectedHeader,
-              signature: d.signature,
-              delegation: d.delegation,
-            }
-          : undefined,
-      );
-    });
-    finalLinkIndex.push(proofs.length - 1);
-  }
+  // One FoldableConsistencyProof per tx: every step it relays goes into
+  // `proofs` (not only the last — a relayed transaction has several,
+  // ADR-0066 D2), spanning the tx's first step's tree-size-1 to its last
+  // step's tree-size-2. `computeCheckpointAccumulator` folds every step in
+  // order and requires the result to land exactly on that tree-size-2.
+  const proofs: FoldableConsistencyProof[] = decoded.map((d) => {
+    const first = d.consistencyProofs[0]!;
+    const last = d.consistencyProofs[d.consistencyProofs.length - 1]!;
+    return {
+      proofs: d.consistencyProofs,
+      treeSize1: first.treeSize1,
+      treeSize2: last.treeSize2,
+    };
+  });
+  const seals: CheckpointSeal[] = decoded.map((d) => ({
+    kind: "calldata",
+    protectedHeader: d.protectedHeader,
+    signature: d.signature,
+    delegation: d.delegation,
+  }));
+  const sourceRefs: string[] = published.map((cp) => cp.txHash);
 
   const links = await foldProofChain(proofs, {
     seals,
@@ -281,12 +301,12 @@ export async function calldataCheckpointChain(opts: {
       : {}),
   });
 
-  // R3: the folded accumulator at each tx's seal MUST equal the accumulator the
+  // R3: the folded accumulator at each tx's link MUST equal the accumulator the
   // CheckpointPublished event reported (both from the RPC — this catches a fold
   // bug or an RPC serving inconsistent event/calldata, not a fully malicious
   // RPC; the signature seal is the real anchor, applied by the consumer).
   for (let t = 0; t < published.length; t++) {
-    const link = links[finalLinkIndex[t]!]!;
+    const link = links[t]!;
     const cp = published[t]!;
     if (link.treeSize2 !== cp.size) {
       throw new Error(

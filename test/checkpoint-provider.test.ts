@@ -7,15 +7,18 @@ import {
   foldProofChain,
   sthCheckpointChain,
   type CheckpointLink,
+  type FoldableConsistencyProof,
 } from "../src/lib/checkpoint-provider.js";
 import { buildCheckpoint, buildVerifyFixture, type VerifyFixture } from "./verify-fixture.js";
 
 /**
- * FOR-418 Phase 2 (plan-2607-32): the checkpoint-chain providers. The headline
- * claim is PARITY — the same log's chain read from retained `.sth` and from
- * `publishCheckpoint` calldata folds to the identical authenticated
- * accumulators. Uses the real MMR nodes from the verify fixture: a 2-link chain
- * sth(0→3)=[peak] then sth(3→7)=[peak7] (the buried peak climbs via node5).
+ * FOR-418 Phase 2 (plan-2607-32), updated for receipt-verify 3.0.0
+ * (`CheckpointConsistencyProof.proofs`, ADR-0066 D2): the checkpoint-chain
+ * providers. The headline claim is PARITY — the same log's chain read from
+ * retained `.sth` and from `publishCheckpoint` calldata folds to the
+ * identical authenticated accumulators. Uses the real MMR nodes from the
+ * verify fixture: a 2-link chain sth(0→3)=[peak] then sth(3→7)=[peak7] (the
+ * buried peak climbs via node5).
  */
 
 let fx: VerifyFixture;
@@ -23,18 +26,25 @@ let fx: VerifyFixture;
 const toHex = (b: Uint8Array): `0x${string}` =>
   `0x${Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("")}`;
 
-/** The two-link proof chain, in the shape both encoders take. */
-function chainProofs(fx: VerifyFixture) {
+type RawStep = { treeSize1: bigint; treeSize2: bigint; paths: Uint8Array[][]; rightPeaks: Uint8Array[] };
+
+/** The two-step proof chain, in the raw shape both encoders take (one entry
+ * per relayed consistency proof, ADR-0066 D2). */
+function chainProofs(fx: VerifyFixture): RawStep[] {
   return [
     { treeSize1: 0n, treeSize2: 3n, paths: [] as Uint8Array[][], rightPeaks: [fx.peak] },
     { treeSize1: 3n, treeSize2: 7n, paths: [[fx.node5]], rightPeaks: [] as Uint8Array[] },
   ];
 }
 
+/** Wrap a single raw step as the one-step chain `foldProofChain` takes
+ * (receipt-verify 3.0.0's `CheckpointConsistencyProof` shape). */
+function asChain(step: RawStep): FoldableConsistencyProof {
+  return { proofs: [step], treeSize1: step.treeSize1, treeSize2: step.treeSize2 };
+}
+
 /** Encode one `publishCheckpoint` calldata carrying `proofs` (viem). */
-function encodeCalldata(
-  proofs: { treeSize1: bigint; treeSize2: bigint; paths: Uint8Array[][]; rightPeaks: Uint8Array[] }[],
-): `0x${string}` {
+function encodeCalldata(proofs: RawStep[]): `0x${string}` {
   const zero32 = toHex(new Uint8Array(32));
   return encodeFunctionData({
     abi: PUBLISH_CHECKPOINT_ABI,
@@ -89,21 +99,21 @@ beforeAll(async () => {
 
 describe("foldProofChain + provider parity (FOR-418)", () => {
   test("the fold produces the real accumulators [peak] then [peak7]", async () => {
-    const links = await foldProofChain(chainProofs(fx));
+    const links = await foldProofChain(chainProofs(fx).map(asChain));
     expect(links.length).toBe(2);
     expect(accHex(links[0]!)).toEqual([toHex(fx.peak)]);
     expect(accHex(links[1]!)).toEqual([toHex(fx.peak7)]);
   });
 
-  test("each link carries its raw proof — freshen's climb material, one pass", async () => {
-    const proofs = chainProofs(fx);
-    const links = await foldProofChain(proofs);
+  test("each link carries its raw proof chain — freshen's climb material, one pass", async () => {
+    const chain = chainProofs(fx).map(asChain);
+    const links = await foldProofChain(chain);
     // `links.map((l) => l.proof)` IS freshen's ordered `consistencyProofs`.
-    expect(links.map((l) => l.proof)).toEqual(proofs);
+    expect(links.map((l) => l.proof)).toEqual(chain);
     expect(links.map((l) => l.proof.treeSize2)).toEqual([3n, 7n]);
-    expect(links[1]!.proof.paths.map((p) => p.map(toHex))).toEqual([
-      [toHex(fx.node5)],
-    ]);
+    expect(
+      links[1]!.proof.proofs.flatMap((p) => p.paths.map((path) => path.map(toHex))),
+    ).toEqual([[toHex(fx.node5)]]);
   });
 
   test("PARITY: `.sth` and calldata read the SAME chain to identical accumulators", async () => {
@@ -132,39 +142,65 @@ describe("foldProofChain + provider parity (FOR-418)", () => {
     // PARITY extends to the raw climb paths (what freshen consumes), not just
     // the folded accumulators.
     const pathsHex = (links: CheckpointLink[]) =>
-      links.map((l) => l.proof.paths.map((p) => p.map(toHex)));
+      links.map((l) => l.proof.proofs.flatMap((p) => p.paths.map((path) => path.map(toHex))));
     expect(pathsHex(calldataLinks)).toEqual(pathsHex(sthLinks));
     expect(pathsHex(sthLinks)).toEqual([[], [[toHex(fx.node5)]]]);
     // sourceRef carried from the tx hash on the calldata path
     expect(calldataLinks[1]!.sourceRef).toBe("0x" + "22".repeat(32));
   });
 
-  test("a single multi-proof calldata tx folds the same as two single-proof txs", async () => {
+  test("a relayed (multi-proof) calldata tx produces ONE link with N proofs, folding to the same final accumulator as N single-proof txs", async () => {
     const both = encodeCalldata(chainProofs(fx));
-    const mockFetch = makeMockChain([
+    const mockFetchRelayed = makeMockChain([
       { size: 7n, accumulator: [fx.peak7], txHash: "0x" + "33".repeat(32), calldata: both },
     ]);
-    const links = await calldataCheckpointChain({
+    const relayedLinks = await calldataCheckpointChain({
       univocity: "0x" + "ab".repeat(20),
       logId: "660e8400-e29b-41d4-a716-446655440001",
       rpcUrl: "http://rpc.mock",
-      fetchImpl: mockFetch,
+      fetchImpl: mockFetchRelayed,
     });
-    expect(links.map(accHex)).toEqual([[toHex(fx.peak)], [toHex(fx.peak7)]]);
+    // One transaction relaying two consistency proofs is ONE link, not two —
+    // only the last relayed step is directly signed (ADR-0066 D2).
+    expect(relayedLinks.length).toBe(1);
+    expect(relayedLinks[0]!.proof.proofs.length).toBe(2);
+    expect(relayedLinks[0]!.treeSize1).toBe(0n);
+    expect(relayedLinks[0]!.treeSize2).toBe(7n);
+    expect(accHex(relayedLinks[0]!)).toEqual([toHex(fx.peak7)]);
+
+    // Same log, read as two single-proof txs instead: two links, same final
+    // accumulator — the relay framing does not change what state is proven.
+    const proofs = chainProofs(fx);
+    const calldata1 = encodeCalldata([proofs[0]!]);
+    const calldata2 = encodeCalldata([proofs[1]!]);
+    const mockFetchSplit = makeMockChain([
+      { size: 3n, accumulator: [fx.peak], txHash: "0x" + "11".repeat(32), calldata: calldata1 },
+      { size: 7n, accumulator: [fx.peak7], txHash: "0x" + "22".repeat(32), calldata: calldata2 },
+    ]);
+    const splitLinks = await calldataCheckpointChain({
+      univocity: "0x" + "ab".repeat(20),
+      logId: "660e8400-e29b-41d4-a716-446655440001",
+      rpcUrl: "http://rpc.mock",
+      fetchImpl: mockFetchSplit,
+    });
+    expect(splitLinks.length).toBe(2);
+    expect(accHex(relayedLinks[relayedLinks.length - 1]!)).toEqual(
+      accHex(splitLinks[splitLinks.length - 1]!),
+    );
   });
 });
 
 describe("foldProofChain — contiguity + suffix", () => {
   test("a non-contiguous chain throws (legacy / gap)", async () => {
-    const proofs = [
+    const chain = [
       { treeSize1: 0n, treeSize2: 3n, paths: [] as Uint8Array[][], rightPeaks: [fx.peak] },
       { treeSize1: 5n, treeSize2: 7n, paths: [[fx.node5]], rightPeaks: [] as Uint8Array[] },
-    ];
-    await expect(foldProofChain(proofs)).rejects.toThrow(/not contiguous/);
+    ].map(asChain);
+    await expect(foldProofChain(chain)).rejects.toThrow(/not contiguous/);
   });
 
   test("a suffix chain seeds from a trusted accumulatorFrom + size (R2)", async () => {
-    const links = await foldProofChain([chainProofs(fx)[1]!], {
+    const links = await foldProofChain([asChain(chainProofs(fx)[1]!)], {
       accumulatorFrom: [fx.peak],
       accumulatorFromSize: 3n,
     });
@@ -173,13 +209,13 @@ describe("foldProofChain — contiguity + suffix", () => {
 
   test("accumulatorFrom without a size is rejected (R2)", async () => {
     await expect(
-      foldProofChain([chainProofs(fx)[1]!], { accumulatorFrom: [fx.peak] }),
+      foldProofChain([asChain(chainProofs(fx)[1]!)], { accumulatorFrom: [fx.peak] }),
     ).rejects.toThrow(/requires accumulatorFromSize/);
   });
 
   test("a seed whose size mismatches the first link's base throws (R2)", async () => {
     await expect(
-      foldProofChain([chainProofs(fx)[1]!], {
+      foldProofChain([asChain(chainProofs(fx)[1]!)], {
         accumulatorFrom: [fx.peak],
         accumulatorFromSize: 5n, // first proof's treeSize1 is 3
       }),
@@ -188,7 +224,7 @@ describe("foldProofChain — contiguity + suffix", () => {
 });
 
 describe("seal retention (R1) + event cross-check (R3) + from-block (R2)", () => {
-  test("calldata links retain the seal on each tx's final link", async () => {
+  test("calldata links each carry the tx's seal, whether relaying one step or several", async () => {
     const both = encodeCalldata(chainProofs(fx));
     const mockFetch = makeMockChain([
       { size: 7n, accumulator: [fx.peak7], txHash: "0x" + "44".repeat(32), calldata: both },
@@ -199,12 +235,12 @@ describe("seal retention (R1) + event cross-check (R3) + from-block (R2)", () =>
       rpcUrl: "http://rpc.mock",
       fetchImpl: mockFetch,
     });
-    // one tx, two proofs -> intermediate link unsealed, final link sealed
-    expect(links[0]!.seal).toBeUndefined();
-    expect(links[1]!.seal?.kind).toBe("calldata");
-    if (links[1]!.seal?.kind === "calldata") {
-      expect(links[1]!.seal.signature.length).toBe(64);
-      expect(links[1]!.seal.delegation.delegationKey.length).toBe(64);
+    // one tx relaying two proofs -> one link, sealed
+    expect(links.length).toBe(1);
+    expect(links[0]!.seal?.kind).toBe("calldata");
+    if (links[0]!.seal?.kind === "calldata") {
+      expect(links[0]!.seal.signature.length).toBe(64);
+      expect(links[0]!.seal.delegation.delegationKey.length).toBe(64);
     }
   });
 
@@ -250,7 +286,7 @@ describe("seal retention (R1) + event cross-check (R3) + from-block (R2)", () =>
 
 describe("findPeakInChain", () => {
   test("finds a buried peak in the older link (newest-first)", async () => {
-    const links = await foldProofChain(chainProofs(fx));
+    const links = await foldProofChain(chainProofs(fx).map(asChain));
     // fx.peak is buried by size 7 (climbed into peak7) — it lives only in link 0
     const hit = findPeakInChain(links, fx.peak);
     expect(hit?.link.treeSize2).toBe(3n);
