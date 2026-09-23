@@ -12,7 +12,7 @@
         "@forestrie/encoding": "^0.9.0",
         "@forestrie/grant-builder": "^0.5.0",
         "@forestrie/merklelog": "^0.5.0",
-        "@forestrie/receipt-verify": "^2.2.0",
+        "@forestrie/receipt-verify": "^3.0.0",
         "@forestrie/scrapi-client": "^0.2.2",
         "citty": "^0.2.2",
         "viem": "^2.31.0",
@@ -40,7 +40,7 @@
 
     "@forestrie/merklelog": ["@forestrie/merklelog@0.5.0", "", {}, "sha512-oV5geJutday8LDPRUuVQYsE+C8VE4O5anhx0s1QI8cOmJDlZzdTaQTa7gEBQ6zu0EIU1gK04sZrGQd58w8Yw7g=="],
 
-    "@forestrie/receipt-verify": ["@forestrie/receipt-verify@2.2.0", "", { "dependencies": { "@forestrie/chain-rpc": "0.3.0", "@forestrie/encoding": "0.9.0", "@forestrie/merklelog": "0.5.0", "@noble/hashes": "^1.7.1" } }, "sha512-Zf11Og8qWC/R6QOahK6+SRqpKenxsaODa1ZxLVba3uXrVp7au6IwMfsu8wnur+IvRfdQHntnqythAFz2ZU9Jrw=="],
+    "@forestrie/receipt-verify": ["@forestrie/receipt-verify@3.0.0", "", { "dependencies": { "@forestrie/chain-rpc": "0.3.0", "@forestrie/encoding": "0.9.1", "@forestrie/merklelog": "0.5.0", "@noble/hashes": "^1.7.1" } }, "sha512-xBp8BjsRBAsPdyvyyMnX1xU80kHHIaxupvCwgpdKKDZoYHCrR9H1pyrRMDnu0nwQWD1fmCj3iEJbarAgOcMSpg=="],
 
     "@forestrie/scrapi-client": ["@forestrie/scrapi-client@0.2.2", "", { "dependencies": { "@forestrie/encoding": "0.7.0" } }, "sha512-0SdvXWiC94P+vsOFN101WpXrY1KA8BSBy7A45dTNK1i/U+Gz0mYCJRbfduc5W/UeD32P59mKLeBX61iB5XEOgg=="],
 
@@ -83,6 +83,8 @@
     "@forestrie/delegation-cose/@forestrie/encoding": ["@forestrie/encoding@0.8.0", "", { "dependencies": { "@noble/curves": "^1.8.1" } }, "sha512-2UquoDJj0CcCMA4dN2CQabMqWbU3/hyTnQqEKGvrG1jZJqOiJ78owq9LkcmLLWtQQ68q/oC72dxnp0EhwSSfew=="],
 
     "@forestrie/grant-builder/@forestrie/encoding": ["@forestrie/encoding@0.8.0", "", { "dependencies": { "@noble/curves": "^1.8.1" } }, "sha512-2UquoDJj0CcCMA4dN2CQabMqWbU3/hyTnQqEKGvrG1jZJqOiJ78owq9LkcmLLWtQQ68q/oC72dxnp0EhwSSfew=="],
+
+    "@forestrie/receipt-verify/@forestrie/encoding": ["@forestrie/encoding@0.9.1", "", { "dependencies": { "@noble/curves": "^1.8.1" } }, "sha512-hvZQDSM2xDTiSMwznyeK15gf9+Sqt5I5V8WojBwchku1KWcznLb4uN2rk7CXv9W3rXzAYfY7+xl4RGXfSvWHPQ=="],
 
     "@forestrie/scrapi-client/@forestrie/encoding": ["@forestrie/encoding@0.7.0", "", { "dependencies": { "@noble/curves": "^1.8.1" } }, "sha512-3Q8s678bQa8J0RBv92jAjwQE0OTqV9vP8YxASoCB9LQt7VKQ1pxl6h0SvUlggY3RMEvBBLNBcXduh7Szx5r2DA=="],
 
