@@ -254,9 +254,10 @@ export async function buildPeakReceipt(opts: {
  * concat of the tree-size-2 accumulator peaks), a SIGNED protected header
  * `{1: alg, 395: 3, -65933: tree-size-2}` (only tree-size-2 is signed;
  * tree-size-1 stays unprotected prover context — label -65932 was
- * withdrawn), and the embedded consistency proof
- * `[tree-size-1, tree-size-2, paths, right-peaks]` as a bstr at vdp 396 key
- * -2 — the shape `verifyCheckpointChain` folds (FOR-368 Phase 3). Signed
+ * withdrawn), and the embedded consistency proofs at vdp 396 key -2,
+ * `consistency-proofs = [ + consistency-proof ]`, each a
+ * `bstr .cbor [tree-size-1, tree-size-2, consistency-paths, right-peaks]` —
+ * the shape `verifyCheckpointChain` folds (FOR-368 Phase 3). Signed
  * low-s (`s <= n/2`): go-merklelog rejects the malleable high-s twin for
  * checkpoint signatures (FOR-568 rollout item 4).
  */
@@ -269,12 +270,38 @@ export async function buildCheckpoint(opts: {
   /** Accumulator at treeSize2 — the detached payload the signature covers. */
   accumulator: Uint8Array[];
   delegationCert?: Uint8Array;
+  /**
+   * Encoding of the consistency proofs at vdp 396 key -2. "array" (default)
+   * is `consistency-proofs = [ + consistency-proof ]`, each element a proof
+   * bstr; "bstr" is a single bare proof bstr, an older encoding that
+   * verifiers still accept. `relayedBefore` prepends earlier steps so one
+   * checkpoint relays a chain under its signature; the top-level
+   * sizes/paths/rightPeaks then describe the LAST step. `noProofs` writes an
+   * EMPTY array, which is malformed (the array carries at least one proof),
+   * and `protectedTreeSize2` signs a size other than the last proof's, which
+   * is also malformed (the signed tree-size-2 MUST equal it).
+   *
+   * Each proof is `[tree-size-1, tree-size-2, consistency-paths, right-peaks]`
+   * with `consistency-paths: [ * consistency-path ]`. A log's initialising
+   * proof is `[0, n, [], peaks]`: the empty tree has no peaks to carry paths
+   * from, `n` is the SIGNED protected tree-size-2, and the proof verifies
+   * only against the empty tree.
+   */
+  wireForm?: "array" | "bstr";
+  noProofs?: boolean;
+  protectedTreeSize2?: bigint;
+  relayedBefore?: Array<{
+    treeSize1: bigint;
+    treeSize2: bigint;
+    paths: Uint8Array[][];
+    rightPeaks: Uint8Array[];
+  }>;
 }): Promise<Uint8Array> {
   const protectedInner = cborBytes(
     new Map<number, unknown>([
       [1, -7],
       [COSE_LABEL_VDS, VDS_MMR_CONSISTENCY],
-      [COSE_LABEL_TREE_SIZE_2, opts.treeSize2],
+      [COSE_LABEL_TREE_SIZE_2, opts.protectedTreeSize2 ?? opts.treeSize2],
     ]),
   );
   const payload = new Uint8Array(
@@ -294,8 +321,16 @@ export async function buildCheckpoint(opts: {
     opts.paths,
     opts.rightPeaks,
   ]);
+  const relayed = (opts.relayedBefore ?? []).map((r) =>
+    cborBytes([r.treeSize1, r.treeSize2, r.paths, r.rightPeaks]),
+  );
+  const proofsValue: unknown = opts.noProofs
+    ? []
+    : opts.wireForm === "bstr" && relayed.length === 0
+      ? proofBstr
+      : [...relayed, proofBstr];
   const unprotEntries: [number, unknown][] = [
-    [VDS_COSE_RECEIPT_PROOFS_TAG, new Map<number, unknown>([[-2, proofBstr]])],
+    [VDS_COSE_RECEIPT_PROOFS_TAG, new Map<number, unknown>([[-2, proofsValue]])],
   ];
   if (opts.delegationCert !== undefined) {
     unprotEntries.push([1000, opts.delegationCert]);

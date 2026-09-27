@@ -39,6 +39,7 @@ import {
   calldataCheckpointChain,
   sthCheckpointChain,
   type CheckpointLink,
+  singleProofChain,
 } from "./checkpoint-provider.js";
 import { univocityLeafHash } from "./verify-anchored.js";
 import { bytesEqual } from "./bytes.js";
@@ -102,16 +103,11 @@ async function emitFreshened(opts: {
   const result = await freshenReceipt({
     oldReceiptBytes: opts.oldReceiptBytes,
     leafValue: opts.leafValue,
-    // `freshenReceipt`'s consistency-proof array type carries
-    // `signedTreeSize2` (checked at `.sth` decode time), but the fold itself
-    // never reads it — see `FoldableConsistencyProof`'s doc comment in
-    // checkpoint-provider.ts. Backfilled from `treeSize2` to satisfy the
-    // parameter type for calldata-sourced links, which have no per-proof
-    // signed size.
-    consistencyProofs: opts.links.map((l) => ({
-      ...l.proof,
-      signedTreeSize2: l.proof.treeSize2,
-    })),
+    // `freshenReceipt` takes chains; each link is one step, wrapped as a
+    // one-proof chain — see `singleProofChain` in checkpoint-provider.ts.
+    consistencyProofs: opts.links.map((l) =>
+      singleProofChain(l.proof, l.signedTreeSize2),
+    ),
     latestCheckpointBytes: opts.latestCheckpointBytes,
   });
 
@@ -177,7 +173,9 @@ export async function freshenFromSthChain(opts: {
     leafValue,
     links,
     latestCheckpointBytes: opts.checkpoints[opts.checkpoints.length - 1]!,
-    sourceRefs: [...(opts.sourceRefs ?? [])],
+    // One entry per LINK, as the calldata path reports: a checkpoint that
+    // relays several proofs yields several links that all name it.
+    sourceRefs: links.map((l) => l.sourceRef ?? ""),
     knownAccumulator: opts.knownAccumulator,
   });
 }

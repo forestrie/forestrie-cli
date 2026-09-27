@@ -48,6 +48,13 @@ beforeAll(async () => {
     buildV2CheckpointBytes({ mmrSize: 8n, peakReceipts: [] }),
   );
   writeFileSync(file("checkpoint-garbage.sth"), new Uint8Array([1, 2, 3]));
+  // The older bare-bstr encoding of the proof, still accepted.
+  writeFileSync(file("checkpoint3-legacy.sth"), fx.checkpointSize3Legacy);
+  // Signed size 3 but the embedded proof declares 5: malformed (ADR-0066).
+  writeFileSync(
+    file("checkpoint-mismatch.sth"),
+    buildV2CheckpointBytes({ mmrSize: 3n, peakReceipts: [], proofTreeSize2: 5n }),
+  );
   // A massif blob for a DIFFERENT massif than leaf 1: massifIndex 1 holds mmr
   // indexes 7..10, so a request for leaf mmrIndex 1 falls below firstIndex —
   // the chain-mode wrong_massif pre-check (plan-2607-18 W3, V2/V3).
@@ -374,6 +381,30 @@ describe("create-receipt error taxonomy", () => {
     const report = JSON.parse(result.stdout) as CreateReceiptErrorReport;
     expect(report.error).toBe("create_receipt_parse_failed");
     expect(report.stage).toBe("parse");
+  });
+
+  test("a checkpoint in the older bare-bstr proof encoding derives the same receipt", async () => {
+    const current = file("receipt-current.cbor");
+    const legacy = file("receipt-legacy.cbor");
+    const a = await createReceiptInProcess({ ...baseArgs("checkpoint3.sth"), "mmr-index": "1", out: current });
+    const b = await createReceiptInProcess({ ...baseArgs("checkpoint3-legacy.sth"), "mmr-index": "1", out: legacy });
+    expect(a.exitCode).toBe(0);
+    expect(b.exitCode).toBe(0);
+    expect(new Uint8Array(readFileSync(legacy))).toEqual(new Uint8Array(readFileSync(current)));
+  });
+
+  test("checkpoint whose consistency proof contradicts its signed size: stage=parse", async () => {
+    const result = await createReceiptInProcess({
+      massif: file("massif.log"),
+      checkpoint: file("checkpoint-mismatch.sth"),
+      "mmr-index": "1",
+      json: true,
+    });
+    expect(result.exitCode).toBe(1);
+    const report = JSON.parse(result.stdout) as CreateReceiptErrorReport;
+    expect(report.error).toBe("create_receipt_parse_failed");
+    expect(report.stage).toBe("parse");
+    expect(JSON.stringify(report)).toContain("signed size");
   });
 
   test("unreadable massif: stage=input", async () => {
