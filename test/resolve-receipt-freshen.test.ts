@@ -53,7 +53,8 @@ import {
  */
 
 /**
- * A format-v3 `.sth`: the embedded consistency proof at vdp 396 key -2, its
+ * A format-v3 `.sth`: the embedded consistency proofs at vdp 396 key -2
+ * (`consistency-proofs = [ + consistency-proof ]`), the last one's
  * declared tree-size-2 mirrored as the SIGNED protected header
  * `{1: alg, 395: 3, -65933: treeSize2}` (`@forestrie/receipt-verify` derives
  * the checkpoint's sealed size from the signed label; ADR-0066 D1 as
@@ -67,8 +68,7 @@ const innerOf = (g: Grant): Promise<Uint8Array> => grantCommitmentHashFromGrant(
 function buildSth(opts: {
   consistency: [bigint, bigint, Uint8Array[][], Uint8Array[]];
   peakReceipts?: Uint8Array[];
-  /** Earlier steps relayed under this checkpoint's signature (ADR-0066 D2);
-   * with this set the proofs are written in the array wire form. */
+  /** Earlier steps relayed under this checkpoint's signature (ADR-0066 D2). */
   relayedBefore?: [bigint, bigint, Uint8Array[][], Uint8Array[]][];
 }): Uint8Array {
   const treeSize2 = opts.consistency[1];
@@ -80,10 +80,10 @@ function buildSth(opts: {
     ]),
   );
   const proofBstr = encodeCborDeterministic(opts.consistency);
-  const proofs: unknown =
-    opts.relayedBefore !== undefined
-      ? [...opts.relayedBefore.map((r) => encodeCborDeterministic(r)), proofBstr]
-      : proofBstr;
+  const proofs: unknown = [
+    ...(opts.relayedBefore ?? []).map((r) => encodeCborDeterministic(r)),
+    proofBstr,
+  ];
   const unprot = new Map<number, unknown>([
     [396, new Map<number, unknown>([[-2, proofs]])],
   ]);

@@ -106,9 +106,9 @@ describe("foldProofChain + provider parity (FOR-418)", () => {
     ]);
   });
 
-  test("array encoding: a single proof at 396/-2 folds like the bare bstr", async () => {
-    const bare = await buildCheckpoint({ signer: fx.rootKeyPair, treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak], accumulator: [fx.peak] });
-    const array = await buildCheckpoint({ signer: fx.rootKeyPair, treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak], accumulator: [fx.peak], wireForm: "array" });
+  test("the older bare-bstr encoding at 396/-2 folds like the consistency-proofs array", async () => {
+    const bare = await buildCheckpoint({ signer: fx.rootKeyPair, treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak], accumulator: [fx.peak], wireForm: "bstr" });
+    const array = await buildCheckpoint({ signer: fx.rootKeyPair, treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak], accumulator: [fx.peak] });
     const [bareLinks, arrayLinks] = await Promise.all([
       sthCheckpointChain([bare]),
       sthCheckpointChain([array]),
@@ -157,9 +157,14 @@ describe("foldProofChain + provider parity (FOR-418)", () => {
     await expect(foldProofChain([genesis, genesis])).rejects.toThrow(/not contiguous/);
   });
 
-  test("an empty consistency-proofs array is refused: a checkpoint carries at least one proof", async () => {
-    const empty = await buildCheckpoint({ signer: fx.rootKeyPair, treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak], accumulator: [fx.peak], emptyProofs: true });
-    await expect(sthCheckpointChain([empty])).rejects.toThrow(/empty/);
+  test("an empty consistency-proofs array is malformed: the array carries at least one proof", async () => {
+    const none = await buildCheckpoint({ signer: fx.rootKeyPair, treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak], accumulator: [fx.peak], noProofs: true });
+    await expect(sthCheckpointChain([none])).rejects.toThrow(/empty/);
+  });
+
+  test("the signed tree-size-2 must equal the last proof's: a mismatch is malformed", async () => {
+    const mismatch = await buildCheckpoint({ signer: fx.rootKeyPair, treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak], accumulator: [fx.peak], protectedTreeSize2: 4n });
+    await expect(sthCheckpointChain([mismatch])).rejects.toThrow(/signed tree-size-2/);
   });
 
   test("PARITY: `.sth` and calldata read the SAME chain to identical accumulators", async () => {

@@ -121,9 +121,11 @@ export function buildV2MassifBytes(opts: {
  * Format-v3 checkpoint (ADR-0046, ADR-0066 D1 as amended 2026-09-20):
  * detached (null) payload; the sealed size travels as tree-size-2 of the
  * consistency proof under the verifiable-proofs unprotected header (label
- * 396, key -2) AND as the SIGNED protected header `{1: alg, 395: 3,
- * -65933: mmrSize}` — `@forestrie/receipt-verify` derives the checkpoint's
- * sealed size from the signed label, not the unprotected proof alone.
+ * 396, key -2, `consistency-proofs = [ + consistency-proof ]`) AND as the
+ * SIGNED protected header `{1: alg, 395: 3, -65933: mmrSize}` —
+ * `@forestrie/receipt-verify` derives the checkpoint's sealed size from the
+ * signed label, not the unprotected proof alone. `legacyBstr` writes the
+ * proof as a single bare bstr, an older encoding verifiers still accept.
  * Pre-signed peak receipts under label -65931; optional delegation cert at
  * 1000. The signature stays a zero-length placeholder: `create-receipt`
  * only assembles/derives from a checkpoint, it never verifies the
@@ -136,6 +138,7 @@ export function buildV2CheckpointBytes(opts: {
   /** Declared tree-size-2 of the embedded proof when it should CONTRADICT
    * the signed `mmrSize` (a malformed checkpoint create-receipt refuses). */
   proofTreeSize2?: bigint;
+  legacyBstr?: boolean;
 }): Uint8Array {
   const protectedInner = cborBytes(
     new Map<number, unknown>([
@@ -150,7 +153,9 @@ export function buildV2CheckpointBytes(opts: {
     [],
     [],
   ]);
-  const verifiableProofs = new Map<number, unknown>([[-2, consistencyProof]]);
+  const verifiableProofs = new Map<number, unknown>([
+    [-2, opts.legacyBstr ? consistencyProof : [consistencyProof]],
+  ]);
   const checkpointUnprotected = new Map<number, unknown>([
     [396, verifiableProofs],
     [SEAL_PEAK_RECEIPTS_LABEL, opts.peakReceipts],
@@ -237,6 +242,8 @@ export type CreateReceiptFixture = {
   massifBytes: Uint8Array;
   /** Sealed size 3 — single peak (n2). */
   checkpointSize3: Uint8Array;
+  /** The same checkpoint with its proof in the older bare-bstr encoding. */
+  checkpointSize3Legacy: Uint8Array;
   /** Sealed size 4 — two peaks (n2, n3). */
   checkpointSize4: Uint8Array;
   /** Sealed size 3, with a delegation cert (label 1000) to copy. */
@@ -310,6 +317,11 @@ export async function buildCreateReceiptFixture(): Promise<CreateReceiptFixture>
     checkpointSize3: buildV2CheckpointBytes({
       mmrSize: 3n,
       peakReceipts: [peakReceiptN2],
+    }),
+    checkpointSize3Legacy: buildV2CheckpointBytes({
+      mmrSize: 3n,
+      peakReceipts: [peakReceiptN2],
+      legacyBstr: true,
     }),
     checkpointSize4: buildV2CheckpointBytes({
       mmrSize: 4n,
