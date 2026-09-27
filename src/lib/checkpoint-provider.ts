@@ -59,7 +59,7 @@ export type CheckpointSeal =
 /**
  * One fold step: a single consistency proof, shared by calldata-decoded
  * proofs (`CalldataConsistencyProof` — on-chain calldata carries no protected
- * header, so no signed size) and `.sth`-decoded proofs. receipt-verify 3.x
+ * header, so no signed size) and `.sth`-decoded proofs. receipt-verify
  * decodes an `.sth` to a `CheckpointConsistencyProof` CHAIN (`proofs[]`, one
  * or more relayed steps under the head signature, ADR-0066 D2); this provider
  * keeps one link per step, so a link's proof is the single-step
@@ -187,8 +187,8 @@ export async function foldProofChain(
  * A log's initialising proof `[0, n, [], peaks]` (empty consistency-paths:
  * the empty tree has no peaks) is a valid first step only; `foldProofChain`
  * binds each step's tree-size-1 to the size reached, so it verifies only
- * against the empty tree, as the draft requires. A checkpoint with no proof
- * at all is malformed and the decode throws.
+ * against the empty tree. A checkpoint with no proof at all is malformed and
+ * the decode throws.
  */
 export async function sthCheckpointChain(
   checkpoints: readonly Uint8Array[],

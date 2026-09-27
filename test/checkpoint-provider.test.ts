@@ -106,7 +106,7 @@ describe("foldProofChain + provider parity (FOR-418)", () => {
     ]);
   });
 
-  test("array wire form (massifs/v0.8.0): a single proof at 396/-2 folds like the bare bstr", async () => {
+  test("array encoding: a single proof at 396/-2 folds like the bare bstr", async () => {
     const bare = await buildCheckpoint({ signer: fx.rootKeyPair, treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak], accumulator: [fx.peak] });
     const array = await buildCheckpoint({ signer: fx.rootKeyPair, treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak], accumulator: [fx.peak], wireForm: "array" });
     const [bareLinks, arrayLinks] = await Promise.all([
@@ -148,8 +148,8 @@ describe("foldProofChain + provider parity (FOR-418)", () => {
     // From the empty tree: the accumulator is the right-peaks in their entirety.
     const links = await foldProofChain([genesis]);
     expect(links.map(accHex)).toEqual([[toHex(fx.peak)]]);
-    // Against any larger trusted size it is not a valid step (draft: tree-size-1
-    // of the first proof MUST equal the trusted size; here 0 != 3).
+    // Against any larger trusted size it is not a valid step: tree-size-1 of
+    // the first proof must equal the trusted size, and here 0 != 3.
     await expect(
       foldProofChain([genesis], { accumulatorFrom: [fx.peak], accumulatorFromSize: 3n }),
     ).rejects.toThrow(/not contiguous/);

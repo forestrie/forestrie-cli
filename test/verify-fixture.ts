@@ -270,20 +270,20 @@ export async function buildCheckpoint(opts: {
   accumulator: Uint8Array[];
   delegationCert?: Uint8Array;
   /**
-   * Wire form of the consistency proofs at vdp 396 key -2. "bstr" (default)
-   * is the pre-massifs/v0.8.0 shape, a bare proof bstr; "array" is the
-   * draft's `consistency-proofs = [ + consistency-proof ]` (one or more),
-   * which arbor has written since v0.1.42 (ADR-0066 D2). `relayedBefore`
-   * prepends earlier steps to the array so one checkpoint relays a chain
-   * under its signature; the top-level sizes/paths/rightPeaks then describe
-   * the LAST step. `emptyProofs` writes an EMPTY array, which the draft does
-   * not permit (a checkpoint must carry at least one proof).
+   * Encoding of the consistency proofs at vdp 396 key -2. "array" is
+   * `consistency-proofs = [ + consistency-proof ]`, the encoding checkpoints
+   * carry, where each element is a proof bstr; "bstr" (default) is a single
+   * bare proof bstr, an older encoding that verifiers still accept.
+   * `relayedBefore` prepends earlier steps to the array so one checkpoint
+   * relays a chain under its signature; the top-level sizes/paths/rightPeaks
+   * then describe the LAST step. `emptyProofs` writes an EMPTY array, which
+   * is malformed: a checkpoint carries at least one proof.
    *
    * Each proof is `[tree-size-1, tree-size-2, consistency-paths, right-peaks]`
-   * with `consistency-paths: [ * consistency-path ]`: a log's initialising
-   * proof is `[0, n, [], peaks]` (the empty tree has no peaks to carry paths
-   * from), its `n` is the SIGNED protected tree-size-2, and it can be
-   * verified only against the empty tree (draft PR #50 / issue #49).
+   * with `consistency-paths: [ * consistency-path ]`. A log's initialising
+   * proof is `[0, n, [], peaks]`: the empty tree has no peaks to carry paths
+   * from, `n` is the SIGNED protected tree-size-2, and the proof verifies
+   * only against the empty tree.
    */
   wireForm?: "bstr" | "array";
   emptyProofs?: boolean;
