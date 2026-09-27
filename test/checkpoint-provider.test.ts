@@ -106,6 +106,40 @@ describe("foldProofChain + provider parity (FOR-418)", () => {
     ]);
   });
 
+  test("array wire form (massifs/v0.8.0): a single proof at 396/-2 folds like the bare bstr", async () => {
+    const bare = await buildCheckpoint({ signer: fx.rootKeyPair, treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak], accumulator: [fx.peak] });
+    const array = await buildCheckpoint({ signer: fx.rootKeyPair, treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak], accumulator: [fx.peak], wireForm: "array" });
+    const [bareLinks, arrayLinks] = await Promise.all([
+      sthCheckpointChain([bare]),
+      sthCheckpointChain([array]),
+    ]);
+    expect(arrayLinks.map(accHex)).toEqual(bareLinks.map(accHex));
+    expect(arrayLinks).toHaveLength(1);
+    expect(arrayLinks[0]!.seal?.kind).toBe("sth");
+  });
+
+  test("one `.sth` relaying two proofs under its signature yields two links; only the last is sealed", async () => {
+    const proofs = chainProofs(fx);
+    // Two separately sealed checkpoints (0->3, 3->7) ...
+    const sth1 = await buildCheckpoint({ signer: fx.rootKeyPair, treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak], accumulator: [fx.peak] });
+    const sth2 = await buildCheckpoint({ signer: fx.rootKeyPair, treeSize1: 3n, treeSize2: 7n, paths: [[fx.node5]], rightPeaks: [], accumulator: [fx.peak7] });
+    const twoSth = await sthCheckpointChain([sth1, sth2], { sourceRefs: ["one.sth", "two.sth"] });
+    // ... versus one head checkpoint at 7 relaying the 0->3 step (ADR-0066 D2).
+    const relay = await buildCheckpoint({
+      signer: fx.rootKeyPair,
+      treeSize1: 3n, treeSize2: 7n, paths: [[fx.node5]], rightPeaks: [], accumulator: [fx.peak7],
+      relayedBefore: [{ treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak] }],
+    });
+    const relayed = await sthCheckpointChain([relay], { sourceRefs: ["head.sth"] });
+    expect(relayed).toHaveLength(2);
+    expect(relayed.map(accHex)).toEqual(twoSth.map(accHex));
+    expect(relayed.map((l) => l.proof)).toEqual(proofs);
+    // The signature covers only the head size: the intermediate link has no seal.
+    expect(relayed[0]!.seal).toBeUndefined();
+    expect(relayed[1]!.seal?.kind).toBe("sth");
+    expect(relayed.map((l) => l.sourceRef)).toEqual(["head.sth", "head.sth"]);
+  });
+
   test("PARITY: `.sth` and calldata read the SAME chain to identical accumulators", async () => {
     const proofs = chainProofs(fx);
     // .sth source: one signed checkpoint per link

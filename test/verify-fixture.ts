@@ -269,6 +269,21 @@ export async function buildCheckpoint(opts: {
   /** Accumulator at treeSize2 — the detached payload the signature covers. */
   accumulator: Uint8Array[];
   delegationCert?: Uint8Array;
+  /**
+   * Wire form of the consistency proof at vdp 396 key -2. "bstr" (default)
+   * is the pre-massifs/v0.8.0 shape, a bare proof bstr; "array" is the
+   * draft's `consistency-proofs = [ + consistency-proof ]`, which arbor has
+   * written since v0.1.42 (ADR-0066 D2). `relayedBefore` prepends earlier
+   * steps to the array so one checkpoint relays a chain under its signature;
+   * the top-level sizes/paths/rightPeaks then describe the LAST step.
+   */
+  wireForm?: "bstr" | "array";
+  relayedBefore?: Array<{
+    treeSize1: bigint;
+    treeSize2: bigint;
+    paths: Uint8Array[][];
+    rightPeaks: Uint8Array[];
+  }>;
 }): Promise<Uint8Array> {
   const protectedInner = cborBytes(
     new Map<number, unknown>([
@@ -294,8 +309,15 @@ export async function buildCheckpoint(opts: {
     opts.paths,
     opts.rightPeaks,
   ]);
+  const relayed = (opts.relayedBefore ?? []).map((r) =>
+    cborBytes([r.treeSize1, r.treeSize2, r.paths, r.rightPeaks]),
+  );
+  const proofsValue: unknown =
+    opts.wireForm === "array" || relayed.length > 0
+      ? [...relayed, proofBstr]
+      : proofBstr;
   const unprotEntries: [number, unknown][] = [
-    [VDS_COSE_RECEIPT_PROOFS_TAG, new Map<number, unknown>([[-2, proofBstr]])],
+    [VDS_COSE_RECEIPT_PROOFS_TAG, new Map<number, unknown>([[-2, proofsValue]])],
   ];
   if (opts.delegationCert !== undefined) {
     unprotEntries.push([1000, opts.delegationCert]);

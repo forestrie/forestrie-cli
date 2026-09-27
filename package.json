@@ -71,7 +71,7 @@
     "@forestrie/encoding": "^0.8.0",
     "@forestrie/grant-builder": "^0.5.0",
     "@forestrie/merklelog": "^0.4.0",
-    "@forestrie/receipt-verify": "^2.0.0",
+    "@forestrie/receipt-verify": "^3.0.1",
     "@forestrie/scrapi-client": "^0.2.2",
     "citty": "^0.2.2",
     "viem": "^2.31.0"
