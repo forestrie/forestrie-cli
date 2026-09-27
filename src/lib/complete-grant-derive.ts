@@ -38,6 +38,7 @@ export type CompleteGrantReason =
   | "checkpoint_parse_failed"
   | "checkpoint_missing_peak_receipts"
   | "checkpoint_missing_sealed_size"
+  | "checkpoint_consistency_invalid"
   | "checkpoint_does_not_cover_leaf"
   | "leaf_not_in_massif"
   | "derive_failed";

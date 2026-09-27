@@ -1,5 +1,6 @@
 import {
   buildReceiptOffline,
+  checkpointConsistencyProof,
   computeAccumulatorPeak,
   openMassifNodeStore,
   parseCheckpoint,
@@ -27,6 +28,7 @@ export type CreateReceiptReason =
   | "checkpoint_parse_failed"
   | "checkpoint_missing_peak_receipts"
   | "checkpoint_missing_sealed_size"
+  | "checkpoint_consistency_invalid"
   | "checkpoint_does_not_cover_leaf"
   | "leaf_not_in_massif"
   | "derive_failed";
@@ -121,6 +123,20 @@ export async function deriveCheckpointReceipt(input: {
       "parse",
       "checkpoint_missing_sealed_size",
       "checkpoint carries no consistency proof (cannot determine sealed size)",
+    );
+  }
+  // The embedded consistency proofs must agree with the signed size: the
+  // last proof's tree-size-2 is the size the signature covers (ADR-0066 D1,
+  // D2). A checkpoint whose proofs contradict its signed size is malformed,
+  // and this builder refuses it rather than deriving from the signed half
+  // alone. (parseCheckpoint only requires that a proof be present.)
+  try {
+    checkpointConsistencyProof(checkpointBytes);
+  } catch (err) {
+    fail(
+      "parse",
+      "checkpoint_consistency_invalid",
+      `checkpoint consistency proofs do not agree with its signed size: ${errorMessage(err)}`,
     );
   }
 

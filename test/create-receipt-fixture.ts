@@ -133,6 +133,9 @@ export function buildV2CheckpointBytes(opts: {
   mmrSize: bigint;
   peakReceipts: Uint8Array[];
   delegationCert?: Uint8Array;
+  /** Declared tree-size-2 of the embedded proof when it should CONTRADICT
+   * the signed `mmrSize` (a malformed checkpoint create-receipt refuses). */
+  proofTreeSize2?: bigint;
 }): Uint8Array {
   const protectedInner = cborBytes(
     new Map<number, unknown>([
@@ -141,7 +144,12 @@ export function buildV2CheckpointBytes(opts: {
       [COSE_LABEL_TREE_SIZE_2, opts.mmrSize],
     ]),
   );
-  const consistencyProof = cborBytes([0n, opts.mmrSize, [], []]);
+  const consistencyProof = cborBytes([
+    0n,
+    opts.proofTreeSize2 ?? opts.mmrSize,
+    [],
+    [],
+  ]);
   const verifiableProofs = new Map<number, unknown>([[-2, consistencyProof]]);
   const checkpointUnprotected = new Map<number, unknown>([
     [396, verifiableProofs],
