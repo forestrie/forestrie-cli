@@ -143,6 +143,25 @@ describe("foldProofChain + provider parity (FOR-418)", () => {
     expect(relayed.map((l) => l.sourceRef)).toEqual(["head.sth", "head.sth"]);
   });
 
+  test("an initialising proof [0, n, [], peaks] folds only from the empty tree", async () => {
+    const genesis = { treeSize1: 0n, treeSize2: 3n, paths: [] as Uint8Array[][], rightPeaks: [fx.peak] };
+    // From the empty tree: the accumulator is the right-peaks in their entirety.
+    const links = await foldProofChain([genesis]);
+    expect(links.map(accHex)).toEqual([[toHex(fx.peak)]]);
+    // Against any larger trusted size it is not a valid step (draft: tree-size-1
+    // of the first proof MUST equal the trusted size; here 0 != 3).
+    await expect(
+      foldProofChain([genesis], { accumulatorFrom: [fx.peak], accumulatorFromSize: 3n }),
+    ).rejects.toThrow(/not contiguous/);
+    // Nor may it appear after another step: a chain cannot rewind to the empty tree.
+    await expect(foldProofChain([genesis, genesis])).rejects.toThrow(/not contiguous/);
+  });
+
+  test("an empty consistency-proofs array is refused: a checkpoint carries at least one proof", async () => {
+    const empty = await buildCheckpoint({ signer: fx.rootKeyPair, treeSize1: 0n, treeSize2: 3n, paths: [], rightPeaks: [fx.peak], accumulator: [fx.peak], emptyProofs: true });
+    await expect(sthCheckpointChain([empty])).rejects.toThrow(/empty/);
+  });
+
   test("PARITY: `.sth` and calldata read the SAME chain to identical accumulators", async () => {
     const proofs = chainProofs(fx);
     // .sth source: one signed checkpoint per link

@@ -184,6 +184,11 @@ export async function foldProofChain(
  * A checkpoint may relay several proofs under one signature (ADR-0066 D2);
  * each becomes its own link, and only the LAST link of a checkpoint carries
  * that checkpoint's seal, since the signature covers only the head size.
+ * A log's initialising proof `[0, n, [], peaks]` (empty consistency-paths:
+ * the empty tree has no peaks) is a valid first step only; `foldProofChain`
+ * binds each step's tree-size-1 to the size reached, so it verifies only
+ * against the empty tree, as the draft requires. A checkpoint with no proof
+ * at all is malformed and the decode throws.
  */
 export async function sthCheckpointChain(
   checkpoints: readonly Uint8Array[],

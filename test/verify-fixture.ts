@@ -270,14 +270,23 @@ export async function buildCheckpoint(opts: {
   accumulator: Uint8Array[];
   delegationCert?: Uint8Array;
   /**
-   * Wire form of the consistency proof at vdp 396 key -2. "bstr" (default)
+   * Wire form of the consistency proofs at vdp 396 key -2. "bstr" (default)
    * is the pre-massifs/v0.8.0 shape, a bare proof bstr; "array" is the
-   * draft's `consistency-proofs = [ + consistency-proof ]`, which arbor has
-   * written since v0.1.42 (ADR-0066 D2). `relayedBefore` prepends earlier
-   * steps to the array so one checkpoint relays a chain under its signature;
-   * the top-level sizes/paths/rightPeaks then describe the LAST step.
+   * draft's `consistency-proofs = [ + consistency-proof ]` (one or more),
+   * which arbor has written since v0.1.42 (ADR-0066 D2). `relayedBefore`
+   * prepends earlier steps to the array so one checkpoint relays a chain
+   * under its signature; the top-level sizes/paths/rightPeaks then describe
+   * the LAST step. `emptyProofs` writes an EMPTY array, which the draft does
+   * not permit (a checkpoint must carry at least one proof).
+   *
+   * Each proof is `[tree-size-1, tree-size-2, consistency-paths, right-peaks]`
+   * with `consistency-paths: [ * consistency-path ]`: a log's initialising
+   * proof is `[0, n, [], peaks]` (the empty tree has no peaks to carry paths
+   * from), its `n` is the SIGNED protected tree-size-2, and it can be
+   * verified only against the empty tree (draft PR #50 / issue #49).
    */
   wireForm?: "bstr" | "array";
+  emptyProofs?: boolean;
   relayedBefore?: Array<{
     treeSize1: bigint;
     treeSize2: bigint;
@@ -312,8 +321,9 @@ export async function buildCheckpoint(opts: {
   const relayed = (opts.relayedBefore ?? []).map((r) =>
     cborBytes([r.treeSize1, r.treeSize2, r.paths, r.rightPeaks]),
   );
-  const proofsValue: unknown =
-    opts.wireForm === "array" || relayed.length > 0
+  const proofsValue: unknown = opts.emptyProofs
+    ? []
+    : opts.wireForm === "array" || relayed.length > 0
       ? [...relayed, proofBstr]
       : proofBstr;
   const unprotEntries: [number, unknown][] = [
