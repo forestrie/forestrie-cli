@@ -134,9 +134,12 @@ describe("foldProofChain + provider parity (FOR-418)", () => {
     expect(relayed).toHaveLength(2);
     expect(relayed.map(accHex)).toEqual(twoSth.map(accHex));
     expect(relayed.map((l) => l.proof)).toEqual(proofs);
-    // The signature covers only the head size: the intermediate link has no seal.
+    // The signature covers only the head size: the intermediate link has no
+    // seal and no signed size; the head link carries both.
     expect(relayed[0]!.seal).toBeUndefined();
+    expect(relayed[0]!.signedTreeSize2).toBeUndefined();
     expect(relayed[1]!.seal?.kind).toBe("sth");
+    expect(relayed[1]!.signedTreeSize2).toBe(7n);
     expect(relayed.map((l) => l.sourceRef)).toEqual(["head.sth", "head.sth"]);
   });
 

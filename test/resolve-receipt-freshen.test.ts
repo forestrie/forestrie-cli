@@ -67,6 +67,9 @@ const innerOf = (g: Grant): Promise<Uint8Array> => grantCommitmentHashFromGrant(
 function buildSth(opts: {
   consistency: [bigint, bigint, Uint8Array[][], Uint8Array[]];
   peakReceipts?: Uint8Array[];
+  /** Earlier steps relayed under this checkpoint's signature (ADR-0066 D2);
+   * with this set the proofs are written in the array wire form. */
+  relayedBefore?: [bigint, bigint, Uint8Array[][], Uint8Array[]][];
 }): Uint8Array {
   const treeSize2 = opts.consistency[1];
   const protectedInner = encodeCborDeterministic(
@@ -77,8 +80,12 @@ function buildSth(opts: {
     ]),
   );
   const proofBstr = encodeCborDeterministic(opts.consistency);
+  const proofs: unknown =
+    opts.relayedBefore !== undefined
+      ? [...opts.relayedBefore.map((r) => encodeCborDeterministic(r)), proofBstr]
+      : proofBstr;
   const unprot = new Map<number, unknown>([
-    [396, new Map<number, unknown>([[-2, proofBstr]])],
+    [396, new Map<number, unknown>([[-2, proofs]])],
   ]);
   if (opts.peakReceipts !== undefined) {
     unprot.set(-65931, opts.peakReceipts);
@@ -92,6 +99,33 @@ function buildSth(opts: {
 }
 
 describe("resolve-receipt freshen via .sth chain (FOR-418)", () => {
+  test("one head .sth relaying 0 -> 3 -> 7 under its signature freshens like two checkpoints", async () => {
+    const fx = await buildVerifyFixture();
+    const head = buildSth({
+      relayedBefore: [[0n, 3n, [], [fx.peak]]],
+      consistency: [3n, 7n, [[fx.node5]], []],
+      peakReceipts: [await signDetachedPeakReceipt(fx.rootKeyPair, fx.peak7)],
+    });
+    const result = await freshenFromSthChain({
+      oldReceiptBytes: fx.receiptCbor,
+      inner: await innerOf(fx.grant),
+      idtimestampBe8: fx.idtimestampBe8,
+      checkpoints: [head],
+      sourceRefs: ["head.sth"],
+    });
+    expect(result.details.sealedSize).toBe(7n);
+    expect(result.details.chainLinks).toBe(2);
+    // One source per LINK: both links came from the one relaying checkpoint.
+    expect(result.details.sourceRefs).toEqual(["head.sth", "head.sth"]);
+    const verified = await verifyGrantReceiptOffline({
+      genesisCbor: fx.genesisCbor,
+      receiptCbor: result.receiptCbor,
+      grant: fx.grant,
+      idtimestampBe8: fx.idtimestampBe8,
+    });
+    expect(verified).toEqual({ ok: true, stage: "binding" });
+  });
+
   test("freshens a stale receipt over a genesis-rooted 0 -> 3 -> 7 chain and it verifies", async () => {
     const fx = await buildVerifyFixture();
 

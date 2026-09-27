@@ -72,16 +72,21 @@ export type CheckpointSeal =
 export type FoldableConsistencyProof = DecodedConsistencyProof;
 
 /** Wrap one fold step as a one-proof chain for receipt-verify's chain-typed
- * parameters; `signedTreeSize2` is backfilled from `treeSize2` (see
+ * parameters. `signedTreeSize2` is the checkpoint's SIGNED size when the
+ * step is the last one a sealed `.sth` relays (so `freshenReceipt`'s
+ * signed-vs-declared guard stays live for it), and is backfilled from
+ * `treeSize2` for steps that carry no signature of their own: calldata
+ * proofs, and the earlier steps a checkpoint relays (see
  * {@link FoldableConsistencyProof}). */
 export function singleProofChain(
   p: FoldableConsistencyProof,
+  signedTreeSize2: bigint = p.treeSize2,
 ): CheckpointConsistencyProof {
   return {
     proofs: [p],
     treeSize1: p.treeSize1,
     treeSize2: p.treeSize2,
-    signedTreeSize2: p.treeSize2,
+    signedTreeSize2,
   };
 }
 
@@ -95,6 +100,10 @@ export type CheckpointLink = {
    * (the tile-free climb material). Retained so a path-extending consumer
    * (freshen) gets it without a re-decode; folding consumers ignore it. */
   proof: FoldableConsistencyProof;
+  /** The SIGNED tree-size-2 covering this link, when it is the last step of a
+   * sealed `.sth` (cross-checked against `proof.treeSize2` at decode). Absent
+   * for calldata links and for the earlier steps a checkpoint relays. */
+  signedTreeSize2?: bigint;
   /** The signature material to verify this link's accumulator, when directly
    * signed (see {@link CheckpointSeal}). The provider does NOT verify it. */
   seal?: CheckpointSeal;
@@ -117,6 +126,8 @@ export async function foldProofChain(
     accumulatorFromSize?: bigint;
     seals?: readonly (CheckpointSeal | undefined)[];
     sourceRefs?: readonly (string | undefined)[];
+    /** Per-step signed tree-size-2, for the steps that have one. */
+    signedSizes?: readonly (bigint | undefined)[];
   } = {},
 ): Promise<CheckpointLink[]> {
   let accumulator = opts.accumulatorFrom ?? [];
@@ -143,8 +154,9 @@ export async function foldProofChain(
     // (ADR-0066 D5.4) — `expectedBase` is exactly that, already checked
     // against `p.treeSize1` above. One link is one step, folded as a
     // one-proof chain (see `singleProofChain`).
+    const signed = opts.signedSizes?.[i];
     accumulator = await computeCheckpointAccumulator(
-      singleProofChain(p),
+      singleProofChain(p, signed),
       accumulator,
       expectedBase,
     );
@@ -154,6 +166,7 @@ export async function foldProofChain(
       accumulator,
       proof: p,
     };
+    if (signed !== undefined) link.signedTreeSize2 = signed;
     const seal = opts.seals?.[i];
     if (seal !== undefined) link.seal = seal;
     const ref = opts.sourceRefs?.[i];
@@ -183,17 +196,20 @@ export async function sthCheckpointChain(
   const proofs: FoldableConsistencyProof[] = [];
   const seals: (CheckpointSeal | undefined)[] = [];
   const sourceRefs: (string | undefined)[] = [];
+  const signedSizes: (bigint | undefined)[] = [];
   checkpoints.forEach((bytes, i) => {
     const chain = checkpointConsistencyProof(bytes);
     chain.proofs.forEach((step, j) => {
       const last = j === chain.proofs.length - 1;
       proofs.push(step);
       seals.push(last ? { kind: "sth", checkpointBytes: bytes } : undefined);
+      signedSizes.push(last ? chain.signedTreeSize2 : undefined);
       sourceRefs.push(opts.sourceRefs?.[i]);
     });
   });
   return foldProofChain(proofs, {
     seals,
+    signedSizes,
     ...(opts.accumulatorFrom !== undefined
       ? { accumulatorFrom: opts.accumulatorFrom }
       : {}),

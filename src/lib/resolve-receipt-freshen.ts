@@ -105,7 +105,9 @@ async function emitFreshened(opts: {
     leafValue: opts.leafValue,
     // `freshenReceipt` takes chains; each link is one step, wrapped as a
     // one-proof chain — see `singleProofChain` in checkpoint-provider.ts.
-    consistencyProofs: opts.links.map((l) => singleProofChain(l.proof)),
+    consistencyProofs: opts.links.map((l) =>
+      singleProofChain(l.proof, l.signedTreeSize2),
+    ),
     latestCheckpointBytes: opts.latestCheckpointBytes,
   });
 
@@ -171,7 +173,9 @@ export async function freshenFromSthChain(opts: {
     leafValue,
     links,
     latestCheckpointBytes: opts.checkpoints[opts.checkpoints.length - 1]!,
-    sourceRefs: [...(opts.sourceRefs ?? [])],
+    // One entry per LINK, as the calldata path reports: a checkpoint that
+    // relays several proofs yields several links that all name it.
+    sourceRefs: links.map((l) => l.sourceRef ?? ""),
     knownAccumulator: opts.knownAccumulator,
   });
 }
