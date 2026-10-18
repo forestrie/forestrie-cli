@@ -403,15 +403,22 @@ forestrie fetch-ks256-attestation \
 forestrie verify --genesis genesis.cbor --ks256-attestation attestation.cbor …
 ```
 
-Pins to one block, then calls the contract root's ERC-1271
-`isValidSignature(digest, signature)` with the receipt's delegation
-certificate and writes canonical CBOR binding
+Resolves one block (`--block`, default latest; a block whose number differs
+from an explicit `--block` is refused), then reads the contract's code and calls
+its ERC-1271 `isValidSignature(digest, signature)` with the receipt's delegation
+certificate, both pinned by that block's **hash** (EIP-1898,
+`requireCanonical`), so the recorded `blockHash` is the state actually read.
+The call must return exactly one 32-byte word equal to the ERC-1271 magic
+value, `0x1626ba7e` followed by 28 zero bytes: extra data, non-zero padding or a
+short result (including a fallback that echoes the calldata, whose selector is
+that same magic) is refused, as is a revert; other RPC errors are reported as
+RPC failures, not as the contract refusing. It writes canonical CBOR binding
 `(chainId, address, digest, signature hash, blockNumber, blockHash, magic)` —
 anyone with RPC can re-run the call at that block. `--root` overrides the
 genesis root; `--genesis` also supplies the chain the RPC must match. It
 refuses, writing nothing, an EOA root (no code: `verify` recovers it), a chain
 differing from the genesis, a receipt with no delegation certificate or a
-non-KS256 genesis root, and any result other than the ERC-1271 magic value.
+non-KS256 genesis root, and any result other than that magic word.
 Use an archive node for an old `--block`.
 
 ## Use as a library: `decode-receipt`

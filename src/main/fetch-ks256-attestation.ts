@@ -128,8 +128,19 @@ export async function runFetchKs256Attestation(
       throw new Error(`eth_getBlockByNumber returned no block for ${blockTag}`);
     }
     const blockNumber = hexToBigint(block.number, "block number");
+    if (options.block !== "latest" && blockNumber !== options.block) {
+      throw new Error(
+        `RPC returned block ${blockNumber} for --block ${options.block}`,
+      );
+    }
     const blockHash = hexToBytes32(block.hash, "block hash");
-    const pinned = `0x${blockNumber.toString(16)}`;
+    // EIP-1898: read state at exactly the recorded block hash, so the
+    // attestation's blockHash is the state actually read (a reorg or a
+    // load-balanced RPC cannot answer from another block).
+    const pinned = {
+      blockHash: `0x${bytesToHex(blockHash)}`,
+      requireCanonical: true,
+    };
     const rootHex = `0x${bytesToHex(root)}`;
 
     const code = await ethRpc(options.rpcUrl, "eth_getCode", [rootHex, pinned]);
@@ -150,19 +161,33 @@ export async function runFetchKs256Attestation(
       ]);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`isValidSignature call to ${rootHex} failed: ${message}`);
-    }
-    if (typeof ret !== "string" || !/^0x[0-9a-fA-F]{64,}$/.test(ret)) {
+      // ethRpc surfaces only the JSON-RPC error message (not its code), so a
+      // revert is recognised by message; anything else (e.g. header not
+      // found) is an RPC failure that says nothing about the contract.
+      if (/revert/i.test(message)) {
+        throw new Error(
+          `${rootHex} did not validate the certificate signature (isValidSignature reverted: ${message})`,
+        );
+      }
       throw new Error(
-        `isValidSignature returned a malformed result: ${String(ret)}`,
+        `RPC error on isValidSignature eth_call at block ${blockNumber}: ${message}`,
       );
     }
-    const magic = new Uint8Array(Buffer.from(ret.slice(2, 10), "hex"));
-    if (bytesToHex(magic) !== bytesToHex(ERC1271_MAGIC_VALUE)) {
+    // Exactly one 32-byte word: bytes4 magic, left-aligned, zero padded.
+    // Anything else (extra data, dirty padding, a calldata echo from a
+    // fallback — the magic is also the selector) is not an attestation.
+    const expectedWord = `0x${bytesToHex(ERC1271_MAGIC_VALUE)}${"00".repeat(28)}`;
+    if (typeof ret !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(ret)) {
       throw new Error(
-        `${rootHex} did not validate the certificate signature: isValidSignature returned 0x${bytesToHex(magic)}, not the ERC-1271 magic value 0x${bytesToHex(ERC1271_MAGIC_VALUE)}`,
+        `isValidSignature did not return exactly one 32-byte word: ${String(ret)}`,
       );
     }
+    if (ret.toLowerCase() !== expectedWord) {
+      throw new Error(
+        `${rootHex} did not validate the certificate signature: isValidSignature returned ${ret}, not the ERC-1271 magic value word ${expectedWord}`,
+      );
+    }
+    const magic = ERC1271_MAGIC_VALUE.slice();
 
     const signatureHash = new Uint8Array(
       Buffer.from(keccak256(parts.signature).slice(2), "hex"),

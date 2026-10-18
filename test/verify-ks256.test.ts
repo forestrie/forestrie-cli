@@ -105,6 +105,13 @@ function rpc(
   return (async (_url: unknown, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)) as RpcCall;
     calls.push({ method: body.method, params: body.params });
+    if (body.method === "eth_getCode" || body.method === "eth_call") {
+      // EIP-1898: state reads are pinned by the recorded block hash.
+      expect(body.params[1]).toEqual({
+        blockHash: "0x" + "bb".repeat(32),
+        requireCanonical: true,
+      });
+    }
     const results: Record<string, unknown> = {
       eth_chainId: "0x14a34", // 84532
       eth_getBlockByNumber: { number: "0x7b", hash: "0x" + "bb".repeat(32) },
@@ -115,8 +122,20 @@ function rpc(
     if (!(body.method in results)) {
       throw new Error(`unexpected RPC method ${body.method}`);
     }
+    const value = results[body.method];
+    const result = typeof value === "function" ? (value as (p: unknown[]) => unknown)(body.params) : value;
+    if (result instanceof Error) {
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          error: { code: 3, message: result.message },
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+    }
     return new Response(
-      JSON.stringify({ jsonrpc: "2.0", id: 1, result: results[body.method] }),
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result }),
       { headers: { "Content-Type": "application/json" } },
     );
   }) as unknown as typeof fetch;
@@ -402,7 +421,7 @@ describe("fetch-ks256-attestation refusals and pinning", () => {
 
   test("a short isValidSignature result", async () => {
     expect(await refused("short", { eth_call: "0x1626ba7e" })).toContain(
-      "malformed",
+      "exactly one 32-byte word",
     );
   });
 
@@ -434,6 +453,44 @@ describe("fetch-ks256-attestation refusals and pinning", () => {
     ).toContain("not a KS256 address");
   });
 
+  test("dirty padding after the magic is refused", async () => {
+    expect(
+      await refused("dirty", { eth_call: "0x1626ba7e" + "00".repeat(27) + "01" }),
+    ).toContain("did not validate");
+  });
+
+  test("magic plus an extra word is refused", async () => {
+    expect(
+      await refused("extra", { eth_call: MAGIC_WORD + "00".repeat(32) }),
+    ).toContain("exactly one 32-byte word");
+  });
+
+  test("a calldata echo (the selector is the magic) is refused", async () => {
+    const echo = (params: unknown[]) =>
+      (params[0] as { data: string }).data;
+    expect(await refused("echo", { eth_call: echo })).toContain(
+      "exactly one 32-byte word",
+    );
+  });
+
+  test("a revert is reported as not validated", async () => {
+    expect(
+      await refused("revert", { eth_call: new Error("execution reverted") }),
+    ).toContain("reverted");
+  });
+
+  test("other RPC errors do not blame the contract", async () => {
+    const m = await refused("hdr", { eth_call: new Error("header not found") });
+    expect(m).toContain("RPC error");
+    expect(m).not.toContain("did not validate");
+  });
+
+  test("a block other than the requested --block is refused", async () => {
+    expect(
+      await refused("blk", {}, { block: "124" }),
+    ).toContain("returned block 123 for --block 124");
+  });
+
   test("--block pins every call to that block", async () => {
     const calls: RpcCall[] = [];
     const outPath = file("pinned.cbor");
@@ -444,8 +501,10 @@ describe("fetch-ks256-attestation refusals and pinning", () => {
     expect(f.exitCode).toBe(0);
     const byMethod = Object.fromEntries(calls.map((c) => [c.method, c.params]));
     expect(byMethod["eth_getBlockByNumber"]).toEqual(["0x7b", false]);
-    expect((byMethod["eth_getCode"] as unknown[])[1]).toBe("0x7b");
-    expect((byMethod["eth_call"] as unknown[])[1]).toBe("0x7b");
+    // State reads pin by the block hash the RPC returned for block 123
+    // (asserted in the router), not by number.
+    expect(byMethod["eth_getCode"]).toBeDefined();
+    expect(byMethod["eth_call"]).toBeDefined();
   });
 
   test("requires --root or --genesis", () => {
