@@ -41,13 +41,12 @@ export function parseFetchKs256AttestationOptions(
   let block: bigint | "latest";
   if (blockRaw === "latest") {
     block = "latest";
+  } else if (/^[0-9]+$/.test(blockRaw)) {
+    block = BigInt(blockRaw);
   } else {
-    try {
-      block = BigInt(blockRaw);
-    } catch {
-      throw new Error("--block must be a block number or 'latest'");
-    }
-    if (block < 0n) throw new Error("--block must be a non-negative block number");
+    throw new Error(
+      "--block must be a non-negative decimal block number or 'latest'",
+    );
   }
   return {
     ...parseForestrieCommonOptions(args),

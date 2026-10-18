@@ -670,6 +670,7 @@ export async function buildKs256Fixture(opts?: {
   /** Leaf commits SHA-256(payload) (the `verify` statement path) instead of the grant. */
   statementPayload?: Uint8Array;
 }): Promise<{
+  peak: Uint8Array;
   entryIdHex: string;
   genesisCbor: Uint8Array;
   receiptCbor: Uint8Array;
@@ -769,6 +770,7 @@ export async function buildKs256Fixture(opts?: {
     idtimestampBe8,
   );
   return {
+    peak,
     entryIdHex: entryIdHexFor(idtimestampBe8, 1n),
     genesisCbor,
     receiptCbor,

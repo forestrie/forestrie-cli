@@ -229,12 +229,14 @@ export type VerifyReport = {
   /** KS256 root and ERC-1271 attestation facts (present for a KS256 root). */
   ks256?: {
     root: boolean;
+    /** An unused attestation reports `used: false` only: its fields were
+     * never checked against anything, so they are not echoed. */
     attestation?: {
       used: boolean;
-      chainId: string;
-      address: string;
-      blockNumber: string;
-      blockHash: string;
+      chainId?: string;
+      address?: string;
+      blockNumber?: string;
+      blockHash?: string;
     };
   };
 };
@@ -271,10 +273,12 @@ export function buildVerifyReport(opts: {
     const att = opts.ks256.attestation;
     report.ks256 = {
       root: opts.ks256.ks256Root,
-      ...(att !== undefined
+      ...(att !== undefined && opts.ks256.attestationUsed !== true
+        ? { attestation: { used: false } }
+        : att !== undefined
         ? {
             attestation: {
-              used: opts.ks256.attestationUsed === true,
+              used: true,
               chainId: att.chainId.toString(),
               address: toHex(att.address),
               blockNumber: att.blockNumber.toString(),

@@ -552,7 +552,11 @@ async function finishVerify(
       // checkpoint-chain checks always work from the recomputed peak.
       let recomputedPeak: Uint8Array | undefined;
       if (
-        (ctx.knownLogKey !== undefined || ctx.anchor !== "chain") &&
+        // A KS256 root cannot locate a detached peak by signature trial
+        // (no_es256_trust_key), so it always works from the recomputed peak.
+        (ctx.knownLogKey !== undefined ||
+          ctx.anchor !== "chain" ||
+          ks256?.ks256Root === true) &&
         anchorLeaf !== undefined
       ) {
         const recomputed = await recomputeReceiptPeak({

@@ -15,7 +15,7 @@ import { parseFetchKs256AttestationOptions } from "../src/options/fetch-ks256-at
 import { parseVerifyGrantOptions, parseVerifyOptions } from "../src/options/verify.js";
 import type { VerifyReport } from "../src/lib/verify-report.js";
 import { runCli } from "./support.js";
-import { buildKs256Fixture, bytesToHex } from "./verify-fixture.js";
+import { buildKs256Fixture, bytesToHex, encodeLogStateResult, FIXTURE_LOG_ID } from "./verify-fixture.js";
 
 type LooseArgs = Parameters<typeof parseVerifyGrantOptions>[0];
 type Fx = Awaited<ReturnType<typeof buildKs256Fixture>>;
@@ -376,7 +376,8 @@ describe("KS256 contract root and fetch-ks256-attestation", () => {
       "ks256-attestation": outPath,
     });
     expect(r.exitCode).toBe(0);
-    expect(report(r.stdout).ks256?.attestation?.used).toBe(false);
+    // An unused attestation's fields were never checked: not echoed.
+    expect(report(r.stdout).ks256?.attestation).toEqual({ used: false });
   });
 });
 
@@ -587,9 +588,72 @@ describe("verify (statement path) with --ks256-attestation", () => {
     expect(report(r.stdout).reason).toBe("ks256_attestation_chain_unbound");
   });
 
+  test("an attestation for an EOA root is reported used:false (statement path)", async () => {
+    const eoaSt = await buildKs256Fixture({ statementPayload: payload });
+    writeFileSync(file("st-eoa-genesis.cbor"), eoaSt.genesisCbor);
+    writeFileSync(file("st-eoa-receipt.cbor"), eoaSt.receiptCbor);
+    const r = await verifyStatement({
+      receipt: file("st-eoa-receipt.cbor"),
+      "entry-id": eoaSt.entryIdHex,
+      genesis: file("st-eoa-genesis.cbor"),
+      "ks256-attestation": attPath,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(report(r.stdout).ks256?.attestation).toEqual({ used: false });
+  });
+
   test("without an attestation the contract root is not recovered", async () => {
     const r = await verifyStatement({ genesis: file("st-genesis.cbor") });
     expect(r.exitCode).toBe(1);
     expect(report(r.stdout).reason).toBe("ks256_root_not_recovered");
   });
+});
+
+describe("KS256 genesis with a live chain anchor", () => {
+  test("a detached receipt under an EOA root anchors via the recomputed peak", async () => {
+    const liveFetch = (async (_u: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { method: string };
+      expect(body.method).toBe("eth_call");
+      return new Response(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: encodeLogStateResult([eoa.peak], 3n),
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    const r = await verify(
+      eoa,
+      "eoa",
+      {
+        genesis: file("eoa-genesis.cbor"),
+        univocity: "0x" + "ab".repeat(20),
+        "log-id": FIXTURE_LOG_ID,
+        "rpc-url": "http://rpc.mock",
+      },
+      liveFetch,
+    );
+    expect(r.exitCode).toBe(0);
+    const rep = report(r.stdout);
+    expect(rep.mode).toBe("chain-anchored");
+    expect(rep.anchor?.anchored).toBe(true);
+  });
+});
+
+describe("fetch-ks256-attestation --block syntax", () => {
+  test.each(["0x7b", " 123", "123 ", "-1", "0b11", "0o7", "1e3"])(
+    "rejects %p",
+    (block) => {
+      expect(() =>
+        parseFetchKs256AttestationOptions({
+          receipt: "r",
+          root: "0x" + "11".repeat(20),
+          "rpc-url": "http://x",
+          out: "o",
+          block,
+        } as LooseArgs),
+      ).toThrow(/--block|--root/);
+    },
+  );
 });
