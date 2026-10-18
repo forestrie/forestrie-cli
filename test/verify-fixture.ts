@@ -20,7 +20,13 @@ import {
   type Grant,
 } from "@forestrie/encoding";
 import { encodeCborDeterministic } from "@forestrie/encoding";
-import { normalizeEs256SignatureLowS } from "@forestrie/delegation-cose";
+import {
+  buildDelegationToBeSignedKs256,
+  encodeIntKeyCbor,
+  normalizeEs256SignatureLowS,
+} from "@forestrie/delegation-cose";
+import { keccak256, hexToBytes } from "viem";
+import { generatePrivateKey, privateKeyToAccount, sign } from "viem/accounts";
 import {
   calculateRoot,
   createSyncHasher,
@@ -644,4 +650,130 @@ export function encodeLogStateResult(
     hex += bytesToHex(peak).padStart(64, "0");
   }
   return "0x" + hex;
+}
+
+/**
+ * KS256-rooted receipt (plan-2610-03): a forest whose genesis bootstrap key is
+ * a 20-byte KS256 address, and a receipt sealed by a delegated P-256 key whose
+ * label-1000 certificate is signed by a secp256k1 key over keccak256 of the
+ * COSE Sig_structure. Everything is generated per run.
+ *
+ * - default: an EOA root — the certificate is signed by the root's own key.
+ * - `contractRoot`: the root is an arbitrary 20-byte "Safe" address and the
+ *   certificate is signed by some other key, as a Safe's owners would; only an
+ *   ERC-1271 attestation can verify it offline.
+ * - `wrongSigner`: an EOA root, but the certificate is signed by another key.
+ */
+export async function buildKs256Fixture(opts?: {
+  contractRoot?: boolean;
+  wrongSigner?: boolean;
+}): Promise<{
+  genesisCbor: Uint8Array;
+  receiptCbor: Uint8Array;
+  grantCoseB64: string;
+  idtimestampBe8: Uint8Array;
+  rootAddress: Uint8Array;
+  certDigest: Uint8Array;
+  certSignature: Uint8Array;
+}> {
+  const rootPk = generatePrivateKey();
+  const rootAccount = privateKeyToAccount(rootPk);
+  const rootAddress = opts?.contractRoot
+    ? crypto.getRandomValues(new Uint8Array(20))
+    : hexToBytes(rootAccount.address);
+  const signerPk =
+    opts?.contractRoot || opts?.wrongSigner ? generatePrivateKey() : rootPk;
+
+  const sealer = await generateP256KeyPair();
+  const sealerRaw = new Uint8Array(
+    (await crypto.subtle.exportKey("raw", sealer.publicKey)) as ArrayBuffer,
+  );
+  const delegatedPublicKeyCbor = cborBytes(
+    new Map<number, unknown>([
+      [1, 2],
+      [-1, 1],
+      [-2, sealerRaw.slice(1, 33)],
+      [-3, sealerRaw.slice(33, 65)],
+    ]),
+  );
+
+  const grant = grantWithData(FIXTURE_LOG_ID, rootAddress);
+  const idtimestampBe8 = new Uint8Array(8).fill(0x02);
+  const inner0 = await grantCommitmentHash(
+    grantWithData(FIXTURE_LOG_ID, new Uint8Array(20).fill(0xaa)),
+  );
+  const inner1 = await grantCommitmentHash(grant);
+  const leaf0Hash = await univocityLeafHash(new Uint8Array(8).fill(0x01), inner0);
+  const leaf1Hash = await univocityLeafHash(idtimestampBe8, inner1);
+  const getHash = (i: bigint) => (i === 0n ? leaf0Hash : leaf1Hash);
+  const proof: Proof = {
+    path: inclusionProofForIndex(getHash, 1n, 1n),
+    mmrIndex: 1n,
+  };
+  const peak = await calculateRoot(await createSyncHasher(), leaf1Hash, proof, 1n);
+
+  // Leaf time as receipt-verify derives it from the idtimestamp (FOR-420).
+  const id = new DataView(idtimestampBe8.buffer).getBigUint64(0, false);
+  const leafTime = Number((((1n << 40n) - 1n) + (id >> 24n)) / 1000n);
+  const tbs = buildDelegationToBeSignedKs256(
+    {
+      logIdHex32: FIXTURE_LOG_ID.replaceAll("-", ""),
+      mmrStart: 0,
+      mmrEnd: 65535,
+      delegatedPublicKeyCbor,
+      issuedAt: leafTime - 3600,
+      expiresAt: leafTime + 3600,
+      delegationId: new Uint8Array(16),
+    },
+    rootAddress,
+  );
+  const certDigest = hexToBytes(keccak256(tbs.sigStructureBytes));
+  const sig = await sign({
+    hash: bytesToHexPrefixed(certDigest),
+    privateKey: signerPk,
+  });
+  const certSignature = new Uint8Array(65);
+  certSignature.set(hexToBytes(sig.r), 0);
+  certSignature.set(hexToBytes(sig.s), 32);
+  certSignature[64] = sig.yParity ?? 0;
+  const delegationCert = encodeIntKeyCbor([
+    tbs.protectedBytes,
+    new Map<number, unknown>(),
+    tbs.payloadBytes,
+    certSignature,
+  ]);
+
+  const receiptCbor = await buildPeakReceipt({
+    signer: sealer,
+    peak,
+    proof,
+    delegationCert,
+  });
+  const genesisCbor = cborBytes(
+    new Map<number, unknown>([
+      [LABEL_GENESIS_VERSION, GENESIS_SCHEMA_V2],
+      [LABEL_GENESIS_ALG, COSE_ALG_KS256],
+      [LABEL_BOOTSTRAP_KEY, rootAddress],
+      [LABEL_UNIVOCITY_ADDR, new Uint8Array(20).fill(0xab)],
+      [LABEL_CHAIN_ID, "84532"],
+      [LABEL_LOG_ID, toPaddedWire32(uuidToBytes(FIXTURE_LOG_ID))],
+    ]),
+  );
+  const grantCoseCbor = await buildGrantCose(
+    encodeGrantPayload(grant),
+    idtimestampBe8,
+  );
+  return {
+    genesisCbor,
+    receiptCbor,
+    grantCoseB64: Buffer.from(grantCoseCbor).toString("base64"),
+    idtimestampBe8,
+    rootAddress,
+    certDigest,
+    certSignature,
+  };
+}
+
+function bytesToHexPrefixed(bytes: Uint8Array): `0x${string}` {
+  return `0x${bytesToHex(bytes)}`;
 }

@@ -81,7 +81,7 @@ export async function runFetchKs256Attestation(
       if (normalized === null) {
         throw new Error(`--root is not a valid address: '${options.root}'`);
       }
-      root = hexAddressToBytes(`0x${normalized}`);
+      root = hexAddressToBytes(normalized);
     } else {
       const trust = await decodeTrustRootFromGenesis(genesisCbor!);
       if (!isKs256Root(trust)) {

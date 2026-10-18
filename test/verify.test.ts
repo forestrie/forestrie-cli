@@ -247,14 +247,14 @@ describe("forestrie verify — offline (no network)", () => {
     expect(jsonReport(r.stdout).ok).toBe(false);
   });
 
-  test("KS256 genesis surfaces no_es256_trust_key (ES256-only verify)", async () => {
+  test("KS256 genesis root with a certificate-less receipt surfaces ks256_root_requires_delegation", async () => {
     const r = await verifyInProcess(
       baseArgs({ genesis: file("ks256-genesis.cbor"), json: true }),
     );
     expect(r.exitCode).toBe(1);
     const report = jsonReport(r.stdout);
     expect(report.stage).toBe("signature");
-    expect(report.reason).toBe("no_es256_trust_key");
+    expect(report.reason).toBe("ks256_root_requires_delegation");
   });
 
   test("--json emits the structured contract on success", async () => {
@@ -813,12 +813,13 @@ describe("forestrie verify-grant — caller-known log key (FOR-297 D1)", () => {
     ).toThrow(/trust anchor/);
   });
 
-  test("malformed --known-log-key (not 64 bytes) is a structured error", async () => {
+  test("malformed --known-log-key (not 64 or 20 bytes) is a structured input error", async () => {
     const r = await verifyInProcess(knownKeyArgs({ "known-log-key": "AAAA" }));
     expect(r.exitCode).toBe(1);
     const report = JSON.parse(r.stdout) as VerifyErrorReport;
-    expect(report.error).toBe("verify_failed");
-    expect(report.message).toContain("64 bytes");
+    expect(report.error).toBe("verify_input_failed");
+    expect(report.message).toContain("64-byte ES256");
+    expect(report.message).toContain("20-byte KS256");
   });
 });
 
