@@ -10,9 +10,9 @@ import {
   ERC1271_MAGIC_VALUE,
 } from "@forestrie/receipt-verify";
 import { runFetchKs256Attestation } from "../src/main/fetch-ks256-attestation.js";
-import { runVerifyGrant } from "../src/main/verify.js";
+import { runVerify, runVerifyGrant } from "../src/main/verify.js";
 import { parseFetchKs256AttestationOptions } from "../src/options/fetch-ks256-attestation.js";
-import { parseVerifyGrantOptions } from "../src/options/verify.js";
+import { parseVerifyGrantOptions, parseVerifyOptions } from "../src/options/verify.js";
 import type { VerifyReport } from "../src/lib/verify-report.js";
 import { runCli } from "./support.js";
 import { buildKs256Fixture, bytesToHex } from "./verify-fixture.js";
@@ -463,5 +463,74 @@ describe("CLI surface", () => {
   test("fetch-ks256-attestation is listed in help", () => {
     const r = runCli(["--help"]);
     expect(r.stdout + r.stderr).toContain("fetch-ks256-attestation");
+  });
+});
+
+describe("verify (statement path) with --ks256-attestation", () => {
+  const payload = new TextEncoder().encode("signed statement bytes");
+  let st: Fx;
+  let attPath: string;
+
+  beforeAll(async () => {
+    st = await buildKs256Fixture({
+      contractRoot: true,
+      statementPayload: payload,
+    });
+    writeFileSync(file("st-genesis.cbor"), st.genesisCbor);
+    writeFileSync(file("st-receipt.cbor"), st.receiptCbor);
+    writeFileSync(file("st-payload.bin"), payload);
+    attPath = file("st-att.cbor");
+    const f = await fetchAttestation(
+      {
+        receipt: file("st-receipt.cbor"),
+        genesis: file("st-genesis.cbor"),
+        out: attPath,
+      },
+      rpc(),
+    );
+    expect(f.exitCode).toBe(0);
+  });
+
+  const verifyStatement = (args: Record<string, unknown>) =>
+    capture(
+      (out) =>
+        runVerify(
+          out,
+          parseVerifyOptions({
+            receipt: file("st-receipt.cbor"),
+            payload: file("st-payload.bin"),
+            "entry-id": st.entryIdHex,
+            json: true,
+            ...args,
+          } as LooseArgs),
+        ),
+      forbiddenFetch, // any fetch call throws: zero network
+    );
+
+  test("known key + --genesis + attestation passes with no fetch", async () => {
+    const r = await verifyStatement({
+      "known-log-key": hex0x(st.rootAddress),
+      genesis: file("st-genesis.cbor"),
+      "ks256-attestation": attPath,
+    });
+    expect(r.exitCode).toBe(0);
+    const rep = report(r.stdout);
+    expect(rep.ok).toBe(true);
+    expect(rep.ks256?.attestation?.used).toBe(true);
+  });
+
+  test("known key without --genesis is ks256_attestation_chain_unbound", async () => {
+    const r = await verifyStatement({
+      "known-log-key": hex0x(st.rootAddress),
+      "ks256-attestation": attPath,
+    });
+    expect(r.exitCode).toBe(1);
+    expect(report(r.stdout).reason).toBe("ks256_attestation_chain_unbound");
+  });
+
+  test("without an attestation the contract root is not recovered", async () => {
+    const r = await verifyStatement({ genesis: file("st-genesis.cbor") });
+    expect(r.exitCode).toBe(1);
+    expect(report(r.stdout).reason).toBe("ks256_root_not_recovered");
   });
 });

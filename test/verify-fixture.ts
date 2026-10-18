@@ -667,7 +667,10 @@ export function encodeLogStateResult(
 export async function buildKs256Fixture(opts?: {
   contractRoot?: boolean;
   wrongSigner?: boolean;
+  /** Leaf commits SHA-256(payload) (the `verify` statement path) instead of the grant. */
+  statementPayload?: Uint8Array;
 }): Promise<{
+  entryIdHex: string;
   genesisCbor: Uint8Array;
   receiptCbor: Uint8Array;
   grantCoseB64: string;
@@ -702,7 +705,9 @@ export async function buildKs256Fixture(opts?: {
   const inner0 = await grantCommitmentHash(
     grantWithData(FIXTURE_LOG_ID, new Uint8Array(20).fill(0xaa)),
   );
-  const inner1 = await grantCommitmentHash(grant);
+  const inner1 = opts?.statementPayload
+    ? await sha256(opts.statementPayload)
+    : await grantCommitmentHash(grant);
   const leaf0Hash = await univocityLeafHash(new Uint8Array(8).fill(0x01), inner0);
   const leaf1Hash = await univocityLeafHash(idtimestampBe8, inner1);
   const getHash = (i: bigint) => (i === 0n ? leaf0Hash : leaf1Hash);
@@ -764,6 +769,7 @@ export async function buildKs256Fixture(opts?: {
     idtimestampBe8,
   );
   return {
+    entryIdHex: entryIdHexFor(idtimestampBe8, 1n),
     genesisCbor,
     receiptCbor,
     grantCoseB64: Buffer.from(grantCoseCbor).toString("base64"),
