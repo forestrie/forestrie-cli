@@ -17,6 +17,7 @@ deploy, sign, register, and verify against a forestrie log:
 | `decode-receipt` | Decode a COSE receipt — it is just COSE: Sign1 + MMR inclusion |
 | `verify` | Verify a receipt offline — the same closer for every other subcommand |
 | `fetch-accumulator` | Cache the on-chain accumulator as a `--known-accumulator` snapshot |
+| `fetch-ks256-attestation` | Cache an ERC-1271 attestation for a KS256 contract root as a `--ks256-attestation` file |
 
 **Status:** subcommands not yet implemented declare their real argument
 surface and parse it, then exit non-zero with a structured `not_implemented`
@@ -334,9 +335,13 @@ signature — no operator trust required.
 
 `verify` takes four named trust anchors — pass whichever you hold:
 
-- **`--known-log-key`** — a caller-known log owner key (base64 `x||y`, env
-  `KNOWN_LOG_KEY`); fully offline, checks the signature under a key you trust
-  out of band (the SCITT / SSH-known-hosts posture).
+- **`--known-log-key`** — a caller-known log owner key (env `KNOWN_LOG_KEY`):
+  base64 `x||y` (a 64-byte ES256 key) or a 20-byte KS256 address (`0x` + 40
+  hex, or base64); fully offline, checks the signature under a key you trust
+  out of band (the SCITT / SSH-known-hosts posture). A KS256 address asserts,
+  and does not prove, the key-to-log binding, and cannot root
+  `--checkpoint-chain` (which needs ES256). `--genesis` may accompany it: it
+  then supplies only the forest chain id an attestation must match.
 - **`--genesis`** — a cached `genesis.cbor` (the univocity-instance root
   registration). Roots a receipt whose signer chains to that root owner; for a
   child log deeper in the hierarchy, reaching genesis is the grant-chain walk
@@ -362,6 +367,19 @@ and collapsing it into split-view is the specific confusion the trust model
 warns against. Split-view is the load-bearing property; currency is at most the
 `--rpc-url` "as of now" delta.
 
+#### KS256 roots and `--ks256-attestation`
+
+A genesis (or known-key) root that is a KS256 address verifies the receipt's
+delegation certificate by ecrecover when the root is an EOA — pure, offline,
+no chain call. A contract root (a Safe) cannot be recovered offline and fails
+`ks256_root_not_recovered`; give `--ks256-attestation <file>` (from
+`fetch-ks256-attestation`) and the certificate verifies as *valid under the
+contract's signers at the attested block* — a narrower guarantee than a
+signature by one key, reported as such. The attestation must bind the root
+address, the certificate digest and signature, and the forest's genesis chain
+id (`--genesis`; under `--known-log-key` without it the result is
+`ks256_attestation_chain_unbound`). `verify` never calls the chain.
+
 ### `fetch-accumulator`
 
 ```bash
@@ -374,6 +392,27 @@ Reads `logState(logId)` pinned to a block and writes the
 `--known-accumulator` snapshot: canonical CBOR binding
 `(chainId, univocity, logId, size, blockNumber, blockHash)` — anyone with
 RPC can re-run the read at that block and confirm or disprove it.
+
+### `fetch-ks256-attestation`
+
+```bash
+forestrie fetch-ks256-attestation \
+  --receipt receipt.cbor --genesis genesis.cbor --rpc-url "$RPC_URL" \
+  --out attestation.cbor              # [--root 0x… ] [--block <n>|latest]
+
+forestrie verify --genesis genesis.cbor --ks256-attestation attestation.cbor …
+```
+
+Pins to one block, then calls the contract root's ERC-1271
+`isValidSignature(digest, signature)` with the receipt's delegation
+certificate and writes canonical CBOR binding
+`(chainId, address, digest, signature hash, blockNumber, blockHash, magic)` —
+anyone with RPC can re-run the call at that block. `--root` overrides the
+genesis root; `--genesis` also supplies the chain the RPC must match. It
+refuses, writing nothing, an EOA root (no code: `verify` recovers it), a chain
+differing from the genesis, a receipt with no delegation certificate or a
+non-KS256 genesis root, and any result other than the ERC-1271 magic value.
+Use an archive node for an old `--block`.
 
 ## Use as a library: `decode-receipt`
 
