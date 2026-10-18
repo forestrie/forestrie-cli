@@ -64,7 +64,7 @@ export type LoadedVerifyArtifacts = Omit<
   "genesisCbor"
 > & { genesisCbor: Uint8Array | undefined };
 
-function readBytes(path: string, flag: string): Uint8Array {
+export function readBytes(path: string, flag: string): Uint8Array {
   try {
     return new Uint8Array(readFileSync(path));
   } catch (err) {

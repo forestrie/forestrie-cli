@@ -2,6 +2,7 @@ import type {
   ReceiptVerifyResult,
   ReceiptVerifyStage,
 } from "@forestrie/receipt-verify";
+import type { Ks256Attestation } from "@forestrie/receipt-verify";
 import type { AnchorCheck } from "./verify-anchored.js";
 
 /**
@@ -110,6 +111,46 @@ export function knownKeyStageRows(result: ReceiptVerifyResult): StageRow[] {
   });
 }
 
+/**
+ * KS256 root facts for the report: whether the root is a KS256 address, how
+ * it was supplied, and any attestation given (with whether the certificate
+ * needed it, i.e. did not verify by ecrecover alone).
+ */
+export type Ks256ReportInfo = {
+  ks256Root: boolean;
+  knownKey: boolean;
+  attestation?: Ks256Attestation;
+  attestationUsed?: boolean;
+};
+
+/** Reword the parse/signature rows for a KS256 root or an attestation. */
+export function applyKs256Rows(
+  rows: StageRow[],
+  info: Ks256ReportInfo,
+): StageRow[] {
+  const att = info.attestation;
+  return rows.map((row) => {
+    if (row.status !== "ok") return row;
+    if (row.stage === "parse" && info.ks256Root) {
+      return {
+        ...row,
+        reason: `receipt COSE decodes; ${info.knownKey ? "caller-known log key" : "genesis trust root"} loads (KS256 address)`,
+      };
+    }
+    if (row.stage === "signature" && info.ks256Root) {
+      const anchorName = info.knownKey ? "caller-known log key" : "genesis root";
+      return {
+        ...row,
+        reason:
+          att !== undefined && info.attestationUsed === true
+            ? `delegation certificate valid under the contract's signers at block ${att.blockNumber} (ERC-1271 attestation; chain ${att.chainId}) — not a signature by one key`
+            : `delegation certificate recovers to the KS256 ${anchorName} (ecrecover)`,
+      };
+    }
+    return row;
+  });
+}
+
 export function stageRows(result: ReceiptVerifyResult): StageRow[] {
   if (result.ok) {
     return VERIFY_STAGES.map((stage) => ({ stage, status: "ok" }));
@@ -185,6 +226,17 @@ export type VerifyReport = {
   reason?: string;
   stages: StageRow[];
   anchor?: AnchorReport;
+  /** KS256 root and ERC-1271 attestation facts (present for a KS256 root). */
+  ks256?: {
+    root: boolean;
+    attestation?: {
+      used: boolean;
+      chainId: string;
+      address: string;
+      blockNumber: string;
+      blockHash: string;
+    };
+  };
 };
 
 /** Extra anchor facts present only for known-accumulator checks. */
@@ -203,6 +255,7 @@ export function buildVerifyReport(opts: {
   logId?: string | undefined;
   /** Anchor-only mode: rows that reflect the skipped signature stage. */
   stagesOverride?: StageRow[] | undefined;
+  ks256?: Ks256ReportInfo | undefined;
 }): VerifyReport {
   const report: VerifyReport = {
     command: "verify",
@@ -213,6 +266,23 @@ export function buildVerifyReport(opts: {
   };
   if (opts.result.reason !== undefined) {
     report.reason = opts.result.reason;
+  }
+  if (opts.ks256 !== undefined) {
+    const att = opts.ks256.attestation;
+    report.ks256 = {
+      root: opts.ks256.ks256Root,
+      ...(att !== undefined
+        ? {
+            attestation: {
+              used: opts.ks256.attestationUsed === true,
+              chainId: att.chainId.toString(),
+              address: toHex(att.address),
+              blockNumber: att.blockNumber.toString(),
+              blockHash: toHex(att.blockHash),
+            },
+          }
+        : {}),
+    };
   }
   if (opts.anchor !== undefined) {
     const anchor: AnchorReport = {
@@ -262,4 +332,8 @@ export function buildVerifyReport(opts: {
     report.anchor = anchor;
   }
   return report;
+}
+
+function toHex(bytes: Uint8Array): string {
+  return `0x${Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
