@@ -6,7 +6,7 @@ export default defineForestrieCommand({
   meta: {
     name: "fetch-ks256-attestation",
     description:
-      "Ask a KS256 contract root (a Safe) over ERC-1271 whether it signs the receipt's delegation certificate, and cache the block-bound answer as a --ks256-attestation artifact (CBOR binding chainId/address/digest/signature hash/block) — verify then accepts the contract-rooted receipt offline as valid under the contract's signers at that block. Auditable: anyone with RPC can re-run the call at that block. An EOA root needs no attestation (verify recovers it)",
+      "Ask a KS256 contract root (a Safe) over ERC-1271 whether it signs the receipt's delegation certificate, and cache the block-bound answer as a --ks256-attestation artifact (CBOR binding chainId/address/digest/signature hash/block) — verify then accepts the contract-rooted receipt offline as valid under the contract's signers at that block. The answer is only as trustworthy as the RPC you name; for more confidence run it against several independent RPCs with the same --block and check they agree on the block hash. Auditable: anyone with RPC can re-run the call at that block. An EOA root needs no attestation (verify recovers it)",
   },
   args: {
     receipt: {
@@ -35,7 +35,7 @@ export default defineForestrieCommand({
     block: {
       type: "string",
       description:
-        "Block number to pin the calls to, or 'latest' (default) — needs an archive node for old blocks",
+        "Block number to pin the calls to, or 'latest' (default). The attestation speaks for the contract's signers at this block, so pick one near the receipt's time for an authorised-at-issuance reading; old blocks need an archive node",
       valueHint: "number|latest",
     },
     out: {

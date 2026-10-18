@@ -24,7 +24,7 @@ export default defineForestrieCommand({
     "ks256-attestation": {
       type: "string",
       description:
-        "ERC-1271 attestation (CBOR from `forestrie fetch-ks256-attestation`) for a KS256 contract root such as a Safe: the delegation certificate then verifies offline as valid under the contract's signers at the attested block, not as a signature by one key. Needs the forest chain id from --genesis. verify never calls the chain",
+        "ERC-1271 attestation (CBOR from `forestrie fetch-ks256-attestation`) for a KS256 contract root such as a Safe: the delegation certificate then verifies offline as valid under the contract's signers at the attested block, not as a signature by one key. Needs the forest chain id from --genesis. verify never calls the chain. Trust: an attestation is unsigned and only as good as whoever fetched it — accept one only from a party you would trust to read the chain for you, or fetch it yourself",
       valueHint: "path",
     },
     receipt: {

@@ -421,6 +421,16 @@ differing from the genesis, a receipt with no delegation certificate or a
 non-KS256 genesis root, and any result other than that magic word.
 Use an archive node for an old `--block`.
 
+**Trust.** An attestation is what the RPC you named reported; it is unsigned,
+and `verify` cannot tell a fetched one from a forged one. So:
+
+- **Fetch it yourself,** or accept one only from a party you would trust to
+  read the chain for you.
+- **For more confidence, ask several independent RPCs** with the same
+  `--block` and check that each succeeds with the same `blockHash`.
+- **Pick a block near the receipt's time.** The guarantee is "valid under the
+  contract's signers at that block", and owners can change after issuance.
+
 ## Use as a library: `decode-receipt`
 
 The receipt decoder behind `forestrie decode-receipt` is exported as a
