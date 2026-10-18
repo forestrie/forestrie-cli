@@ -18,8 +18,14 @@ export default defineForestrieCommand({
     "known-log-key": {
       type: "string",
       description:
-        "Caller-known log OWNER key (the delegation issuer), base64 x||y (64 bytes) (env KNOWN_LOG_KEY). Offline signer-provenance anchor that replaces --genesis; asserts (does not prove) the key-to-log binding — --genesis roots it in the forest genesis document's bootstrap key (the root log, or a delegation directly under it), while the accumulator roots (--known-accumulator / --rpc-url) supply split-view (freshness is a weaker, separate axis bearing only on coverage). See https://github.com/forestrie/protocol/blob/main/spec/receipt-trust-model.md",
-      valueHint: "base64",
+        "Caller-known log OWNER key (the delegation issuer): base64 x||y (64-byte ES256 key) or a 20-byte KS256 address (0x + 40 hex, or base64) (env KNOWN_LOG_KEY). Offline signer-provenance anchor that replaces --genesis (give --genesis too and it only supplies the forest chain id an attestation must match); asserts (does not prove) the key-to-log binding — --genesis roots it in the forest genesis document's bootstrap key (the root log, or a delegation directly under it), while the accumulator roots (--known-accumulator / --rpc-url) supply split-view (freshness is a weaker, separate axis bearing only on coverage). See https://github.com/forestrie/protocol/blob/main/spec/receipt-trust-model.md",
+      valueHint: "base64|0xaddress",
+    },
+    "ks256-attestation": {
+      type: "string",
+      description:
+        "ERC-1271 attestation (CBOR from `forestrie fetch-ks256-attestation`) for a KS256 contract root such as a Safe: the delegation certificate then verifies offline as valid under the contract's signers at the attested block, not as a signature by one key. Needs the forest chain id from --genesis. verify never calls the chain",
+      valueHint: "path",
     },
     receipt: {
       type: "string",

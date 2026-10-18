@@ -79,14 +79,21 @@ type AnchorFields = {
   /** Lower bound for the CheckpointPublished history scan (FOR-368). */
   fromBlock: bigint | undefined;
   /**
-   * Caller-known log OWNER key (the delegation-cert issuer), base64 `x||y`
-   * (64 bytes, `KNOWN_LOG_KEY`) — FOR-297 D1. An offline trust anchor that
+   * Caller-known log OWNER key (the delegation-cert issuer), `KNOWN_LOG_KEY`
+   * — FOR-297 D1: base64 `x||y` (64-byte ES256 key), or a 20-byte KS256
+   * address (`0x` + 40 hex, or base64). With `--genesis` alongside, genesis
+   * supplies only the forest chain id an attestation must match. An offline trust anchor that
    * replaces the genesis root: the known log key root of the trust model.
    * It asserts (does not prove) the key↔log binding, and gives no
    * grant-lifecycle visibility or split-view protection — the grant-chain
    * walk (approach A) derives the binding; chain anchors add split-view.
    */
   knownLogKey: string | undefined;
+  /**
+   * ERC-1271 attestation file (`forestrie fetch-ks256-attestation`) for a
+   * KS256 contract root. Read and decoded by the runner; never fetches.
+   */
+  ks256Attestation: string | undefined;
 };
 
 function parseAnchorFields(args: LooseParsedArgs): AnchorFields {
@@ -157,6 +164,7 @@ function parseAnchorFields(args: LooseParsedArgs): AnchorFields {
     logId,
     rpcUrl,
     knownLogKey,
+    ks256Attestation: optionalStringOption(args, "ks256-attestation"),
     knownAccumulator,
     massif,
     checkpointChain,

@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
 import type { Out } from "@forestrie/cli-kit/reporting";
 import {
+  decodeKs256Attestation,
   decodeTrustRootFromGenesis,
   grantCommitmentHashFromGrant,
-  importEs256PublicKeyFromGrantDataXy64,
+  type Ks256Attestation,
   verifyCheckpointChain,
   verifyGrantReceiptOffline,
   verifyGrantReceiptOfflineWithKeys,
@@ -38,8 +39,12 @@ import {
 import {
   loadPayloadVerifyArtifacts,
   loadVerifyArtifacts,
+  readBytes,
 } from "../lib/verify-inputs.js";
+import { isKs256Root, parseKnownLogKey } from "../lib/known-log-key.js";
 import {
+  applyKs256Rows,
+  type Ks256ReportInfo,
   anchorOnlyStageRows,
   buildVerifyReport,
   knownKeyStageRows,
@@ -170,7 +175,9 @@ async function checkCheckpointChainAnchor(
 ): Promise<CheckpointChainAnchorCheck> {
   const rootKeys: CryptoKey[] = [];
   if (ctx.knownLogKey !== undefined) {
-    rootKeys.push(await importKnownLogKey(ctx.knownLogKey));
+    const known = await parseKnownLogKey(ctx.knownLogKey);
+    if (isKs256Root(known)) throw new Error(KS256_CHECKPOINT_CHAIN_REFUSAL);
+    rootKeys.push(known as CryptoKey);
   }
   if (genesisCbor !== undefined) {
     const root = await decodeTrustRootFromGenesis(genesisCbor);
@@ -261,20 +268,48 @@ function printAnchorRow(
   }
 }
 
+const KS256_CHECKPOINT_CHAIN_REFUSAL =
+  "--checkpoint-chain verifies checkpoint signatures, which need an ES256 trust root: a KS256 (20-byte address) known log key cannot root them";
+
 /**
- * Import the caller-known log OWNER key (`--known-log-key`, base64 x||y).
- * The value is the delegation-cert issuer's key, NOT the sealer key — the
- * label-1000 cert still resolves under it, so the anchor survives sealer
- * rotation and the cert-validation path is exercised (FOR-297 D1).
+ * Load `--ks256-attestation` (decode failure is an input error). Undefined
+ * when the flag is absent.
  */
-async function importKnownLogKey(knownLogKey: string): Promise<CryptoKey> {
-  const bytes = new Uint8Array(Buffer.from(knownLogKey, "base64"));
-  if (bytes.length !== 64) {
-    throw new Error(
-      `--known-log-key must be base64 x||y (64 bytes), decoded ${bytes.length}`,
-    );
+function loadAttestation(path: string | undefined): Ks256Attestation | undefined {
+  if (path === undefined) return undefined;
+  const bytes = readBytes(path, "--ks256-attestation");
+  try {
+    return decodeKs256Attestation(bytes);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`--ks256-attestation '${path}' is not a valid attestation: ${message}`);
   }
-  return importEs256PublicKeyFromGrantDataXy64(bytes);
+}
+
+/** Root algorithm and attestation facts for the report. */
+async function ks256Info(
+  options: VerifyReportContext & { ks256Attestation?: string | undefined },
+  genesisCbor: Uint8Array | undefined,
+  knownKey: Awaited<ReturnType<typeof parseKnownLogKey>> | undefined,
+  attestation: Ks256Attestation | undefined,
+  used: boolean,
+): Promise<Ks256ReportInfo | undefined> {
+  let ks256Root = false;
+  if (knownKey !== undefined) {
+    ks256Root = isKs256Root(knownKey);
+  } else if (genesisCbor !== undefined) {
+    try {
+      ks256Root = isKs256Root(await decodeTrustRootFromGenesis(genesisCbor));
+    } catch {
+      // The offline verify already reported an unreadable genesis.
+    }
+  }
+  if (!ks256Root && attestation === undefined) return undefined;
+  return {
+    ks256Root,
+    knownKey: knownKey !== undefined,
+    ...(attestation !== undefined ? { attestation, attestationUsed: used } : {}),
+  };
 }
 
 /**
@@ -485,6 +520,7 @@ async function finishVerify(
   artifacts: { genesisCbor: Uint8Array | undefined; receiptCbor: Uint8Array },
   result: ReceiptVerifyResult,
   anchorLeaf?: AnchorLeaf,
+  ks256?: Ks256ReportInfo,
 ): Promise<void> {
   // FOR-297 approach C: in a chain-anchored mode (live read OR cached
   // known-accumulator snapshot), a delegation the offline verifier cannot
@@ -516,7 +552,11 @@ async function finishVerify(
       // checkpoint-chain checks always work from the recomputed peak.
       let recomputedPeak: Uint8Array | undefined;
       if (
-        (ctx.knownLogKey !== undefined || ctx.anchor !== "chain") &&
+        // A KS256 root cannot locate a detached peak by signature trial
+        // (no_es256_trust_key), so it always works from the recomputed peak.
+        (ctx.knownLogKey !== undefined ||
+          ctx.anchor !== "chain" ||
+          ks256?.ks256Root === true) &&
         anchorLeaf !== undefined
       ) {
         const recomputed = await recomputeReceiptPeak({
@@ -595,8 +635,9 @@ async function finishVerify(
 
   const ok =
     result.ok && (ctx.anchor === "offline" || anchor?.anchored === true);
-  const rows =
+  const baseRows =
     ctx.knownLogKey !== undefined ? knownKeyStageRows(result) : stageRows(result);
+  const rows = ks256 !== undefined ? applyKs256Rows(baseRows, ks256) : baseRows;
 
   if (ctx.json) {
     const report = buildVerifyReport({
@@ -613,7 +654,10 @@ async function finishVerify(
       anchor,
       univocity: ctx.univocity,
       logId: ctx.logId,
-      ...(ctx.knownLogKey !== undefined ? { stagesOverride: rows } : {}),
+      ...(ctx.knownLogKey !== undefined || ks256 !== undefined
+        ? { stagesOverride: rows }
+        : {}),
+      ...(ks256 !== undefined ? { ks256 } : {}),
     });
     out.out(JSON.stringify(report, null, 2));
   } else {
@@ -674,46 +718,89 @@ export async function runVerify(
   options: VerifyOptions,
 ): Promise<void> {
   let artifacts: ReturnType<typeof loadPayloadVerifyArtifacts>;
+  let attestation: Ks256Attestation | undefined;
+  let knownKey: Awaited<ReturnType<typeof parseKnownLogKey>> | undefined;
   try {
     artifacts = loadPayloadVerifyArtifacts(options);
+    attestation = loadAttestation(options.ks256Attestation);
+    knownKey = await parseKnownKeyForRun(options);
   } catch (err) {
     reportRunError(out, options, "input", err);
     return;
   }
 
-  let result: ReceiptVerifyResult;
-  try {
-    if (options.knownLogKey !== undefined) {
-      // FOR-297 D1: caller-known log owner key replaces the genesis roots.
-      const knownKey = await importKnownLogKey(options.knownLogKey);
-      result = remapKnownKeyFailure(
-        await verifyReceiptOfflineWithKeys({
+  const run = (att: Ks256Attestation | undefined) =>
+    knownKey !== undefined
+      ? // FOR-297 D1: caller-known log owner key replaces the genesis roots.
+        // Genesis, if also given, only supplies the forest chain id.
+        verifyReceiptOfflineWithKeys({
           receiptCbor: artifacts.receiptCbor,
           payload: artifacts.payload,
           idtimestampBe8: artifacts.idtimestampBe8,
           trustKeys: [knownKey],
-        }),
-      );
-    } else {
-      // Parsing guarantees --genesis when --known-log-key is absent.
-      result = await verifyReceiptOffline({
-        ...artifacts,
-        genesisCbor: artifacts.genesisCbor!,
-      });
-    }
+          ...(att !== undefined ? { ks256Attestation: att } : {}),
+          ...(artifacts.genesisCbor !== undefined
+            ? { forestGenesisCbor: artifacts.genesisCbor }
+            : {}),
+        }).then(remapKnownKeyFailure)
+      : // Parsing guarantees --genesis when --known-log-key is absent.
+        verifyReceiptOffline({
+          receiptCbor: artifacts.receiptCbor,
+          payload: artifacts.payload,
+          idtimestampBe8: artifacts.idtimestampBe8,
+          genesisCbor: artifacts.genesisCbor!,
+          ...(att !== undefined ? { ks256Attestation: att } : {}),
+        });
+
+  let result: ReceiptVerifyResult;
+  let ks256: Ks256ReportInfo | undefined;
+  try {
+    result = await run(attestation);
+    ks256 = await ks256Info(
+      options,
+      artifacts.genesisCbor,
+      knownKey,
+      attestation,
+      // The attestation was needed only if the certificate does not verify
+      // by ecrecover alone.
+      attestation !== undefined && result.ok ? !(await run(undefined)).ok : false,
+    );
   } catch (err) {
     reportRunError(out, options, "verify", err);
     return;
   }
 
-  await finishVerify(out, options, artifacts, result, {
-    idtimestampBe8: artifacts.idtimestampBe8,
-    inner: async () =>
-      new Uint8Array(
-        // Copy pins the generic to ArrayBuffer for the dom BufferSource type.
-        await crypto.subtle.digest("SHA-256", new Uint8Array(artifacts.payload)),
-      ),
-  });
+  await finishVerify(
+    out,
+    options,
+    artifacts,
+    result,
+    {
+      idtimestampBe8: artifacts.idtimestampBe8,
+      inner: async () =>
+        new Uint8Array(
+          // Copy pins the generic to ArrayBuffer for the dom BufferSource type.
+          await crypto.subtle.digest("SHA-256", new Uint8Array(artifacts.payload)),
+        ),
+    },
+    ks256,
+  );
+}
+
+/**
+ * Parse `--known-log-key`, refusing a KS256 key where the chosen anchor mode
+ * needs ES256 checkpoint signatures.
+ */
+async function parseKnownKeyForRun(options: {
+  knownLogKey: string | undefined;
+  anchor: string;
+}): Promise<Awaited<ReturnType<typeof parseKnownLogKey>> | undefined> {
+  if (options.knownLogKey === undefined) return undefined;
+  const key = await parseKnownLogKey(options.knownLogKey);
+  if (isKs256Root(key) && options.anchor === "checkpoints") {
+    throw new Error(KS256_CHECKPOINT_CHAIN_REFUSAL);
+  }
+  return key;
 }
 
 /**
@@ -728,40 +815,62 @@ export async function runVerifyGrant(
   options: VerifyGrantOptions,
 ): Promise<void> {
   let artifacts: ReturnType<typeof loadVerifyArtifacts>;
+  let attestation: Ks256Attestation | undefined;
+  let knownKey: Awaited<ReturnType<typeof parseKnownLogKey>> | undefined;
   try {
     artifacts = loadVerifyArtifacts(options);
+    attestation = loadAttestation(options.ks256Attestation);
+    knownKey = await parseKnownKeyForRun(options);
   } catch (err) {
     reportRunError(out, options, "input", err);
     return;
   }
 
-  let result: ReceiptVerifyResult;
-  try {
-    if (options.knownLogKey !== undefined) {
-      // FOR-297 D1: caller-known log owner key replaces the genesis roots.
-      const knownKey = await importKnownLogKey(options.knownLogKey);
-      result = remapKnownKeyFailure(
-        await verifyGrantReceiptOfflineWithKeys({
+  const run = (att: Ks256Attestation | undefined) =>
+    knownKey !== undefined
+      ? verifyGrantReceiptOfflineWithKeys({
           receiptCbor: artifacts.receiptCbor,
           grant: artifacts.grant,
           idtimestampBe8: artifacts.idtimestampBe8,
           trustKeys: [knownKey],
-        }),
-      );
-    } else {
-      // Parsing guarantees --genesis when --known-log-key is absent.
-      result = await verifyGrantReceiptOffline({
-        ...artifacts,
-        genesisCbor: artifacts.genesisCbor!,
-      });
-    }
+          ...(att !== undefined ? { ks256Attestation: att } : {}),
+          ...(artifacts.genesisCbor !== undefined
+            ? { forestGenesisCbor: artifacts.genesisCbor }
+            : {}),
+        }).then(remapKnownKeyFailure)
+      : verifyGrantReceiptOffline({
+          receiptCbor: artifacts.receiptCbor,
+          grant: artifacts.grant,
+          idtimestampBe8: artifacts.idtimestampBe8,
+          genesisCbor: artifacts.genesisCbor!,
+          ...(att !== undefined ? { ks256Attestation: att } : {}),
+        });
+
+  let result: ReceiptVerifyResult;
+  let ks256: Ks256ReportInfo | undefined;
+  try {
+    result = await run(attestation);
+    ks256 = await ks256Info(
+      options,
+      artifacts.genesisCbor,
+      knownKey,
+      attestation,
+      attestation !== undefined && result.ok ? !(await run(undefined)).ok : false,
+    );
   } catch (err) {
     reportRunError(out, options, "verify", err);
     return;
   }
 
-  await finishVerify(out, options, artifacts, result, {
-    idtimestampBe8: artifacts.idtimestampBe8,
-    inner: () => grantCommitmentHashFromGrant(artifacts.grant),
-  });
+  await finishVerify(
+    out,
+    options,
+    artifacts,
+    result,
+    {
+      idtimestampBe8: artifacts.idtimestampBe8,
+      inner: () => grantCommitmentHashFromGrant(artifacts.grant),
+    },
+    ks256,
+  );
 }
