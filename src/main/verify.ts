@@ -256,6 +256,14 @@ function printAttestationUsage(out: Out, info: Ks256ReportInfo): void {
       u.links.length > 0 ? `; carries chain link(s) ${u.links.join(", ")}` : "",
     );
   }
+  for (const u of info.usage.rejected) {
+    out.print(
+      "verify: attestation #%d rejected — digest 0x%s%s",
+      u.index,
+      u.digestHex.slice(0, 16) + "…",
+      u.links.length > 0 ? `; refused for chain link(s) ${u.links.join(", ")}` : "",
+    );
+  }
   for (const u of info.usage.unused) {
     out.print(
       "verify: attestation #%d unused — digest 0x%s: %s",
@@ -352,40 +360,68 @@ function loadAttestations(paths: readonly string[]): Ks256Attestation[] {
 }
 
 /**
- * Attestation accounting for ONE receipt: the attestation made for its
- * certificate (digest and signature hash, via receipt-verify's selection)
- * is used when the receipt verifies only because of it; every other one is
- * reported unused with a reason.
+ * Attestation accounting for ONE receipt. Every attestation made for the
+ * receipt's certificate (digest and signature hash, via receipt-verify's
+ * selection) is tried in order and the first that resolves wins. If the
+ * certificate verifies without any attestation they are all `not_needed`;
+ * otherwise those before the first that resolves are `rejected`, that one is
+ * `used`, and later ones are `duplicate`. Others have no matching
+ * certificate.
  */
-function receiptAttestationUsage(
+async function receiptAttestationUsage(
   receiptCbor: Uint8Array,
   attestations: readonly Ks256Attestation[],
-  withAttestations: ReceiptVerifyResult,
-  withoutAttestations: ReceiptVerifyResult | undefined,
-): Ks256AttestationUsage {
+  result: ReceiptVerifyResult,
+  run: (atts: Ks256Attestation[]) => Promise<ReceiptVerifyResult>,
+): Promise<Ks256AttestationUsage> {
   let cert: ReturnType<typeof extractKs256DelegationDigest> = null;
   try {
     cert = extractKs256DelegationDigest(receiptCbor);
   } catch {
     cert = null;
   }
-  const usage: Ks256AttestationUsage = { used: [], unused: [] };
+  const usage: Ks256AttestationUsage = { used: [], rejected: [], unused: [] };
+  const hex = (a: Ks256Attestation) =>
+    Array.from(a.digest, (b) => b.toString(16).padStart(2, "0")).join("");
+  const matching: number[] = [];
   attestations.forEach((a, index) => {
-    const digestHex = Array.from(a.digest, (b) =>
-      b.toString(16).padStart(2, "0"),
-    ).join("");
-    const made =
-      cert !== null && selectKs256Attestation(cert, [a]) !== undefined;
-    if (!made) {
-      usage.unused.push({ index, digestHex, reason: "no_matching_certificate" });
-    } else if (!withAttestations.ok) {
-      usage.unused.push({ index, digestHex, reason: "rejected" });
-    } else if (withoutAttestations !== undefined && !withoutAttestations.ok) {
-      usage.used.push({ index, digestHex, links: [] });
+    if (cert !== null && selectKs256Attestation(cert, [a]) !== undefined) {
+      matching.push(index);
     } else {
-      usage.unused.push({ index, digestHex, reason: "not_needed" });
+      usage.unused.push({
+        index,
+        digestHex: hex(a),
+        reason: "no_matching_certificate",
+      });
     }
   });
+  const withoutOk = result.ok && matching.length > 0 ? (await run([])).ok : false;
+  let winner: number | undefined;
+  if (result.ok && !withoutOk) {
+    for (const index of matching) {
+      if ((await run([attestations[index]!])).ok) {
+        winner = index;
+        break;
+      }
+    }
+  }
+  let seenWinner = false;
+  for (const index of matching) {
+    const digestHex = hex(attestations[index]!);
+    if (withoutOk) {
+      usage.unused.push({ index, digestHex, reason: "not_needed" });
+    } else if (winner === undefined) {
+      usage.rejected.push({ index, digestHex, links: [] });
+    } else if (index === winner) {
+      usage.used.push({ index, digestHex, links: [] });
+      seenWinner = true;
+    } else if (seenWinner) {
+      usage.unused.push({ index, digestHex, reason: "duplicate" });
+    } else {
+      usage.rejected.push({ index, digestHex, links: [] });
+    }
+  }
+  usage.unused.sort((a, b) => a.index - b.index);
   return usage;
 }
 
@@ -676,13 +712,24 @@ function mergeAttestationUsage(
       links: [...new Set([...(prev?.links ?? []), ...u.links])],
     });
   }
+  const rejected = new Map<number, Ks256AttestationUsage["rejected"][number]>();
+  for (const u of [...receipt.rejected, ...chain.rejected]) {
+    const prev = rejected.get(u.index);
+    rejected.set(u.index, {
+      ...u,
+      links: [...new Set([...(prev?.links ?? []), ...u.links])],
+    });
+  }
   const unused = new Map<number, Ks256AttestationUsage["unused"][number]>();
   for (const u of [...receipt.unused, ...chain.unused]) {
-    if (!used.has(u.index)) unused.set(u.index, u);
+    if (!used.has(u.index) && !rejected.has(u.index)) unused.set(u.index, u);
   }
+  const byIndex = <T extends { index: number }>(m: Map<number, T>) =>
+    [...m.values()].sort((a, b) => a.index - b.index);
   return {
-    used: [...used.values()].sort((a, b) => a.index - b.index),
-    unused: [...unused.values()].sort((a, b) => a.index - b.index),
+    used: byIndex(used),
+    rejected: byIndex(rejected),
+    unused: byIndex(unused),
   };
 }
 
@@ -977,11 +1024,11 @@ export async function runVerify(
       artifacts.genesisCbor,
       knownKey,
       attestations,
-      receiptAttestationUsage(
+      await receiptAttestationUsage(
         artifacts.receiptCbor,
         attestations,
         result,
-        attestations.length > 0 && result.ok ? await run([]) : undefined,
+        run,
       ),
     );
   } catch (err) {
@@ -1065,11 +1112,11 @@ export async function runVerifyGrant(
       artifacts.genesisCbor,
       knownKey,
       attestations,
-      receiptAttestationUsage(
+      await receiptAttestationUsage(
         artifacts.receiptCbor,
         attestations,
         result,
-        attestations.length > 0 && result.ok ? await run([]) : undefined,
+        run,
       ),
     );
   } catch (err) {

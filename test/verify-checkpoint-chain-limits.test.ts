@@ -192,14 +192,14 @@ function attestationFile(
   name: string,
   fx: Ks,
   cert: { digest: Uint8Array; signature: Uint8Array },
-  over: { digest?: Uint8Array } = {},
+  over: { digest?: Uint8Array; address?: Uint8Array } = {},
 ): string {
   writeFileSync(
     file(name),
     encodeKs256Attestation({
       version: 1,
       chainId: 84532n,
-      address: fx.rootAddress,
+      address: over.address ?? fx.rootAddress,
       digest: over.digest ?? cert.digest,
       signatureHash: hexToBytes(keccak256(cert.signature)),
       blockNumber: 123n,
@@ -278,6 +278,35 @@ describe("--checkpoint-chain with KS256 roots", () => {
     expect(att?.unused).toMatchObject([
       { index: 1, reason: "no_matching_certificate" },
     ]);
+  });
+
+  test("[bad, good] repeated attestations: the good one wins, the bad one is rejected (offline and chain)", async () => {
+    const bad = attestationFile("safe-bad.att", safe, safe.certs[0]!, {
+      address: new Uint8Array(20).fill(0x99),
+    });
+    const good = attestationFile("safe-good.att", safe, safe.certs[0]!);
+    for (const extra of [{}, { "checkpoint-chain": path.join(dir, "safe-sths") }]) {
+      const r = runCli([
+        "verify-grant",
+        "--json",
+        "--genesis",
+        file("safe-genesis.cbor"),
+        "--receipt",
+        file("safe-receipt.cbor"),
+        "--committed-grant",
+        safe.grantCoseB64,
+        ...Object.entries(extra).flatMap(([k, v]) => [`--${k}`, v]),
+        "--ks256-attestation",
+        bad,
+        "--ks256-attestation",
+        good,
+      ]);
+      expect(r.exitCode).toBe(0);
+      const att = (JSON.parse(r.stdout) as VerifyReport).ks256?.attestations;
+      expect(att?.used.map((u) => u.index)).toEqual([1]);
+      expect(att?.rejected.map((u) => u.index)).toEqual([0]);
+      expect(att?.unused).toEqual([]);
+    }
   });
 
   test("a rotated Safe passes with BOTH attestations, repeated on the command line", async () => {

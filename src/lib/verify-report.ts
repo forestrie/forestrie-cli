@@ -270,6 +270,12 @@ export type VerifyReport = {
         /** Chain links that needed it (checkpoint-chain only). */
         links?: number[];
       }[];
+      /** Tried for a certificate and refused (own checks failed there). */
+      rejected: {
+        index: number;
+        digest: string;
+        links?: number[];
+      }[];
       unused: { index: number; digest: string; reason: string }[];
     };
   };
@@ -333,6 +339,11 @@ export function buildVerifyReport(opts: {
                   ...(u.links.length > 0 ? { links: u.links } : {}),
                 };
               }),
+              rejected: info.usage.rejected.map((u) => ({
+                index: u.index,
+                digest: `0x${u.digestHex}`,
+                ...(u.links.length > 0 ? { links: u.links } : {}),
+              })),
               unused: info.usage.unused.map((u) => ({
                 index: u.index,
                 digest: `0x${u.digestHex}`,

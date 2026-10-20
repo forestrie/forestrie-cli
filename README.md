@@ -409,9 +409,10 @@ id (`--genesis`; under `--known-log-key` without it the result is
 `ks256_attestation_chain_unbound`). `--ks256-attestation` is repeatable (or
 comma-separated): a Safe that rotated its delegate signs one certificate per
 delegate, and each needs its own attestation, matched by certificate digest and
-signature hash. Every attestation supplied is reported used (with the chain
-links it carried) or unused with a reason (`no_matching_certificate`,
-`not_needed`, `rejected`) — human lines on stderr, `ks256.attestations` in
+signature hash. All attestations matching a certificate are tried and the first that
+resolves wins. Every attestation supplied is reported used (with the chain
+links it carried), rejected (tried and refused), or unused with a reason
+(`no_matching_certificate`, `not_needed`, `duplicate`) — human lines on stderr, `ks256.attestations` in
 `--json`. With `--checkpoint-chain` the attestations vouch for every link's
 certificate, and a KS256 genesis or known key roots the chain (attestations
 there need `--genesis` for the chain id). Offline `verify` never calls the chain.
