@@ -356,6 +356,13 @@ export async function buildCheckpoint(opts: {
 export async function buildDelegationCert(
   certSigner: CryptoKeyPair,
   delegatedPublic: CryptoKey,
+  /** Payload labels 3/4/8/9: coverage window and validity (Unix seconds). */
+  constraints?: {
+    mmrStart: number;
+    mmrEnd: number;
+    issuedAt: number;
+    expiresAt: number;
+  },
 ): Promise<Uint8Array> {
   const raw = new Uint8Array(
     (await crypto.subtle.exportKey("raw", delegatedPublic)) as ArrayBuffer,
@@ -366,7 +373,19 @@ export async function buildDelegationCert(
     [-2, raw.slice(1, 33)], // x
     [-3, raw.slice(33, 65)], // y
   ]);
-  const payload = cborBytes(new Map<number, unknown>([[5, coseKey]]));
+  const payload = cborBytes(
+    new Map<number, unknown>([
+      [5, coseKey],
+      ...(constraints !== undefined
+        ? ([
+            [3, constraints.mmrStart],
+            [4, constraints.mmrEnd],
+            [8, constraints.issuedAt],
+            [9, constraints.expiresAt],
+          ] as [number, unknown][])
+        : []),
+    ]),
+  );
   const protectedInner = cborBytes(new Map<number, unknown>([[1, -7]]));
   const sigStructure = encodeSigStructure(
     protectedInner,
@@ -786,4 +805,181 @@ export async function buildKs256Fixture(opts?: {
 
 function bytesToHexPrefixed(bytes: Uint8Array): `0x${string}` {
   return `0x${bytesToHex(bytes)}`;
+}
+
+/** Leaf time as receipt-verify derives it from an idtimestamp (FOR-420). */
+export function leafTimeFromIdtimestamp(idtimestampBe8: Uint8Array): number {
+  const id = new DataView(
+    idtimestampBe8.buffer,
+    idtimestampBe8.byteOffset,
+    8,
+  ).getBigUint64(0, false);
+  return Number((((1n << 40n) - 1n) + (id >> 24n)) / 1000n);
+}
+
+/**
+ * A KS256 retained checkpoint chain (sth 0->3, sth 3->7) plus a receipt for
+ * the leaf at mmrIndex 1, every seal delegated by a KS256 certificate.
+ *
+ * - default: an EOA root signs the certificates (ecrecover).
+ * - `contractRoot`: a "Safe" address root; the certificates are signed by
+ *   another key, so each verifies only with its own ERC-1271 attestation.
+ * - `rotate`: the second checkpoint is sealed under a SECOND delegate with
+ *   its own certificate (a Safe that rotated its delegate), so a contract
+ *   root needs two attestations; the receipt itself uses the first.
+ */
+export async function buildKs256ChainFixture(opts?: {
+  contractRoot?: boolean;
+  rotate?: boolean;
+}): Promise<{
+  genesisCbor: Uint8Array;
+  receiptCbor: Uint8Array;
+  grantCoseB64: string;
+  entryIdHex: string;
+  peak: Uint8Array;
+  checkpoints: Uint8Array[];
+  rootAddress: Uint8Array;
+  /** Distinct certificates, in first-use order. */
+  certs: { digest: Uint8Array; signature: Uint8Array }[];
+}> {
+  const rootPk = generatePrivateKey();
+  const rootAccount = privateKeyToAccount(rootPk);
+  const rootAddress = opts?.contractRoot
+    ? crypto.getRandomValues(new Uint8Array(20))
+    : hexToBytes(rootAccount.address);
+  const signerPk = opts?.contractRoot ? generatePrivateKey() : rootPk;
+
+  const grant = grantWithData(FIXTURE_LOG_ID, rootAddress);
+  const idtimestampBe8 = new Uint8Array(8).fill(0x02);
+  const hasher = await createSyncHasher();
+  const inner0 = await grantCommitmentHash(
+    grantWithData(FIXTURE_LOG_ID, new Uint8Array(20).fill(0xaa)),
+  );
+  const leaf0Hash = await univocityLeafHash(new Uint8Array(8).fill(0x01), inner0);
+  const leaf1Hash = await univocityLeafHash(
+    idtimestampBe8,
+    await grantCommitmentHash(grant),
+  );
+  const getHash = (i: bigint) => (i === 0n ? leaf0Hash : leaf1Hash);
+  const proof: Proof = {
+    path: inclusionProofForIndex(getHash, 1n, 1n),
+    mmrIndex: 1n,
+  };
+  const peak = await calculateRoot(hasher, leaf1Hash, proof, 1n);
+  // Growth to 7 nodes buries the receipt's peak (node 2) as in the ES256 chain.
+  const leaf3Hash = await univocityLeafHash(
+    new Uint8Array(8).fill(0x03),
+    await sha256(new Uint8Array([0xd3])),
+  );
+  const leaf4Hash = await univocityLeafHash(
+    new Uint8Array(8).fill(0x04),
+    await sha256(new Uint8Array([0xd4])),
+  );
+  const node5 = await calculateRoot(
+    hasher,
+    leaf3Hash,
+    { path: [leaf4Hash], mmrIndex: 3n },
+    3n,
+  );
+  const peak7 = await calculateRoot(
+    hasher,
+    leaf1Hash,
+    { path: [leaf0Hash, node5], mmrIndex: 1n },
+    1n,
+  );
+
+  const leafTime = leafTimeFromIdtimestamp(idtimestampBe8);
+  const certs: { digest: Uint8Array; signature: Uint8Array }[] = [];
+  const delegate = async () => {
+    const sealer = await generateP256KeyPair();
+    const sealerRaw = new Uint8Array(
+      (await crypto.subtle.exportKey("raw", sealer.publicKey)) as ArrayBuffer,
+    );
+    const tbs = buildDelegationToBeSignedKs256(
+      {
+        logIdHex32: FIXTURE_LOG_ID.replaceAll("-", ""),
+        mmrStart: 0,
+        mmrEnd: 65535,
+        delegatedPublicKeyCbor: cborBytes(
+          new Map<number, unknown>([
+            [1, 2],
+            [-1, 1],
+            [-2, sealerRaw.slice(1, 33)],
+            [-3, sealerRaw.slice(33, 65)],
+          ]),
+        ),
+        issuedAt: leafTime - 3600,
+        expiresAt: leafTime + 3600,
+        delegationId: crypto.getRandomValues(new Uint8Array(16)),
+      },
+      rootAddress,
+    );
+    const digest = hexToBytes(keccak256(tbs.sigStructureBytes));
+    const sig = await sign({
+      hash: bytesToHexPrefixed(digest),
+      privateKey: signerPk,
+    });
+    const signature = new Uint8Array(65);
+    signature.set(hexToBytes(sig.r), 0);
+    signature.set(hexToBytes(sig.s), 32);
+    signature[64] = sig.yParity ?? 0;
+    certs.push({ digest, signature });
+    return {
+      sealer,
+      cert: encodeIntKeyCbor([
+        tbs.protectedBytes,
+        new Map<number, unknown>(),
+        tbs.payloadBytes,
+        signature,
+      ]),
+    };
+  };
+  const first = await delegate();
+  const second = opts?.rotate ? await delegate() : first;
+
+  const cp1 = await buildCheckpoint({
+    signer: first.sealer,
+    treeSize1: 0n,
+    treeSize2: 3n,
+    paths: [],
+    rightPeaks: [peak],
+    accumulator: [peak],
+    delegationCert: first.cert,
+  });
+  const cp2 = await buildCheckpoint({
+    signer: second.sealer,
+    treeSize1: 3n,
+    treeSize2: 7n,
+    paths: [[node5]],
+    rightPeaks: [],
+    accumulator: [peak7],
+    delegationCert: second.cert,
+  });
+  const receiptCbor = await buildPeakReceipt({
+    signer: first.sealer,
+    peak,
+    proof,
+    delegationCert: first.cert,
+  });
+  const genesisCbor = cborBytes(
+    new Map<number, unknown>([
+      [LABEL_GENESIS_VERSION, GENESIS_SCHEMA_V2],
+      [LABEL_GENESIS_ALG, COSE_ALG_KS256],
+      [LABEL_BOOTSTRAP_KEY, rootAddress],
+      [LABEL_UNIVOCITY_ADDR, new Uint8Array(20).fill(0xab)],
+      [LABEL_CHAIN_ID, "84532"],
+      [LABEL_LOG_ID, toPaddedWire32(uuidToBytes(FIXTURE_LOG_ID))],
+    ]),
+  );
+  const grantCoseCbor = await buildGrantCose(encodeGrantPayload(grant), idtimestampBe8);
+  return {
+    genesisCbor,
+    receiptCbor,
+    grantCoseB64: Buffer.from(grantCoseCbor).toString("base64"),
+    entryIdHex: entryIdHexFor(idtimestampBe8, 1n),
+    peak,
+    checkpoints: [cp1, cp2],
+    rootAddress,
+    certs,
+  };
 }
