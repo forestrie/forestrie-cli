@@ -1,5 +1,5 @@
 import { bytesEqual } from "./bytes.js";
-import { ethCall, normalizeHexAddress } from "@forestrie/chain-rpc";
+import { ethCall, ethRpc, normalizeHexAddress } from "@forestrie/chain-rpc";
 import { verifyCoseSign1WithParsedKey } from "@forestrie/encoding";
 import {
   calculateRoot,
@@ -7,6 +7,7 @@ import {
   type Hasher,
 } from "@forestrie/merklelog";
 import {
+  decodeChainBindingFromGenesis,
   decodeTrustRootFromGenesis,
   parseReceipt,
   univocityLeafHash,
@@ -323,4 +324,38 @@ export async function checkReceiptAnchored(opts: {
           ),
         }),
   };
+}
+
+/** Stable failure token: the anchor is not the genesis forest's contract/chain. */
+export const ANCHOR_FOREST_MISMATCH = "anchor_forest_mismatch";
+
+/**
+ * Forest binding of an anchor (chain or snapshot) to the genesis: the
+ * univocity contract and chain id the genesis names. Returns a human detail
+ * string on mismatch, undefined when the anchor belongs to the genesis forest.
+ * An anchor from another forest is never acceptable once a genesis is given.
+ */
+export function forestMismatchDetail(
+  genesisCbor: Uint8Array,
+  anchor: { univocity: string; chainId: bigint },
+): string | undefined {
+  const binding = decodeChainBindingFromGenesis(genesisCbor);
+  const given = normalizeHexAddress(anchor.univocity);
+  const want = normalizeHexAddress(binding.univocity);
+  if (given === null || given !== want) {
+    return `anchor univocity ${anchor.univocity} is not the genesis forest's contract ${binding.univocity}`;
+  }
+  if (anchor.chainId !== BigInt(binding.chainId)) {
+    return `anchor chain id ${anchor.chainId} differs from the genesis chain id ${binding.chainId}`;
+  }
+  return undefined;
+}
+
+/** Live read of the RPC's chain id (`eth_chainId`). */
+export async function readRpcChainId(rpcUrl: string): Promise<bigint> {
+  const v = await ethRpc(rpcUrl, "eth_chainId", []);
+  if (typeof v !== "string" || !/^0x[0-9a-fA-F]+$/.test(v)) {
+    throw new Error(`eth_chainId: expected a hex quantity, got ${String(v)}`);
+  }
+  return BigInt(v);
 }

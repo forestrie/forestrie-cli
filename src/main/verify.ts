@@ -15,7 +15,10 @@ import {
 import type { VerifyGrantOptions, VerifyOptions } from "../options/verify.js";
 import { findPeakInPublishedHistory } from "../lib/verify-eventscan.js";
 import {
+  ANCHOR_FOREST_MISMATCH,
   checkReceiptAnchored,
+  forestMismatchDetail,
+  readRpcChainId,
   receiptLeafIndex,
   recomputeReceiptPeak,
   type AnchorCheck,
@@ -249,6 +252,8 @@ function printAnchorRow(
       hint =
         " — entry not anchored on-chain yet; retry after the next" +
         " checkpoint publishes";
+    } else if (anchor.reason === ANCHOR_FOREST_MISMATCH) {
+      hint = ` — ${(anchor as { forestMismatch?: string }).forestMismatch ?? "anchor is not the genesis forest's"}`;
     } else if (anchor.reason === "receipt_newer_than_checkpoint_chain") {
       hint =
         " — the supplied chain ends before this entry; fetch the newer" +
@@ -441,6 +446,7 @@ async function tryAnchorOnlyVerify(
   }
 
   const isSnapshot = ctx.anchor === "accumulator";
+  const offlineReason = result.ok ? "unknown" : (result.reason ?? "unknown");
   const okResult: ReceiptVerifyResult = { ok: true, stage: "binding" };
   if (ctx.json) {
     const report = buildVerifyReport({
@@ -450,11 +456,12 @@ async function tryAnchorOnlyVerify(
       anchor,
       univocity: ctx.univocity,
       logId: ctx.logId,
-      stagesOverride: anchorOnlyStageRows(),
+      stagesOverride: anchorOnlyStageRows(offlineReason),
+      offlineReason,
     });
     out.out(JSON.stringify(report, null, 2));
   } else {
-    for (const row of anchorOnlyStageRows()) {
+    for (const row of anchorOnlyStageRows(offlineReason)) {
       const detail = row.reason ?? STAGE_NARRATION[row.stage];
       out.print(
         "verify: %s %s — %s",
@@ -466,8 +473,8 @@ async function tryAnchorOnlyVerify(
     printAnchorRow(out, ctx, anchor);
     out.out(
       isSnapshot
-        ? `PASS: receipt verified against the known accumulator (anchored size ${anchor.size}, read from chain at block ${anchor.blockNumber}; signature enforced by univocity at publish)`
-        : `PASS: receipt verified against the on-chain accumulator (anchored size ${anchor.size}; signature enforced by univocity at publish)`,
+        ? `PASS: verified against the known accumulator (anchored size ${anchor.size}, read from chain at block ${anchor.blockNumber}); signature not checked offline (${offlineReason})`
+        : `PASS: verified against the on-chain accumulator (anchored size ${anchor.size}); signature not checked offline (${offlineReason})`,
     );
   }
   process.exitCode = 0;
@@ -514,6 +521,51 @@ type HistoricalAnchorFields = {
   txHash: string;
 };
 
+/**
+ * Offline signature failures the chain can stand in for (FOR-297 approach C):
+ * the delegation chain or KS256 root is one the offline verifier cannot
+ * resolve, but univocity accepted the checkpoint only if its receipt verified
+ * under the log's root key (ES256, or KS256 via ecrecover / ERC-1271) or a
+ * delegate the root signed. NOT `delegation_out_of_range` or
+ * `delegation_expired`: those are claims about this receipt that the chain
+ * does not vouch for (it checks neither).
+ */
+function isAnchorFallbackReason(reason: string | undefined): boolean {
+  return (
+    reason === "delegation_invalid" ||
+    reason === "delegation_not_ks256" ||
+    reason === "ks256_root_not_recovered" ||
+    reason === "ks256_root_requires_delegation" ||
+    (reason !== undefined && reason.startsWith("ks256_attestation_"))
+  );
+}
+
+/**
+ * Bind the anchor to the genesis forest: live reads compare `--univocity` and
+ * the RPC's `eth_chainId`; a snapshot compares its recorded contract and
+ * chain. Returns the mismatch detail, or undefined when they agree.
+ */
+async function anchorForestMismatch(
+  ctx: VerifyReportContext,
+  genesisCbor: Uint8Array,
+): Promise<string | undefined> {
+  if (ctx.anchor === "accumulator") {
+    const snapshot = decodeKnownAccumulator(
+      new Uint8Array(readFileSync(ctx.knownAccumulator!)),
+    );
+    return forestMismatchDetail(genesisCbor, {
+      univocity: `0x${Array.from(snapshot.univocity, (b) =>
+        b.toString(16).padStart(2, "0"),
+      ).join("")}`,
+      chainId: snapshot.chainId,
+    });
+  }
+  return forestMismatchDetail(genesisCbor, {
+    univocity: ctx.univocity!,
+    chainId: await readRpcChainId(ctx.rpcUrl!),
+  });
+}
+
 async function finishVerify(
   out: Out,
   ctx: VerifyReportContext,
@@ -526,13 +578,31 @@ async function finishVerify(
   // known-accumulator snapshot), a delegation the offline verifier cannot
   // resolve is not the end — the anchored accumulator IS the split-view
   // authority, so verify against it without the signature.
-  if (
-    (ctx.anchor === "chain" || ctx.anchor === "accumulator") &&
+  const chainAnchored = ctx.anchor === "chain" || ctx.anchor === "accumulator";
+  const fallbackEligible =
+    chainAnchored &&
     !result.ok &&
     result.stage === "signature" &&
-    result.reason === "delegation_invalid" &&
-    anchorLeaf !== undefined
-  ) {
+    isAnchorFallbackReason(result.reason) &&
+    // A caller-known key is the trust anchor: its mismatch is never excused
+    // by the chain (ES256 is remapped to known_key_mismatch; KS256 reasons
+    // are gated here for the same effect).
+    ctx.knownLogKey === undefined &&
+    anchorLeaf !== undefined;
+
+  // The anchor must belong to the genesis forest whenever a genesis was
+  // given: an accumulator from another contract/chain is never acceptable.
+  let forestMismatch: string | undefined;
+  if (chainAnchored && artifacts.genesisCbor !== undefined && (result.ok || fallbackEligible)) {
+    try {
+      forestMismatch = await anchorForestMismatch(ctx, artifacts.genesisCbor);
+    } catch (err) {
+      reportRunError(out, ctx, "anchor", err);
+      return;
+    }
+  }
+
+  if (fallbackEligible && forestMismatch === undefined) {
     const handled = await tryAnchorOnlyVerify(
       out,
       ctx,
@@ -544,7 +614,16 @@ async function finishVerify(
   }
 
   let anchor: (AnchorCheck & Partial<SnapshotAnchorCheck>) | undefined;
-  if (ctx.anchor !== "offline" && result.ok) {
+  if (forestMismatch !== undefined) {
+    anchor = {
+      accumulator: [],
+      size: 0n,
+      anchored: false,
+      matchedPeak: null,
+      reason: ANCHOR_FOREST_MISMATCH,
+      forestMismatch,
+    } as AnchorCheck & { forestMismatch: string };
+  } else if (ctx.anchor !== "offline" && result.ok) {
     try {
       // Under a caller-known key there may be no genesis to locate a detached
       // peak by trust-key trial — recompute the peak from leaf + proof
@@ -694,6 +773,8 @@ async function finishVerify(
       } else {
         out.out("PASS: receipt verified offline against the cached checkpoint");
       }
+    } else if (forestMismatch !== undefined) {
+      out.out(`FAIL: stage=anchor reason=${ANCHOR_FOREST_MISMATCH}`);
     } else if (!result.ok) {
       out.out(
         `FAIL: stage=${result.stage} reason=${result.reason ?? "unknown"}`,

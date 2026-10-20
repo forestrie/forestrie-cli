@@ -3,7 +3,7 @@ import type {
   ReceiptVerifyStage,
 } from "@forestrie/receipt-verify";
 import type { Ks256Attestation } from "@forestrie/receipt-verify";
-import type { AnchorCheck } from "./verify-anchored.js";
+import { ANCHOR_FOREST_MISMATCH, type AnchorCheck } from "./verify-anchored.js";
 
 /**
  * Result → report shaping for `forestrie verify` (FOR-347). Pure — the
@@ -26,7 +26,11 @@ export const STAGE_NARRATION: Record<ReceiptVerifyStage, string> = {
   binding: "leaf commits the payload (SHA-256) at the receipt idtimestamp",
 };
 
-export type StageStatus = "ok" | "failed" | "skipped";
+/**
+ * `anchored`: the stage was not checked locally; its authority is the
+ * on-chain accumulator (approach-C fallback). Never rendered as `ok`.
+ */
+export type StageStatus = "ok" | "failed" | "skipped" | "anchored";
 
 export type StageRow = {
   stage: ReceiptVerifyStage;
@@ -36,19 +40,18 @@ export type StageRow = {
 
 /**
  * Anchor-only chain verification (FOR-297 approach C): the checkpoint was
- * sealed under a delegation the offline verifier cannot resolve (a child
- * log's per-log delegation does not chain to the root genesis). The
- * signature stage still reports **ok** — not because the COSE check re-ran
- * locally, but because a match against the on-chain accumulator *implies*
- * it: univocity only accepts a checkpoint whose signature verifies under
- * the log's live delegation, whose publish grant's inclusion is re-proven
- * against the parent's on-chain state on EVERY publish, and whose
- * accumulator is consistency-gated against the previously published state.
- * So if the locally-recomputed peak (from `leaf(payload, idtimestamp)` +
- * the receipt's proof path) appears in the accumulator, the publishing
- * signature was valid and a fresh grant chain to the bootstrap existed at
- * publish time — the anchor match combines inclusion, binding, signature
- * validity AND a split-view check (status-2607-09 D2).
+ * sealed under a signature chain the offline verifier cannot resolve (a
+ * child log's per-log delegation does not chain to the root genesis, or a
+ * KS256 root it cannot recover). The signature stage is NOT reported `ok`:
+ * it was not verified here. The row says `anchored` — the authority is the
+ * on-chain accumulator. A match implies univocity accepted a checkpoint
+ * whose receipt verified under the log's root key or a delegate the root
+ * signed (including KS256 roots: ecrecover / ERC-1271), with the grant
+ * inclusion re-proven and the accumulator consistency-gated at publish.
+ * Univocity does NOT check delegation expiry, so neither does this path.
+ * If the locally-recomputed peak (from `leaf(payload, idtimestamp)` + the
+ * receipt's proof path) appears in the accumulator, inclusion and binding
+ * hold and the split-view check is the contract's own state.
  *
  * Enforcement cited from `_Univocity.sol publishCheckpoint` @ univocity
  * ea410d5a90e4c2337fc1dec288d660551daf36ab:
@@ -60,16 +63,21 @@ export type StageRow = {
  * - consistency gating: `verifyConsistencyProofChain`,
  *   src/contracts/_Univocity.sol#L189-L193
  */
-export const SIGNATURE_ANCHORED_REASON =
-  "verified against accumulator from chain — signature enforced by univocity at publish";
+export function signatureAnchoredReason(offlineReason: string): string {
+  return (
+    `not verified offline (${offlineReason}); authority from the on-chain accumulator — ` +
+    "univocity verified the checkpoint signature and delegation at publish " +
+    "(expiry is not checked on-chain)"
+  );
+}
 
-export function anchorOnlyStageRows(): StageRow[] {
+export function anchorOnlyStageRows(offlineReason: string): StageRow[] {
   return [
     { stage: "parse", status: "ok" },
     {
       stage: "signature",
-      status: "ok",
-      reason: SIGNATURE_ANCHORED_REASON,
+      status: "anchored",
+      reason: signatureAnchoredReason(offlineReason),
     },
     { stage: "inclusion", status: "ok" },
     { stage: "binding", status: "ok" },
@@ -192,6 +200,8 @@ export type AnchorReport = {
   peakCount: number;
   matchedPeak: number | null;
   reason?: string;
+  /** Human detail for a failed anchor (e.g. a forest mismatch). */
+  detail?: string;
   /** known-accumulator anchors only: the audited chain read (FOR-297 D5). */
   blockNumber?: string;
   blockHash?: string;
@@ -222,8 +232,12 @@ export type VerifyReport = {
   command: "verify";
   mode: VerifyMode;
   ok: boolean;
-  stage: ReceiptVerifyStage;
+  stage: ReceiptVerifyStage | "anchor";
   reason?: string;
+  /** Approach-C fallback only: why the signature was not verified offline. */
+  offlineReason?: string;
+  /** Approach-C fallback only: the verdict's authority is the chain. */
+  authority?: "on-chain";
   stages: StageRow[];
   anchor?: AnchorReport;
   /** KS256 root and ERC-1271 attestation facts (present for a KS256 root). */
@@ -258,6 +272,8 @@ export function buildVerifyReport(opts: {
   /** Anchor-only mode: rows that reflect the skipped signature stage. */
   stagesOverride?: StageRow[] | undefined;
   ks256?: Ks256ReportInfo | undefined;
+  /** Approach-C fallback: the offline signature failure this verdict skipped. */
+  offlineReason?: string | undefined;
 }): VerifyReport {
   const report: VerifyReport = {
     command: "verify",
@@ -268,6 +284,15 @@ export function buildVerifyReport(opts: {
   };
   if (opts.result.reason !== undefined) {
     report.reason = opts.result.reason;
+  }
+  if (opts.offlineReason !== undefined) {
+    report.offlineReason = opts.offlineReason;
+    report.authority = "on-chain";
+  }
+  const mismatch = opts.anchor as { forestMismatch?: string } | undefined;
+  if (mismatch?.forestMismatch !== undefined) {
+    report.stage = "anchor";
+    report.reason = ANCHOR_FOREST_MISMATCH;
   }
   if (opts.ks256 !== undefined) {
     const att = opts.ks256.attestation;
@@ -299,6 +324,9 @@ export function buildVerifyReport(opts: {
     };
     if (opts.anchor.reason !== undefined) {
       anchor.reason = opts.anchor.reason;
+    }
+    if (mismatch?.forestMismatch !== undefined) {
+      anchor.detail = mismatch.forestMismatch;
     }
     if (opts.anchor.blockNumber !== undefined) {
       anchor.blockNumber = opts.anchor.blockNumber.toString();

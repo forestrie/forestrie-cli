@@ -613,6 +613,12 @@ describe("KS256 genesis with a live chain anchor", () => {
   test("a detached receipt under an EOA root anchors via the recomputed peak", async () => {
     const liveFetch = (async (_u: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as { method: string };
+      if (body.method === "eth_chainId") {
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x14a34" }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
       expect(body.method).toBe("eth_call");
       return new Response(
         JSON.stringify({

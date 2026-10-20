@@ -314,6 +314,12 @@ describe("forestrie verify — chain-anchored mode", () => {
           { headers: { "Content-Type": "application/json" } },
         );
       }
+      if (body.method === "eth_chainId") {
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x14a34" }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
       expect(body.method).toBe("eth_call");
       return new Response(
         JSON.stringify({ jsonrpc: "2.0", id: 1, result: resultHex }),
@@ -620,6 +626,12 @@ describe("forestrie verify — anchor-only child-log fallback (FOR-297 approach 
           { headers: { "Content-Type": "application/json" } },
         );
       }
+      if (body.method === "eth_chainId") {
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x14a34" }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
       expect(body.method).toBe("eth_call");
       return new Response(
         JSON.stringify({ jsonrpc: "2.0", id: 1, result: resultHex }),
@@ -659,8 +671,12 @@ describe("forestrie verify — anchor-only child-log fallback (FOR-297 approach 
     expect(report.ok).toBe(true);
     expect(report.mode).toBe("chain-anchored");
     const sig = report.stages.find((s: StageRow) => s.stage === "signature");
-    expect(sig?.status).toBe("ok");
-    expect(sig?.reason).toContain("verified against accumulator from chain");
+    expect(sig?.status).toBe("anchored");
+    expect(sig?.reason).toContain("not verified offline (delegation_invalid)");
+    expect(sig?.reason).toContain("authority from the on-chain accumulator");
+    expect(sig?.reason).toContain("expiry is not checked on-chain");
+    expect(report.offlineReason).toBe("delegation_invalid");
+    expect(report.authority).toBe("on-chain");
     expect(report.stages.find((s: StageRow) => s.stage === "inclusion")?.status).toBe("ok");
     expect(report.stages.find((s: StageRow) => s.stage === "binding")?.status).toBe("ok");
     expect(report.anchor).toMatchObject({
@@ -676,11 +692,14 @@ describe("forestrie verify — anchor-only child-log fallback (FOR-297 approach 
       rpcFetch(encodeLogStateResult([fx.peak], 2n)),
     );
     expect(r.exitCode).toBe(0);
-    expect(r.stderr).toContain("verified against accumulator from chain");
+    expect(r.stderr).toContain("signature anchored");
+    expect(r.stderr).not.toContain("signature ok");
     expect(r.stdout).toContain(
-      "PASS: receipt verified against the on-chain accumulator",
+      "PASS: verified against the on-chain accumulator",
     );
-    expect(r.stdout).toContain("signature enforced by univocity at publish");
+    expect(r.stdout).toContain(
+      "signature not checked offline (delegation_invalid)",
+    );
   });
 
   test("chain mode: peak NOT anchored → original delegation_invalid failure stands", async () => {
@@ -865,7 +884,8 @@ describe("forestrie verify-grant — known accumulator snapshot (FOR-297 D5)", (
     expect(report.ok).toBe(true);
     expect(report.mode).toBe("accumulator-anchored");
     const sig = report.stages.find((s: StageRow) => s.stage === "signature");
-    expect(sig?.status).toBe("ok");
+    expect(sig?.status).toBe("anchored");
+    expect(report.offlineReason).toBe("delegation_invalid");
     expect(report.anchor).toMatchObject({
       anchored: true,
       matchedPeak: 0,
@@ -887,7 +907,7 @@ describe("forestrie verify-grant — known accumulator snapshot (FOR-297 D5)", (
     expect(r.stderr).toContain("known accumulator");
     expect(r.stderr).toContain("block 123");
     expect(r.stdout).toContain(
-      "PASS: receipt verified against the known accumulator",
+      "PASS: verified against the known accumulator",
     );
   });
 
