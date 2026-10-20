@@ -1289,7 +1289,7 @@ describe("forestrie verify-grant — retained checkpoint chain (FOR-368 Phase 3)
     );
   });
 
-  test("a chain signed outside the genesis trust root is a structured anchor error", async () => {
+  test("a chain signed outside the genesis trust root fails the anchor with a typed reason", async () => {
     const rogue = await generateP256KeyPair();
     const rogueDir = path.join(dir, "sths-rogue");
     mkdirSync(rogueDir, { recursive: true });
@@ -1308,9 +1308,11 @@ describe("forestrie verify-grant — retained checkpoint chain (FOR-368 Phase 3)
       baseArgs({ "checkpoint-chain": rogueDir, json: true }),
     );
     expect(r.exitCode).toBe(1);
-    const report = JSON.parse(r.stdout) as VerifyErrorReport;
-    expect(report.error).toBe("anchor_check_failed");
-    expect(report.message).toContain("signature");
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(false);
+    expect(report.anchor?.anchored).toBe(false);
+    expect(report.anchor?.reason).toBe("signature_invalid");
+    expect(report.anchor?.detail).toContain("chain refused");
   });
 
   test("--checkpoint-chain conflicts with --known-accumulator and --univocity", () => {

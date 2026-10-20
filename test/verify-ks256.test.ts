@@ -245,16 +245,6 @@ describe("--known-log-key with a 20-byte KS256 address", () => {
     expect(e.message).toContain("20-byte KS256");
   });
 
-  test("a KS256 key is refused for --checkpoint-chain as an input error", async () => {
-    const r = await verify(eoa, "eoa", {
-      "known-log-key": hex0x(eoa.rootAddress),
-      "checkpoint-chain": dir,
-    });
-    expect(r.exitCode).toBe(1);
-    const e = JSON.parse(r.stdout) as { stage: string; message: string };
-    expect(e.stage).toBe("input");
-    expect(e.message).toContain("ES256");
-  });
 });
 
 describe("KS256 contract root and fetch-ks256-attestation", () => {
@@ -299,10 +289,11 @@ describe("KS256 contract root and fetch-ks256-attestation", () => {
     expect(r.exitCode).toBe(0);
     const rep = report(r.stdout);
     expect(rep.ok).toBe(true);
-    expect(rep.ks256?.attestation?.used).toBe(true);
-    expect(rep.ks256?.attestation?.blockNumber).toBe("123");
+    expect(rep.ks256?.attestations?.used).toHaveLength(1);
+    expect(rep.ks256?.attestations?.used[0]?.blockNumber).toBe("123");
+    expect(rep.ks256?.attestations?.unused).toEqual([]);
     const sig = rep.stages.find((s) => s.stage === "signature");
-    expect(sig?.reason).toContain("signers at block 123");
+    expect(sig?.reason).toContain("block 123");
 
     const human = await verify(safe, "safe", {
       genesis: file("safe-genesis.cbor"),
@@ -381,8 +372,10 @@ describe("KS256 contract root and fetch-ks256-attestation", () => {
       "ks256-attestation": outPath,
     });
     expect(r.exitCode).toBe(0);
-    // An unused attestation's fields were never checked: not echoed.
-    expect(report(r.stdout).ks256?.attestation).toEqual({ used: false });
+    // The attestation is not for this certificate (signature hash differs).
+    const att0 = report(r.stdout).ks256?.attestations;
+    expect(att0?.used).toEqual([]);
+    expect(att0?.unused).toMatchObject([{ index: 0, reason: "no_matching_certificate" }]);
   });
 });
 
@@ -581,7 +574,7 @@ describe("verify (statement path) with --ks256-attestation", () => {
     expect(r.exitCode).toBe(0);
     const rep = report(r.stdout);
     expect(rep.ok).toBe(true);
-    expect(rep.ks256?.attestation?.used).toBe(true);
+    expect(rep.ks256?.attestations?.used).toHaveLength(1);
   });
 
   test("known key without --genesis is ks256_attestation_chain_unbound", async () => {
@@ -604,7 +597,9 @@ describe("verify (statement path) with --ks256-attestation", () => {
       "ks256-attestation": attPath,
     });
     expect(r.exitCode).toBe(0);
-    expect(report(r.stdout).ks256?.attestation).toEqual({ used: false });
+    expect(report(r.stdout).ks256?.attestations?.unused).toMatchObject([
+      { index: 0, reason: "no_matching_certificate" },
+    ]);
   });
 
   test("without an attestation the contract root is not recovered", async () => {

@@ -90,11 +90,52 @@ type AnchorFields = {
    */
   knownLogKey: string | undefined;
   /**
-   * ERC-1271 attestation file (`forestrie fetch-ks256-attestation`) for a
-   * KS256 contract root. Read and decoded by the runner; never fetches.
+   * ERC-1271 attestation files (`forestrie fetch-ks256-attestation`) for a
+   * KS256 contract root; repeatable (a Safe that rotated its delegate needs
+   * one per certificate). Read and decoded by the runner; never fetches.
    */
-  ks256Attestation: string | undefined;
+  ks256Attestations: string[];
 };
+
+/**
+ * A repeatable string option: the command wrapper hands over every
+ * occurrence as an array (citty keeps only the last); a comma-separated
+ * value is also accepted.
+ */
+export function repeatedStringOption(
+  args: LooseParsedArgs,
+  name: string,
+): string[] {
+  const raw = args[name];
+  const values = Array.isArray(raw)
+    ? raw
+    : typeof raw === "string"
+      ? [optionalStringOption(args, name) ?? ""]
+      : [];
+  return values
+    .flatMap((v) => v.split(","))
+    .map((v) => v.trim())
+    .filter((v) => v !== "");
+}
+
+/**
+ * A checkpoint chain judges attestations against the forest's chain id,
+ * which only `--genesis` supplies.
+ */
+function assertAttestationsHaveForest(
+  fields: AnchorFields,
+  genesis: string | undefined,
+): void {
+  if (
+    fields.anchor === "checkpoints" &&
+    fields.ks256Attestations.length > 0 &&
+    genesis === undefined
+  ) {
+    throw new Error(
+      "--ks256-attestation with --checkpoint-chain needs --genesis (the forest chain id an attestation must match)",
+    );
+  }
+}
 
 function parseAnchorFields(args: LooseParsedArgs): AnchorFields {
   const univocity = optionalStringOption(args, "univocity");
@@ -164,7 +205,7 @@ function parseAnchorFields(args: LooseParsedArgs): AnchorFields {
     logId,
     rpcUrl,
     knownLogKey,
-    ks256Attestation: optionalStringOption(args, "ks256-attestation"),
+    ks256Attestations: repeatedStringOption(args, "ks256-attestation"),
     knownAccumulator,
     massif,
     checkpointChain,
@@ -206,6 +247,10 @@ export type VerifyOptions = ForestrieCommonOptions &
 
 export function parseVerifyOptions(args: LooseParsedArgs): VerifyOptions {
   const anchorFields = parseAnchorFields(args);
+  assertAttestationsHaveForest(
+    anchorFields,
+    optionalStringOption(args, "genesis"),
+  );
   const options: VerifyOptions = {
     ...parseForestrieCommonOptions(args),
     ...anchorFields,
@@ -237,6 +282,10 @@ export function parseVerifyGrantOptions(
   args: LooseParsedArgs,
 ): VerifyGrantOptions {
   const anchorFields = parseAnchorFields(args);
+  assertAttestationsHaveForest(
+    anchorFields,
+    optionalStringOption(args, "genesis"),
+  );
   const options: VerifyGrantOptions = {
     ...parseForestrieCommonOptions(args),
     ...anchorFields,

@@ -2,7 +2,10 @@ import type {
   ReceiptVerifyResult,
   ReceiptVerifyStage,
 } from "@forestrie/receipt-verify";
-import type { Ks256Attestation } from "@forestrie/receipt-verify";
+import type {
+  Ks256Attestation,
+  Ks256AttestationUsage,
+} from "@forestrie/receipt-verify";
 import { ANCHOR_FOREST_MISMATCH, type AnchorCheck } from "./verify-anchored.js";
 
 /**
@@ -121,22 +124,32 @@ export function knownKeyStageRows(result: ReceiptVerifyResult): StageRow[] {
 
 /**
  * KS256 root facts for the report: whether the root is a KS256 address, how
- * it was supplied, and any attestation given (with whether the certificate
- * needed it, i.e. did not verify by ecrecover alone).
+ * it was supplied, and every attestation given (list, in order) with the
+ * receipt-verify usage accounting: each is either used (it carried a
+ * certificate that does not verify by ecrecover alone) or unused with a
+ * reason — never silently ignored.
  */
 export type Ks256ReportInfo = {
   ks256Root: boolean;
   knownKey: boolean;
-  attestation?: Ks256Attestation;
-  attestationUsed?: boolean;
+  attestations: Ks256Attestation[];
+  usage: Ks256AttestationUsage;
 };
+
+/** Short narration of which attestations carried the verdict. */
+export function describeUsedAttestations(info: Ks256ReportInfo): string {
+  const parts = info.usage.used.map((u) => {
+    const a = info.attestations[u.index]!;
+    return `#${u.index} (chain ${a.chainId}, block ${a.blockNumber})`;
+  });
+  return `ERC-1271 attestation${parts.length > 1 ? "s" : ""} ${parts.join(", ")}`;
+}
 
 /** Reword the parse/signature rows for a KS256 root or an attestation. */
 export function applyKs256Rows(
   rows: StageRow[],
   info: Ks256ReportInfo,
 ): StageRow[] {
-  const att = info.attestation;
   return rows.map((row) => {
     if (row.status !== "ok") return row;
     if (row.stage === "parse" && info.ks256Root) {
@@ -150,8 +163,8 @@ export function applyKs256Rows(
       return {
         ...row,
         reason:
-          att !== undefined && info.attestationUsed === true
-            ? `delegation certificate valid under the contract's signers at block ${att.blockNumber} (ERC-1271 attestation; chain ${att.chainId}) — not a signature by one key`
+          info.usage.used.length > 0
+            ? `delegation certificate valid under the contract's signers (${describeUsedAttestations(info)}) — not a signature by one key`
             : `delegation certificate recovers to the KS256 ${anchorName} (ecrecover)`,
       };
     }
@@ -243,14 +256,21 @@ export type VerifyReport = {
   /** KS256 root and ERC-1271 attestation facts (present for a KS256 root). */
   ks256?: {
     root: boolean;
-    /** An unused attestation reports `used: false` only: its fields were
-     * never checked against anything, so they are not echoed. */
-    attestation?: {
-      used: boolean;
-      chainId?: string;
-      address?: string;
-      blockNumber?: string;
-      blockHash?: string;
+    /** Every supplied attestation, by position: used (with what it was
+     * read at) or unused with a reason. An unused attestation's fields
+     * were never checked against anything, so they are not echoed. */
+    attestations?: {
+      used: {
+        index: number;
+        digest: string;
+        chainId: string;
+        address: string;
+        blockNumber: string;
+        blockHash: string;
+        /** Chain links that needed it (checkpoint-chain only). */
+        links?: number[];
+      }[];
+      unused: { index: number; digest: string; reason: string }[];
     };
   };
 };
@@ -295,19 +315,29 @@ export function buildVerifyReport(opts: {
     report.reason = ANCHOR_FOREST_MISMATCH;
   }
   if (opts.ks256 !== undefined) {
-    const att = opts.ks256.attestation;
+    const info = opts.ks256;
     report.ks256 = {
-      root: opts.ks256.ks256Root,
-      ...(att !== undefined && opts.ks256.attestationUsed !== true
-        ? { attestation: { used: false } }
-        : att !== undefined
+      root: info.ks256Root,
+      ...(info.attestations.length > 0
         ? {
-            attestation: {
-              used: true,
-              chainId: att.chainId.toString(),
-              address: toHex(att.address),
-              blockNumber: att.blockNumber.toString(),
-              blockHash: toHex(att.blockHash),
+            attestations: {
+              used: info.usage.used.map((u) => {
+                const a = info.attestations[u.index]!;
+                return {
+                  index: u.index,
+                  digest: `0x${u.digestHex}`,
+                  chainId: a.chainId.toString(),
+                  address: toHex(a.address),
+                  blockNumber: a.blockNumber.toString(),
+                  blockHash: toHex(a.blockHash),
+                  ...(u.links.length > 0 ? { links: u.links } : {}),
+                };
+              }),
+              unused: info.usage.unused.map((u) => ({
+                index: u.index,
+                digest: `0x${u.digestHex}`,
+                reason: u.reason,
+              })),
             },
           }
         : {}),
@@ -327,6 +357,10 @@ export function buildVerifyReport(opts: {
     }
     if (mismatch?.forestMismatch !== undefined) {
       anchor.detail = mismatch.forestMismatch;
+    }
+    const failure = opts.anchor as { chainFailure?: string };
+    if (failure.chainFailure !== undefined) {
+      anchor.detail = failure.chainFailure;
     }
     if (opts.anchor.blockNumber !== undefined) {
       anchor.blockNumber = opts.anchor.blockNumber.toString();
