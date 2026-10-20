@@ -1,11 +1,5 @@
-import { bytesEqual } from "./bytes.js";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { verifyCoseSign1WithParsedKey } from "@forestrie/encoding";
-import {
-  resolveDelegatedVerifyKey,
-  type CheckpointChainLink,
-} from "@forestrie/receipt-verify";
 import type { AnchorCheck } from "./verify-anchored.js";
 
 /**
@@ -23,7 +17,9 @@ import type { AnchorCheck } from "./verify-anchored.js";
  * A receipt whose recomputed peak appears in ANY authenticated link is
  * proven: each later link's signed consistency proof commits the earlier
  * accumulator forward, so burial never turns an honest receipt
- * tamper-shaped.
+ * tamper-shaped. The fold, per-link signature and delegation checks and the
+ * peak match live in receipt-verify's `verifyReceiptAgainstCheckpointChain`;
+ * this module only loads the files.
  */
 
 /**
@@ -62,99 +58,9 @@ export function loadCheckpointChainFiles(pathspec: string): {
   };
 }
 
-/**
- * Signature trust for chain links, rooted in the caller's trust anchor
- * (genesis-derived roots or `--known-log-key`): resolve each checkpoint's
- * label-1000 delegation cert under the root keys, then verify the COSE
- * signature over the folded accumulator as detached payload. The payload
- * is COMPUTED by the fold, never read from the checkpoint — a link only
- * authenticates the accumulator its proof actually derives (ADR-0046).
- */
-export function makeCheckpointSignatureVerifier(
-  rootKeys: CryptoKey[],
-): (
-  checkpointBytes: Uint8Array,
-  detachedPayload: Uint8Array,
-) => Promise<boolean> {
-  return async (checkpointBytes, detachedPayload) => {
-    const resolution = await resolveDelegatedVerifyKey(
-      checkpointBytes,
-      rootKeys,
-    );
-    if (resolution.kind === "broken") return false;
-    const candidates =
-      resolution.kind === "resolved"
-        ? [resolution.delegatedKey, ...rootKeys]
-        : rootKeys;
-    for (const key of candidates) {
-      if (
-        await verifyCoseSign1WithParsedKey(checkpointBytes, key, {
-          logPrefix: "checkpoint-chain",
-          detachedPayload,
-        })
-      ) {
-        return true;
-      }
-    }
-    return false;
-  };
-}
-
 export type CheckpointChainAnchorCheck = AnchorCheck & {
   /** Number of authenticated links in the fold. */
   linkCount: number;
   /** Sealed size of the link holding the peak (null when unmatched). */
   matchedLinkSize: bigint | null;
 };
-
-/**
- * Find the recomputed receipt peak in the authenticated chain. Newest-first
- * (mirrors the event-scan route): the freshest cover gives the most useful
- * report, and a match at ANY link is proof — later links' signed
- * consistency proofs commit it forward. Newer-than-chain fails CLOSED with
- * a refresh remedy: retention limits coverage, never validity.
- */
-export function checkReceiptAnchoredToCheckpointChain(opts: {
-  links: CheckpointChainLink[];
-  recomputedPeak: Uint8Array;
-  leafMmrIndex: bigint;
-}): CheckpointChainAnchorCheck {
-  const final = opts.links[opts.links.length - 1]!;
-  const base = {
-    accumulator: final.accumulator,
-    size: final.treeSize2,
-    linkCount: opts.links.length,
-  };
-  if (opts.leafMmrIndex >= final.treeSize2) {
-    return {
-      ...base,
-      anchored: false,
-      matchedPeak: null,
-      matchedLinkSize: null,
-      reason: "receipt_newer_than_checkpoint_chain",
-    };
-  }
-  for (let i = opts.links.length - 1; i >= 0; i--) {
-    const link = opts.links[i]!;
-    for (let p = 0; p < link.accumulator.length; p++) {
-      if (bytesEqual(opts.recomputedPeak, link.accumulator[p]!)) {
-        return {
-          ...base,
-          anchored: true,
-          matchedPeak: p,
-          matchedLinkSize: link.treeSize2,
-          accumulator: link.accumulator,
-          size: link.treeSize2,
-        };
-      }
-    }
-  }
-  return {
-    ...base,
-    anchored: false,
-    matchedPeak: null,
-    matchedLinkSize: null,
-    reason: "peak_not_in_checkpoint_chain",
-  };
-}
-

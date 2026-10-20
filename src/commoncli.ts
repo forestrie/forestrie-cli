@@ -32,3 +32,43 @@ export function defineForestrieCommand<T extends ArgsDef>(
 ): CommandDef<T> {
   return defineAppCommand(commonArgs, def);
 }
+
+/**
+ * citty keeps only the last occurrence of a repeated string flag. Wrap a
+ * runner so the named repeatable flags reach the option parser as arrays of
+ * every occurrence (`--flag a --flag b` and `--flag=a`).
+ */
+export function withRepeatedFlags<
+  C extends { args: unknown; rawArgs: string[] },
+>(
+  names: readonly string[],
+  runner: (context: C) => Promise<void>,
+): (context: C) => Promise<void> {
+  return (context) => {
+    const args = { ...(context.args as Record<string, unknown>) };
+    for (const name of names) {
+      const values: string[] = [];
+      const raw = context.rawArgs;
+      const camel = name.replace(/-([a-z0-9])/g, (_, c: string) =>
+        c.toUpperCase(),
+      );
+      for (let i = 0; i < raw.length; i++) {
+        const a = raw[i]!;
+        if (a === "--") break;
+        if (a === `--${name}` || a === `--${camel}`) {
+          const next = raw[i + 1];
+          if (next !== undefined && !next.startsWith("--")) {
+            values.push(next);
+            i++;
+          }
+        } else if (a.startsWith(`--${name}=`)) {
+          values.push(a.slice(name.length + 3));
+        } else if (a.startsWith(`--${camel}=`)) {
+          values.push(a.slice(camel.length + 3));
+        }
+      }
+      if (values.length > 1) args[name] = values;
+    }
+    return runner({ ...context, args });
+  };
+}

@@ -339,8 +339,7 @@ signature — no operator trust required.
   base64 `x||y` (a 64-byte ES256 key) or a 20-byte KS256 address (`0x` + 40
   hex, or base64); fully offline, checks the signature under a key you trust
   out of band (the SCITT / SSH-known-hosts posture). A KS256 address asserts,
-  and does not prove, the key-to-log binding, and cannot root
-  `--checkpoint-chain` (which needs ES256). `--genesis` may accompany it: it
+  and does not prove, the key-to-log binding. `--genesis` may accompany it: it
   then supplies only the forest chain id an attestation must match.
 - **`--genesis`** — a cached `genesis.cbor` (the univocity-instance root
   registration). Roots a receipt whose signer chains to that root owner; for a
@@ -351,6 +350,13 @@ signature — no operator trust required.
   signature needed. Never source it unauthenticated from the operator's tile
   store. Older receipts extend to a newer snapshot via `--massif`.
 - **`--rpc-url`** — a live chain read; same as `--known-accumulator`, current.
+- **`--checkpoint-chain`** — a retained `.sth` chain, folded from size 0 under
+  the genesis root and/or `--known-log-key` (ES256 or KS256) by
+  receipt-verify's shared verifier: every link's signature, the delegation
+  certificate's `mmrStart`/`mmrEnd` window per link, and — once the receipt
+  matches a link — certificate expiry at the leaf's time. Typed refusals
+  (`delegation_out_of_range`, `delegation_expired`, `ks256_*`,
+  `peak_not_in_checkpoint_chain`, …) are the anchor's `reason`.
 
 What each actually proves — and how forestrie separates **split-view** (is this
 a single, un-forked history) from **sealing** (who signed this state) from
@@ -360,6 +366,42 @@ model: see
 **[the trust model](https://github.com/forestrie/protocol/blob/main/spec/receipt-trust-model.md)**.
 The receipt never expires, and the anchor never needs to be current — only
 trusted.
+
+**Chain anchors and the genesis forest.** With `--genesis`, a chain anchor must
+belong to the genesis forest: `--univocity` and the RPC's `eth_chainId` (live
+read), or the snapshot's recorded contract and chain (`--known-accumulator`),
+must equal the genesis binding, else `verify` fails at stage `anchor` with
+`anchor_forest_mismatch`. Without `--genesis` (a `--known-log-key` run) there
+is no such check: the anchor is trusted as named.
+
+**Chain-anchored fallback.** When offline verify cannot resolve the signature
+— `delegation_invalid` (a child log's delegation does not chain to genesis), or
+a KS256 root it cannot recover (`delegation_not_ks256`,
+`ks256_root_not_recovered`, `ks256_root_requires_delegation`,
+`ks256_attestation_*`) — a chain anchor still passes if the leaf and proof
+path recompute to a peak in the anchored accumulator. The report is explicit:
+the `signature` row is `anchored`, not `ok` ("not verified offline (<reason>);
+authority from the on-chain accumulator"), `--json` adds `offlineReason` and
+`authority: "on-chain"`, and the PASS line says the signature was not checked
+offline. The authority is univocity, which accepts a checkpoint only if its
+receipt verifies under the log's root key (ES256, or KS256 by ecrecover /
+ERC-1271) or a delegate the root signed. It does **not** check delegation
+expiry. The fallback never checks the receipt's signature, and the label-1000
+certificate is in the unprotected header, so "`delegation_expired` and
+`delegation_out_of_range` never fall back" is a diagnostic, not a guarantee: a
+stripped or corrupted certificate reaches the fallback as another reason. What
+the fallback does guarantee is content inclusion in the anchored log state,
+which univocity authorised (and univocity does not check expiry). A
+`--known-log-key` run never falls back.
+
+A `--known-accumulator` snapshot is unsigned. Forest binding catches mistakes
+(the wrong contract or chain, or a snapshot written by forestrie-cli 0.11.1 or
+earlier, which recorded a shifted univocity address — re-run
+`fetch-accumulator`), not a malicious snapshot supplier: trust the snapshot as
+you would whoever fetched it, and pass `--log-id` to bind the log. A genesis
+older than v2 carries no chain binding, so a chain-anchored run that needs it
+fails closed ("this genesis predates chain binding (v1); chain-anchored verify
+needs a v2 genesis").
 
 Note that **freshness is not one of the four**. It is a weaker axis that bears
 only on *coverage* — whether a given accumulator snapshot reaches your leaf —
@@ -378,7 +420,19 @@ contract's signers at the attested block* — a narrower guarantee than a
 signature by one key, reported as such. The attestation must bind the root
 address, the certificate digest and signature, and the forest's genesis chain
 id (`--genesis`; under `--known-log-key` without it the result is
-`ks256_attestation_chain_unbound`). `verify` never calls the chain.
+`ks256_attestation_chain_unbound`). `--ks256-attestation` is repeatable (or
+comma-separated): a Safe that rotated its delegate signs one certificate per
+delegate, and each needs its own attestation, matched by certificate digest and
+signature hash. All attestations matching a certificate are tried and the first that
+resolves wins. Every attestation supplied is reported used (with the chain
+links it carried), rejected (tried and refused), or unused with a reason
+(`no_matching_certificate`, `not_needed`, `duplicate`) — human lines on stderr, `ks256.attestations` in
+`--json`. With `--checkpoint-chain` the attestations vouch for every link's
+certificate, and a KS256 genesis or known key roots the chain (attestations
+there need `--genesis` for the chain id). Offline `verify` never calls the chain.
+With a chain anchor, a KS256 failure above can instead be settled by the
+on-chain accumulator (see *Chain-anchored fallback* under Trust anchors); the
+report then says the signature was not checked offline.
 
 ### `fetch-accumulator`
 

@@ -13,7 +13,16 @@ import {
   type VerifyReport,
 } from "../src/lib/verify-report.js";
 import { readFileSync } from "node:fs";
-import { runVerifyGrant, type VerifyErrorReport } from "../src/main/verify.js";
+import {
+  finishVerify,
+  runVerifyGrant,
+  type VerifyErrorReport,
+} from "../src/main/verify.js";
+import {
+  decodeCborDeterministic,
+  encodeCborDeterministic,
+} from "@forestrie/encoding";
+import { grantCommitmentHashFromGrant } from "@forestrie/receipt-verify";
 import { runFetchAccumulator } from "../src/main/fetch-accumulator.js";
 import { runCreateConsistencyProof } from "../src/main/create-consistency-proof.js";
 import { parseVerifyGrantOptions } from "../src/options/verify.js";
@@ -27,6 +36,7 @@ import {
 import { runCli } from "./support.js";
 import {
   buildCheckpoint,
+  buildKs256Fixture,
   buildVerifyFixture,
   bytesToHex,
   encodeLogStateResult,
@@ -314,6 +324,12 @@ describe("forestrie verify — chain-anchored mode", () => {
           { headers: { "Content-Type": "application/json" } },
         );
       }
+      if (body.method === "eth_chainId") {
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x14a34" }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
       expect(body.method).toBe("eth_call");
       return new Response(
         JSON.stringify({ jsonrpc: "2.0", id: 1, result: resultHex }),
@@ -333,7 +349,7 @@ describe("forestrie verify — chain-anchored mode", () => {
 
   test("anchored: receipt peak found in the on-chain accumulator (detached receipt)", async () => {
     const otherPeak = new Uint8Array(32).fill(0x11);
-    const calls: { params: [{ data: string }, string] }[] = [];
+    const calls: { method: string; params: [{ data: string }, string] }[] = [];
     const r = await verifyInProcess(
       chainArgs(),
       rpcFetch(encodeLogStateResult([otherPeak, fx.peak], 3n), calls),
@@ -351,7 +367,9 @@ describe("forestrie verify — chain-anchored mode", () => {
       matchedPeak: 1,
     });
     // logState(bytes32) selector + zero-padded contract log id
-    expect(calls[0]!.params[0].data).toBe(
+    expect(
+      calls.find((c) => c.method === "eth_call")!.params[0].data,
+    ).toBe(
       "0xeecac1b7" + toContractLogId(FIXTURE_LOG_ID).slice(2),
     );
   });
@@ -620,6 +638,12 @@ describe("forestrie verify — anchor-only child-log fallback (FOR-297 approach 
           { headers: { "Content-Type": "application/json" } },
         );
       }
+      if (body.method === "eth_chainId") {
+        return new Response(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, result: "0x14a34" }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }
       expect(body.method).toBe("eth_call");
       return new Response(
         JSON.stringify({ jsonrpc: "2.0", id: 1, result: resultHex }),
@@ -659,8 +683,12 @@ describe("forestrie verify — anchor-only child-log fallback (FOR-297 approach 
     expect(report.ok).toBe(true);
     expect(report.mode).toBe("chain-anchored");
     const sig = report.stages.find((s: StageRow) => s.stage === "signature");
-    expect(sig?.status).toBe("ok");
-    expect(sig?.reason).toContain("verified against accumulator from chain");
+    expect(sig?.status).toBe("anchored");
+    expect(sig?.reason).toContain("not verified offline (delegation_invalid)");
+    expect(sig?.reason).toContain("authority from the on-chain accumulator");
+    expect(sig?.reason).toContain("expiry is not checked on-chain");
+    expect(report.offlineReason).toBe("delegation_invalid");
+    expect(report.authority).toBe("on-chain");
     expect(report.stages.find((s: StageRow) => s.stage === "inclusion")?.status).toBe("ok");
     expect(report.stages.find((s: StageRow) => s.stage === "binding")?.status).toBe("ok");
     expect(report.anchor).toMatchObject({
@@ -676,11 +704,72 @@ describe("forestrie verify — anchor-only child-log fallback (FOR-297 approach 
       rpcFetch(encodeLogStateResult([fx.peak], 2n)),
     );
     expect(r.exitCode).toBe(0);
-    expect(r.stderr).toContain("verified against accumulator from chain");
+    expect(r.stderr).toContain("signature anchored");
+    expect(r.stderr).not.toContain("signature ok");
     expect(r.stdout).toContain(
-      "PASS: receipt verified against the on-chain accumulator",
+      "PASS: verified against the on-chain accumulator",
     );
-    expect(r.stdout).toContain("signature enforced by univocity at publish");
+    expect(r.stdout).toContain(
+      "signature not checked offline (delegation_invalid)",
+    );
+  });
+
+  test("KS256 genesis + ES256 child-log certificate: passes via the anchor, offline reason named", async () => {
+    const ks = await buildKs256Fixture();
+    writeFileSync(file("ks256-genesis.cbor"), ks.genesisCbor);
+    const offline = await verifyInProcess(
+      baseArgs({
+        genesis: file("ks256-genesis.cbor"),
+        receipt: file("receipt-child.cbor"),
+        json: true,
+      }),
+    );
+    expect(offline.exitCode).toBe(1);
+    const offlineReason = jsonReport(offline.stdout).reason!;
+    expect(offlineReason).toBe("delegation_not_ks256");
+    const r = await verifyInProcess(
+      childChainArgs({ genesis: file("ks256-genesis.cbor") }),
+      rpcFetch(encodeLogStateResult([fx.peak], 2n)),
+    );
+    expect(r.exitCode).toBe(0);
+    const report = jsonReport(r.stdout);
+    expect(report.offlineReason).toBe(offlineReason);
+    expect(report.authority).toBe("on-chain");
+    const sig = report.stages.find((s: StageRow) => s.stage === "signature");
+    expect(sig?.status).toBe("anchored");
+  });
+
+  test("forest mismatch (wrong --univocity, wrong chain id, other-forest snapshot) fails at anchor", async () => {
+    const wrongUniv = await verifyInProcess(
+      childChainArgs({ univocity: "0x" + "cd".repeat(20) }),
+      rpcFetch(encodeLogStateResult([fx.peak], 2n)),
+    );
+    expect(wrongUniv.exitCode).toBe(1);
+    expect(jsonReport(wrongUniv.stdout).anchor?.reason).toBe(
+      "anchor_forest_mismatch",
+    );
+    const wrongChain = await verifyInProcess(
+      childChainArgs(),
+      (async (_u: unknown, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { method: string };
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result:
+              body.method === "eth_chainId"
+                ? "0x1"
+                : encodeLogStateResult([fx.peak], 2n),
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }) as unknown as typeof fetch,
+    );
+    expect(wrongChain.exitCode).toBe(1);
+    const rep = jsonReport(wrongChain.stdout);
+    expect(rep.stage).toBe("anchor");
+    expect(rep.reason).toBe("anchor_forest_mismatch");
+    expect(rep.ok).toBe(false);
   });
 
   test("chain mode: peak NOT anchored → original delegation_invalid failure stands", async () => {
@@ -865,7 +954,8 @@ describe("forestrie verify-grant — known accumulator snapshot (FOR-297 D5)", (
     expect(report.ok).toBe(true);
     expect(report.mode).toBe("accumulator-anchored");
     const sig = report.stages.find((s: StageRow) => s.stage === "signature");
-    expect(sig?.status).toBe("ok");
+    expect(sig?.status).toBe("anchored");
+    expect(report.offlineReason).toBe("delegation_invalid");
     expect(report.anchor).toMatchObject({
       anchored: true,
       matchedPeak: 0,
@@ -873,6 +963,25 @@ describe("forestrie verify-grant — known accumulator snapshot (FOR-297 D5)", (
       blockNumber: "123",
       extended: false,
     });
+  });
+
+  test("a snapshot from another univocity fails at anchor under a genesis", async () => {
+    const snap = snapshotFile(
+      "acc-other-forest.cbor",
+      snapshotBytes({ univocity: new Uint8Array(20).fill(0xcd) }),
+    );
+    const r = await verifyInProcess(
+      baseArgs({
+        receipt: file("receipt-child.cbor"),
+        "known-accumulator": snap,
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = jsonReport(r.stdout);
+    expect(report.stage).toBe("anchor");
+    expect(report.reason).toBe("anchor_forest_mismatch");
+    expect(report.anchor?.detail).toContain("0x" + "cd".repeat(20));
   });
 
   test("human narration names the known accumulator and the block", async () => {
@@ -887,7 +996,7 @@ describe("forestrie verify-grant — known accumulator snapshot (FOR-297 D5)", (
     expect(r.stderr).toContain("known accumulator");
     expect(r.stderr).toContain("block 123");
     expect(r.stdout).toContain(
-      "PASS: receipt verified against the known accumulator",
+      "PASS: verified against the known accumulator",
     );
   });
 
@@ -1090,6 +1199,12 @@ describe("forestrie fetch-accumulator (FOR-297 D5 producer)", () => {
     expect(snapshot.chainId).toBe(84532n);
     expect(snapshot.blockNumber).toBe(123n);
     expect(bytesToHex(snapshot.accumulator[0]!)).toBe(bytesToHex(fx.peak));
+    // The recorded contract address is exactly the 20 bytes of --univocity
+    // (the fetch-accumulator address bug shifted it by one byte).
+    expect(snapshot.univocity.length).toBe(20);
+    expect(bytesToHex(snapshot.univocity)).toBe(
+      UNIVOCITY.replace(/^0x/, "").toLowerCase(),
+    );
 
     // Round-trip: the fetched snapshot anchors the child receipt offline.
     const v = await verifyInProcess(
@@ -1183,7 +1298,7 @@ describe("forestrie verify-grant — retained checkpoint chain (FOR-368 Phase 3)
     );
   });
 
-  test("a chain signed outside the genesis trust root is a structured anchor error", async () => {
+  test("a chain signed outside the genesis trust root fails the anchor with a typed reason", async () => {
     const rogue = await generateP256KeyPair();
     const rogueDir = path.join(dir, "sths-rogue");
     mkdirSync(rogueDir, { recursive: true });
@@ -1202,9 +1317,11 @@ describe("forestrie verify-grant — retained checkpoint chain (FOR-368 Phase 3)
       baseArgs({ "checkpoint-chain": rogueDir, json: true }),
     );
     expect(r.exitCode).toBe(1);
-    const report = JSON.parse(r.stdout) as VerifyErrorReport;
-    expect(report.error).toBe("anchor_check_failed");
-    expect(report.message).toContain("signature");
+    const report = jsonReport(r.stdout);
+    expect(report.ok).toBe(false);
+    expect(report.anchor?.anchored).toBe(false);
+    expect(report.anchor?.reason).toBe("signature_invalid");
+    expect(report.anchor?.detail).toContain("chain refused");
   });
 
   test("--checkpoint-chain conflicts with --known-accumulator and --univocity", () => {
@@ -1331,4 +1448,250 @@ describe("forestrie verify-grant — consistency-proof top-up (FOR-368 Phase 3)"
       ),
     ).toThrow(/--consistency-proof only applies/);
   });
+});
+
+describe("forged attached-peak receipts fail in every anchored mode (FOR-606 shape)", () => {
+  // The attached peak is genuinely signed and genuinely on-chain, but the
+  // inclusion path does not lead the leaf to it. No anchored mode may accept
+  // the claimed peak without proving inclusion.
+  const rpcAnchored = (): typeof fetch =>
+    (async (_u: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { method: string };
+      const result =
+        body.method === "eth_chainId"
+          ? "0x14a34"
+          : body.method === "eth_getLogs"
+            ? []
+            : encodeLogStateResult([fx.peak], 3n);
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+  const snapshot = (): string => {
+    const hex = toContractLogId(FIXTURE_LOG_ID).slice(2);
+    const logId = Uint8Array.from({ length: 32 }, (_, i) =>
+      Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16),
+    );
+    writeFileSync(
+      file("acc-forged.cbor"),
+      encodeKnownAccumulator({
+        version: 1,
+        chainId: 84532n,
+        univocity: new Uint8Array(20).fill(0xab),
+        logId,
+        size: 3n,
+        accumulator: [fx.peak],
+        blockNumber: 123n,
+        blockHash: new Uint8Array(32).fill(0xbb),
+      }),
+    );
+    return file("acc-forged.cbor");
+  };
+
+  const forged = [
+    ["root-signed", "receipt-bad-path.cbor"],
+    ["delegated child", "receipt-child-bad-path.cbor"],
+  ] as const;
+
+  for (const [label, receipt] of forged) {
+    test(`${label}: live chain anchor rejects`, async () => {
+      const r = await verifyInProcess(
+        baseArgs({
+          receipt: file(receipt),
+          univocity: UNIVOCITY,
+          "log-id": FIXTURE_LOG_ID,
+          "rpc-url": "http://rpc.mock",
+          json: true,
+        }),
+        rpcAnchored(),
+      );
+      expect(r.exitCode).toBe(1);
+      expect(jsonReport(r.stdout).ok).toBe(false);
+    });
+
+    test(`${label}: known-accumulator anchor rejects`, async () => {
+      const r = await verifyInProcess(
+        baseArgs({
+          receipt: file(receipt),
+          "known-accumulator": snapshot(),
+          json: true,
+        }),
+      );
+      expect(r.exitCode).toBe(1);
+      expect(jsonReport(r.stdout).ok).toBe(false);
+    });
+
+    test(`${label}: known-key live anchor rejects`, async () => {
+      const r = await verifyInProcess(
+        baseArgs({
+          genesis: undefined,
+          "known-log-key":
+            receipt === "receipt-bad-path.cbor"
+              ? Buffer.from(
+                  new Uint8Array(
+                    (await crypto.subtle.exportKey(
+                      "raw",
+                      fx.rootKeyPair.publicKey,
+                    )) as ArrayBuffer,
+                  ).slice(1),
+                ).toString("base64")
+              : fx.childOwnerKeyXyB64,
+          receipt: file(receipt),
+          univocity: UNIVOCITY,
+          "log-id": FIXTURE_LOG_ID,
+          "rpc-url": "http://rpc.mock",
+          json: true,
+        }),
+        rpcAnchored(),
+      );
+      expect(r.exitCode).toBe(1);
+      expect(jsonReport(r.stdout).ok).toBe(false);
+    });
+  }
+
+  test("checkpoint-chain anchor rejects a forged attached peak", async () => {
+    const d = path.join(dir, "sths-forged");
+    mkdirSync(d, { recursive: true });
+    writeFileSync(
+      path.join(d, "0000000000000000.sth"),
+      await buildCheckpoint({
+        signer: fx.rootKeyPair,
+        treeSize1: 0n,
+        treeSize2: 3n,
+        paths: [],
+        rightPeaks: [fx.peak],
+        accumulator: [fx.peak],
+      }),
+    );
+    const r = await verifyInProcess(
+      baseArgs({
+        receipt: file("receipt-bad-path.cbor"),
+        "checkpoint-chain": d,
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(1);
+    expect(jsonReport(r.stdout).ok).toBe(false);
+  });
+});
+
+describe("anchor hardening: stale snapshots, pre-v2 genesis, guard branches", () => {
+  const logIdBytes = () => {
+    const hex = toContractLogId(FIXTURE_LOG_ID).slice(2);
+    return Uint8Array.from({ length: 32 }, (_, i) =>
+      Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16),
+    );
+  };
+  const snap = (name: string, univocity: Uint8Array): string => {
+    writeFileSync(
+      file(name),
+      encodeKnownAccumulator({
+        version: 1,
+        chainId: 84532n,
+        univocity,
+        logId: logIdBytes(),
+        size: 3n,
+        accumulator: [fx.peak],
+        blockNumber: 123n,
+        blockHash: new Uint8Array(32).fill(0xbb),
+      }),
+    );
+    return file(name);
+  };
+
+  test("a snapshot written by forestrie-cli <=0.11.1 (shifted address) names the cause", async () => {
+    const shifted = new Uint8Array(20).fill(0xab);
+    shifted[0] = 0x00; // leading 0x00, last byte dropped
+    const r = await verifyInProcess(
+      baseArgs({
+        "known-accumulator": snap("acc-shifted.cbor", shifted),
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = jsonReport(r.stdout);
+    expect(report.reason).toBe("anchor_forest_mismatch");
+    expect(report.anchor?.detail).toContain("forestrie-cli <=0.11.1");
+    expect(report.anchor?.detail).toContain("re-run fetch-accumulator");
+  });
+
+  test("an unrelated wrong address keeps the generic detail", async () => {
+    const r = await verifyInProcess(
+      baseArgs({
+        "known-accumulator": snap("acc-other.cbor", new Uint8Array(20).fill(0xcd)),
+        json: true,
+      }),
+    );
+    expect(jsonReport(r.stdout).anchor?.detail).not.toContain("0.11.1");
+  });
+
+  test("a pre-v2 genesis on a chain-anchored run fails closed with a clear message", async () => {
+    const m = decodeCborDeterministic(fx.genesisCbor) as Map<number, unknown>;
+    const v1 = new Map(m);
+    v1.set(-68009, 1);
+    writeFileSync(file("genesis-v1.cbor"), encodeCborDeterministic(v1));
+    const rootRaw = new Uint8Array(
+      (await crypto.subtle.exportKey(
+        "raw",
+        fx.rootKeyPair.publicKey,
+      )) as ArrayBuffer,
+    );
+    // A known key makes the offline verify pass; the genesis then supplies
+    // only the forest binding, which a v1 genesis does not carry.
+    const r = await verifyInProcess(
+      baseArgs({
+        genesis: file("genesis-v1.cbor"),
+        "known-log-key": Buffer.from(rootRaw.slice(1)).toString("base64"),
+        "known-accumulator": snap("acc-v1.cbor", new Uint8Array(20).fill(0xab)),
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(1);
+    expect(r.stdout).not.toContain('"ok": true');
+    expect(r.stdout + r.stderr).toContain("predates chain binding (v1)");
+    expect(r.stdout + r.stderr).not.toContain("is not 2");
+  });
+
+  for (const mode of ["chain", "accumulator"] as const) {
+    test(`${mode}: an attached peak whose inclusion proof fails is never trusted (guard, called directly)`, async () => {
+      const out = createCaptureOut(0);
+      const saved = process.exitCode;
+      process.exitCode = 0;
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = forbiddenFetch;
+      try {
+        await finishVerify(
+          out,
+          {
+            json: true,
+            anchor: mode,
+            univocity: UNIVOCITY,
+            logId: FIXTURE_LOG_ID,
+            rpcUrl: "http://rpc.mock",
+            knownAccumulator: snap("acc-guard.cbor", new Uint8Array(20).fill(0xab)),
+            knownLogKey: undefined,
+          },
+          {
+            genesisCbor: undefined,
+            receiptCbor: fx.tamperedPathReceiptCbor,
+          },
+          // The offline verifier is told "ok": the guard must still refuse.
+          { ok: true, stage: "binding" },
+          {
+            idtimestampBe8: fx.idtimestampBe8,
+            inner: () => grantCommitmentHashFromGrant(fx.grant),
+          },
+        );
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+      const exitCode = Number(process.exitCode ?? 0);
+      process.exitCode = saved;
+      const text = out.lines.map((l) => l.text).join("\n");
+      expect(exitCode).toBe(1);
+      expect(text).toContain("inclusion proof does not verify");
+      expect(text).not.toContain('"ok": true');
+    });
+  }
 });

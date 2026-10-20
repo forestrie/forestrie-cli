@@ -1,4 +1,8 @@
-import { defineCommandRunner, defineForestrieCommand } from "../commoncli.js";
+import {
+  defineCommandRunner,
+  defineForestrieCommand,
+  withRepeatedFlags,
+} from "../commoncli.js";
 import { runVerify } from "../main/verify.js";
 import { parseVerifyOptions } from "../options/verify.js";
 
@@ -24,7 +28,7 @@ export default defineForestrieCommand({
     "ks256-attestation": {
       type: "string",
       description:
-        "ERC-1271 attestation (CBOR from `forestrie fetch-ks256-attestation`) for a KS256 contract root such as a Safe: the delegation certificate then verifies offline as valid under the contract's signers at the attested block, not as a signature by one key. Needs the forest chain id from --genesis. verify never calls the chain. Trust: an attestation is unsigned and only as good as whoever fetched it — accept one only from a party you would trust to read the chain for you, or fetch it yourself",
+        "ERC-1271 attestation (CBOR from `forestrie fetch-ks256-attestation`) for a KS256 contract root such as a Safe; repeatable (or comma-separated) — a Safe that rotated its delegate needs one per certificate, matched to each by certificate digest, and every one is reported used or unused with a reason: the delegation certificate then verifies offline as valid under the contract's signers at the attested block, not as a signature by one key. Needs the forest chain id from --genesis. verify never calls the chain. Trust: an attestation is unsigned and only as good as whoever fetched it — accept one only from a party you would trust to read the chain for you, or fetch it yourself",
       valueHint: "path",
     },
     receipt: {
@@ -49,7 +53,7 @@ export default defineForestrieCommand({
     univocity: {
       type: "string",
       description:
-        "ImutableUnivocity contract address — enables the chain-anchored check (with --log-id and --rpc-url)",
+        "ImutableUnivocity contract address — enables the chain-anchored check (with --log-id and --rpc-url). With --genesis the anchor must be the genesis forest's contract and chain (else anchor_forest_mismatch); without --genesis (known-key runs) it is trusted as named. When offline verify cannot resolve the signature (delegation_invalid, or a KS256 root it cannot recover) a matching anchor still passes, reported as `anchored` — signature not checked offline, authority is the chain (univocity checks signature and delegation at publish, not expiry); delegation_expired and out-of-range delegations do not fall back (a diagnostic, not a guarantee: the fallback never checks the receipt signature and the certificate header is unprotected — what it guarantees is inclusion in the log state univocity authorised). A --known-accumulator snapshot is unsigned: forest binding catches mistakes, not a malicious supplier — trust it as you would its fetcher, and pass --log-id",
       valueHint: "address",
     },
     "log-id": {
@@ -90,9 +94,12 @@ export default defineForestrieCommand({
     "checkpoint-chain": {
       type: "string",
       description:
-        "Retained .sth checkpoint chain — a directory of .sth objects or comma-separated files in chain order. Folds the chain from size 0, authenticating the accumulator at every retained seal from the public log store alone (no tiles, no RPC); the receipt peak may match ANY link [FOR-368]",
+        "Retained .sth checkpoint chain — a directory of .sth objects or comma-separated files in chain order. Folds the chain from size 0, authenticating the accumulator at every retained seal from the public log store alone (no tiles, no RPC); the receipt peak may match ANY link [FOR-368]. Signatures root in --genesis and/or --known-log-key (ES256 or KS256); each certificate's mmrStart/mmrEnd window is enforced per link and its expiry at the leaf time once the receipt matches; --ks256-attestation vouches for contract-root certificates (needs --genesis)",
       valueHint: "dir|paths",
     },
   },
-  run: defineCommandRunner(parseVerifyOptions, runVerify),
+  run: withRepeatedFlags(
+    ["ks256-attestation"],
+    defineCommandRunner(parseVerifyOptions, runVerify),
+  ),
 });

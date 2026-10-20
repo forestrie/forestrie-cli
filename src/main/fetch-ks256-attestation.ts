@@ -8,7 +8,6 @@ import {
   normalizeHexAddress,
 } from "@forestrie/chain-rpc";
 import {
-  decodeChainBindingFromGenesis,
   decodeTrustRootFromGenesis,
   encodeKs256Attestation,
   ERC1271_MAGIC_VALUE,
@@ -17,6 +16,7 @@ import {
 import { keccak256 } from "viem";
 import type { FetchKs256AttestationOptions } from "../options/fetch-ks256-attestation.js";
 import { isKs256Root } from "../lib/known-log-key.js";
+import { genesisForestBinding } from "../lib/verify-anchored.js";
 
 /** `--json` success shape on stdout — stable for demo scripting. */
 export type FetchKs256AttestationReport = {
@@ -94,7 +94,7 @@ export async function runFetchKs256Attestation(
 
     let genesisChainId: bigint | undefined;
     if (genesisCbor !== undefined) {
-      genesisChainId = BigInt(decodeChainBindingFromGenesis(genesisCbor).chainId);
+      genesisChainId = genesisForestBinding(genesisCbor).chainId;
     }
 
     let parts: ReturnType<typeof extractKs256DelegationDigest>;

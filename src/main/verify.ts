@@ -3,27 +3,31 @@ import type { Out } from "@forestrie/cli-kit/reporting";
 import {
   decodeKs256Attestation,
   decodeTrustRootFromGenesis,
+  extractKs256DelegationDigest,
   grantCommitmentHashFromGrant,
   type Ks256Attestation,
-  verifyCheckpointChain,
+  type RootVerifyKey,
+  selectKs256Attestation,
   verifyGrantReceiptOffline,
   verifyGrantReceiptOfflineWithKeys,
   verifyReceiptOffline,
+  verifyReceiptAgainstCheckpointChain,
   verifyReceiptOfflineWithKeys,
   type ReceiptVerifyResult,
 } from "@forestrie/receipt-verify";
 import type { VerifyGrantOptions, VerifyOptions } from "../options/verify.js";
 import { findPeakInPublishedHistory } from "../lib/verify-eventscan.js";
 import {
+  ANCHOR_FOREST_MISMATCH,
   checkReceiptAnchored,
+  forestMismatchDetail,
+  readRpcChainId,
   receiptLeafIndex,
   recomputeReceiptPeak,
   type AnchorCheck,
 } from "../lib/verify-anchored.js";
 import {
-  checkReceiptAnchoredToCheckpointChain,
   loadCheckpointChainFiles,
-  makeCheckpointSignatureVerifier,
   type CheckpointChainAnchorCheck,
 } from "../lib/verify-checkpoint-chain.js";
 import {
@@ -44,6 +48,7 @@ import {
 import { isKs256Root, parseKnownLogKey } from "../lib/known-log-key.js";
 import {
   applyKs256Rows,
+  type AttestationUsage,
   type Ks256ReportInfo,
   anchorOnlyStageRows,
   buildVerifyReport,
@@ -159,50 +164,114 @@ async function checkSnapshotAnchor(
 }
 
 /**
- * Retained checkpoint-chain anchor (FOR-368 Phase 3): fold the store's
- * `.sth` chain — each link's accumulator computed from the previous one and
- * its signature verified over exactly that computed payload — then match
- * the recomputed receipt peak against ANY authenticated link. Signature
- * trust roots in the same anchors as the offline verify (genesis-derived
- * roots or the caller-known log key); the label-1000 delegation cert on
- * each checkpoint resolves the sealer key under them.
+ * Retained checkpoint-chain anchor (FOR-368 Phase 3, owner ruling D8): the
+ * shared receipt-verify checkpoint-chain verifier folds the store's `.sth`
+ * chain under the caller's roots (genesis-derived and/or `--known-log-key`,
+ * ES256 or KS256), enforces each certificate's mmrStart/mmrEnd per link,
+ * matches the leaf-recomputed peak against ANY authenticated link, then
+ * judges certificate expiry on the links covering the bound leaf. Several
+ * ERC-1271 attestations may vouch for contract-root certificates; their
+ * usage is accounted for. Typed refusal reasons come back as the anchor's
+ * `reason`.
  */
 async function checkCheckpointChainAnchor(
   ctx: VerifyReportContext,
   genesisCbor: Uint8Array | undefined,
   receiptCbor: Uint8Array,
-  recomputedPeak: Uint8Array,
-): Promise<CheckpointChainAnchorCheck> {
-  const rootKeys: CryptoKey[] = [];
+  anchorLeaf: AnchorLeaf,
+  attestations: Ks256Attestation[],
+): Promise<CheckpointChainAnchorCheck & { attestationUsage: AttestationUsage }> {
+  const rootKeys: RootVerifyKey[] = [];
   if (ctx.knownLogKey !== undefined) {
-    const known = await parseKnownLogKey(ctx.knownLogKey);
-    if (isKs256Root(known)) throw new Error(KS256_CHECKPOINT_CHAIN_REFUSAL);
-    rootKeys.push(known as CryptoKey);
+    rootKeys.push(await parseKnownLogKey(ctx.knownLogKey));
   }
   if (genesisCbor !== undefined) {
-    const root = await decodeTrustRootFromGenesis(genesisCbor);
-    if (root instanceof CryptoKey) rootKeys.push(root);
+    rootKeys.push(await decodeTrustRootFromGenesis(genesisCbor));
   }
   if (rootKeys.length === 0) {
     throw new Error(
-      "checkpoint-chain verification needs an ES256 trust root (--genesis or --known-log-key)",
+      "checkpoint-chain verification needs a trust root (--genesis or --known-log-key)",
     );
   }
   const { checkpoints, files } = loadCheckpointChainFiles(ctx.checkpointChain!);
-  const chain = await verifyCheckpointChain({
+  const outcome = await verifyReceiptAgainstCheckpointChain({
+    receiptCbor,
+    idtimestampBe8: anchorLeaf.idtimestampBe8,
+    inner: await anchorLeaf.inner(),
     checkpoints,
-    verifySignature: makeCheckpointSignatureVerifier(rootKeys),
+    rootKeys,
+    attestations,
+    ...(genesisCbor !== undefined ? { forestGenesisCbor: genesisCbor } : {}),
   });
-  if (!chain.ok) {
-    throw new Error(
-      `checkpoint chain did not verify (${chain.reason} at ${files[chain.at] ?? `link ${chain.at}`}): ${chain.detail}`,
+  const final = outcome.links[outcome.links.length - 1];
+  const base = {
+    accumulator: final?.accumulator ?? [],
+    size: final?.treeSize2 ?? 0n,
+    linkCount: outcome.links.length,
+    attestationUsage: outcome.attestations,
+    chainRecords: outcome.records,
+  };
+  if (outcome.ok) {
+    const link = outcome.links[outcome.matchedLink]!;
+    return {
+      ...base,
+      anchored: true,
+      matchedPeak: outcome.matchedPeak,
+      matchedLinkSize: link.treeSize2,
+      accumulator: link.accumulator,
+      size: link.treeSize2,
+    };
+  }
+  if (outcome.stage === "input") {
+    throw new Error(`checkpoint-chain verification input: ${outcome.reason}`);
+  }
+  const where =
+    outcome.at !== undefined
+      ? ` at ${files[outcome.at] ?? `link ${outcome.at}`}`
+      : "";
+  return {
+    ...base,
+    anchored: false,
+    matchedPeak: null,
+    matchedLinkSize: null,
+    reason: outcome.reason,
+    ...(outcome.stage === "chain" || outcome.stage === "delegation"
+      ? {
+          chainFailure: `${outcome.stage} refused${where}${outcome.detail !== undefined ? `: ${outcome.detail}` : ""}`,
+        }
+      : {}),
+  } as CheckpointChainAnchorCheck & { attestationUsage: AttestationUsage };
+}
+
+/** One stderr line per supplied attestation: used, or unused with a reason. */
+function printAttestationUsage(out: Out, info: Ks256ReportInfo): void {
+  for (const u of info.usage.used) {
+    const a = info.attestations[u.index]!;
+    out.print(
+      "verify: attestation #%d used — digest 0x%s (chain %s, block %s)%s",
+      u.index,
+      u.digestHex.slice(0, 16) + "…",
+      a.chainId.toString(),
+      a.blockNumber.toString(),
+      u.links.length > 0 ? `; carries chain link(s) ${u.links.join(", ")}` : "",
     );
   }
-  return checkReceiptAnchoredToCheckpointChain({
-    links: chain.links,
-    recomputedPeak,
-    leafMmrIndex: receiptLeafIndex(receiptCbor),
-  });
+  for (const u of info.usage.rejected) {
+    out.print(
+      "verify: attestation #%d rejected — digest 0x%s%s",
+      u.index,
+      u.digestHex.slice(0, 16) + "…",
+      u.links.length > 0 ? `; refused for chain link(s) ${u.links.join(", ")}` : "",
+    );
+  }
+  for (const u of info.usage.unused) {
+    out.print(
+      "verify: attestation #%d unused — digest 0x%s: %s",
+      u.index,
+      u.digestHex.slice(0, 16) + "…",
+      u.reason,
+    );
+  }
 }
 
 /** Human narration for the anchor row, naming the anchor distinctly (D5). */
@@ -249,6 +318,10 @@ function printAnchorRow(
       hint =
         " — entry not anchored on-chain yet; retry after the next" +
         " checkpoint publishes";
+    } else if (anchor.reason === ANCHOR_FOREST_MISMATCH) {
+      hint = ` — ${(anchor as { forestMismatch?: string }).forestMismatch ?? "anchor is not the genesis forest's"}`;
+    } else if ((anchor as { chainFailure?: string }).chainFailure !== undefined) {
+      hint = ` — ${(anchor as { chainFailure?: string }).chainFailure}`;
     } else if (anchor.reason === "receipt_newer_than_checkpoint_chain") {
       hint =
         " — the supplied chain ends before this entry; fetch the newer" +
@@ -268,31 +341,104 @@ function printAnchorRow(
   }
 }
 
-const KS256_CHECKPOINT_CHAIN_REFUSAL =
-  "--checkpoint-chain verifies checkpoint signatures, which need an ES256 trust root: a KS256 (20-byte address) known log key cannot root them";
+/**
+ * Load every `--ks256-attestation` (decode failure is an input error).
+ * Empty when the flag is absent.
+ */
+function loadAttestations(paths: readonly string[]): Ks256Attestation[] {
+  return paths.map((path) => {
+    const bytes = readBytes(path, "--ks256-attestation");
+    try {
+      return decodeKs256Attestation(bytes);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `--ks256-attestation '${path}' is not a valid attestation: ${message}`,
+      );
+    }
+  });
+}
 
 /**
- * Load `--ks256-attestation` (decode failure is an input error). Undefined
- * when the flag is absent.
+ * Attestation accounting for ONE receipt. Every attestation made for the
+ * receipt's certificate (digest and signature hash, via receipt-verify's
+ * selection) is tried in order and the first that resolves wins. If the
+ * certificate verifies without any attestation they are all `not_needed`;
+ * otherwise those before the first that resolves are `rejected`, that one is
+ * `used`, and later ones are `duplicate`. Others have no matching
+ * certificate.
  */
-function loadAttestation(path: string | undefined): Ks256Attestation | undefined {
-  if (path === undefined) return undefined;
-  const bytes = readBytes(path, "--ks256-attestation");
+async function receiptAttestationUsage(
+  receiptCbor: Uint8Array,
+  attestations: readonly Ks256Attestation[],
+  result: ReceiptVerifyResult,
+  run: (atts: Ks256Attestation[]) => Promise<ReceiptVerifyResult>,
+): Promise<AttestationUsage> {
+  let cert: ReturnType<typeof extractKs256DelegationDigest> = null;
   try {
-    return decodeKs256Attestation(bytes);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`--ks256-attestation '${path}' is not a valid attestation: ${message}`);
+    cert = extractKs256DelegationDigest(receiptCbor);
+  } catch {
+    cert = null;
   }
+  const usage: AttestationUsage = { used: [], rejected: [], unused: [] };
+  const hex = (a: Ks256Attestation) =>
+    Array.from(a.digest, (b) => b.toString(16).padStart(2, "0")).join("");
+  const matching: number[] = [];
+  attestations.forEach((a, index) => {
+    if (cert !== null && selectKs256Attestation(cert, [a]) !== undefined) {
+      matching.push(index);
+    } else {
+      usage.unused.push({
+        index,
+        digestHex: hex(a),
+        reason: "no_matching_certificate",
+      });
+    }
+  });
+  // Rejected only when the run actually failed on an attestation; a failure
+  // at another stage says nothing about them.
+  const attestationFailure =
+    !result.ok &&
+    result.stage === "signature" &&
+    (result.reason ?? "").startsWith("ks256_attestation_");
+  const withoutOk = result.ok && matching.length > 0 ? (await run([])).ok : false;
+  let winner: number | undefined;
+  if (result.ok && !withoutOk) {
+    for (const index of matching) {
+      if ((await run([attestations[index]!])).ok) {
+        winner = index;
+        break;
+      }
+    }
+  }
+  let seenWinner = false;
+  for (const index of matching) {
+    const digestHex = hex(attestations[index]!);
+    if (withoutOk) {
+      usage.unused.push({ index, digestHex, reason: "not_needed" });
+    } else if (winner === undefined && !result.ok && !attestationFailure) {
+      usage.unused.push({ index, digestHex, reason: "not_evaluated" });
+    } else if (winner === undefined) {
+      usage.rejected.push({ index, digestHex, links: [] });
+    } else if (index === winner) {
+      usage.used.push({ index, digestHex, links: [] });
+      seenWinner = true;
+    } else if (seenWinner) {
+      usage.unused.push({ index, digestHex, reason: "duplicate" });
+    } else {
+      usage.rejected.push({ index, digestHex, links: [] });
+    }
+  }
+  usage.unused.sort((a, b) => a.index - b.index);
+  return usage;
 }
 
 /** Root algorithm and attestation facts for the report. */
 async function ks256Info(
-  options: VerifyReportContext & { ks256Attestation?: string | undefined },
   genesisCbor: Uint8Array | undefined,
   knownKey: Awaited<ReturnType<typeof parseKnownLogKey>> | undefined,
-  attestation: Ks256Attestation | undefined,
-  used: boolean,
+  attestations: Ks256Attestation[],
+  usage: AttestationUsage,
 ): Promise<Ks256ReportInfo | undefined> {
   let ks256Root = false;
   if (knownKey !== undefined) {
@@ -304,12 +450,8 @@ async function ks256Info(
       // The offline verify already reported an unreadable genesis.
     }
   }
-  if (!ks256Root && attestation === undefined) return undefined;
-  return {
-    ks256Root,
-    knownKey: knownKey !== undefined,
-    ...(attestation !== undefined ? { attestation, attestationUsed: used } : {}),
-  };
+  if (!ks256Root && attestations.length === 0) return undefined;
+  return { ks256Root, knownKey: knownKey !== undefined, attestations, usage };
 }
 
 /**
@@ -374,6 +516,7 @@ async function tryAnchorOnlyVerify(
   artifacts: { genesisCbor: Uint8Array | undefined; receiptCbor: Uint8Array },
   result: ReceiptVerifyResult,
   anchorLeaf: AnchorLeaf,
+  ks256?: Ks256ReportInfo,
 ): Promise<boolean> {
   let recomputed: Awaited<ReturnType<typeof recomputeReceiptPeak>>;
   try {
@@ -441,7 +584,26 @@ async function tryAnchorOnlyVerify(
   }
 
   const isSnapshot = ctx.anchor === "accumulator";
+  const offlineReason = result.ok ? "unknown" : (result.reason ?? "unknown");
   const okResult: ReceiptVerifyResult = { ok: true, stage: "binding" };
+  // The fallback never consults attestations: authority is the anchor.
+  const ks256Report: Ks256ReportInfo | undefined =
+    ks256 !== undefined && ks256.attestations.length > 0
+      ? {
+          ...ks256,
+          usage: {
+            used: [],
+            rejected: [],
+            unused: ks256.attestations.map((a, index) => ({
+              index,
+              digestHex: Array.from(a.digest, (b) =>
+                b.toString(16).padStart(2, "0"),
+              ).join(""),
+              reason: "not_consulted",
+            })),
+          },
+        }
+      : undefined;
   if (ctx.json) {
     const report = buildVerifyReport({
       ok: true,
@@ -450,11 +612,13 @@ async function tryAnchorOnlyVerify(
       anchor,
       univocity: ctx.univocity,
       logId: ctx.logId,
-      stagesOverride: anchorOnlyStageRows(),
+      stagesOverride: anchorOnlyStageRows(offlineReason),
+      offlineReason,
+      ...(ks256Report !== undefined ? { ks256: ks256Report } : {}),
     });
     out.out(JSON.stringify(report, null, 2));
   } else {
-    for (const row of anchorOnlyStageRows()) {
+    for (const row of anchorOnlyStageRows(offlineReason)) {
       const detail = row.reason ?? STAGE_NARRATION[row.stage];
       out.print(
         "verify: %s %s — %s",
@@ -464,10 +628,13 @@ async function tryAnchorOnlyVerify(
       );
     }
     printAnchorRow(out, ctx, anchor);
+    if (ks256Report !== undefined) {
+      printAttestationUsage(out, ks256Report);
+    }
     out.out(
       isSnapshot
-        ? `PASS: receipt verified against the known accumulator (anchored size ${anchor.size}, read from chain at block ${anchor.blockNumber}; signature enforced by univocity at publish)`
-        : `PASS: receipt verified against the on-chain accumulator (anchored size ${anchor.size}; signature enforced by univocity at publish)`,
+        ? `PASS: verified against the known accumulator (anchored size ${anchor.size}, read from chain at block ${anchor.blockNumber}); signature not checked offline (${offlineReason})`
+        : `PASS: verified against the on-chain accumulator (anchored size ${anchor.size}); signature not checked offline (${offlineReason})`,
     );
   }
   process.exitCode = 0;
@@ -514,57 +681,172 @@ type HistoricalAnchorFields = {
   txHash: string;
 };
 
-async function finishVerify(
+/**
+ * Offline signature failures the chain can stand in for (FOR-297 approach C):
+ * the delegation chain or KS256 root is one the offline verifier cannot
+ * resolve, but univocity accepted the checkpoint only if its receipt verified
+ * under the log's root key (ES256, or KS256 via ecrecover / ERC-1271) or a
+ * delegate the root signed. NOT `delegation_out_of_range` or
+ * `delegation_expired`: those are claims about this receipt that the chain
+ * does not vouch for (it checks neither).
+ */
+function isAnchorFallbackReason(reason: string | undefined): boolean {
+  return (
+    reason === "delegation_invalid" ||
+    reason === "delegation_not_ks256" ||
+    reason === "ks256_root_not_recovered" ||
+    reason === "ks256_root_requires_delegation" ||
+    (reason !== undefined && reason.startsWith("ks256_attestation_"))
+  );
+}
+
+/**
+ * Bind the anchor to the genesis forest: live reads compare `--univocity` and
+ * the RPC's `eth_chainId`; a snapshot compares its recorded contract and
+ * chain. Returns the mismatch detail, or undefined when they agree.
+ */
+async function anchorForestMismatch(
+  ctx: VerifyReportContext,
+  genesisCbor: Uint8Array,
+): Promise<string | undefined> {
+  if (ctx.anchor === "accumulator") {
+    const snapshot = decodeKnownAccumulator(
+      new Uint8Array(readFileSync(ctx.knownAccumulator!)),
+    );
+    return forestMismatchDetail(genesisCbor, {
+      univocity: `0x${Array.from(snapshot.univocity, (b) =>
+        b.toString(16).padStart(2, "0"),
+      ).join("")}`,
+      chainId: snapshot.chainId,
+    });
+  }
+  return forestMismatchDetail(genesisCbor, {
+    univocity: ctx.univocity!,
+    chainId: await readRpcChainId(ctx.rpcUrl!),
+  });
+}
+
+/**
+ * Union of two attestation accountings (the receipt's own certificate and
+ * the chain's links): used in either counts as used; otherwise unused with
+ * the chain's reason when it saw the attestation, else the receipt's.
+ */
+function mergeAttestationUsage(
+  receipt: AttestationUsage,
+  chain: AttestationUsage,
+): AttestationUsage {
+  const used = new Map<number, AttestationUsage["used"][number]>();
+  for (const u of [...receipt.used, ...chain.used]) {
+    const prev = used.get(u.index);
+    used.set(u.index, {
+      ...u,
+      links: [...new Set([...(prev?.links ?? []), ...u.links])],
+    });
+  }
+  const rejected = new Map<number, AttestationUsage["rejected"][number]>();
+  for (const u of [...receipt.rejected, ...chain.rejected]) {
+    const prev = rejected.get(u.index);
+    rejected.set(u.index, {
+      ...u,
+      links: [...new Set([...(prev?.links ?? []), ...u.links])],
+    });
+  }
+  const unused = new Map<number, AttestationUsage["unused"][number]>();
+  for (const u of [...receipt.unused, ...chain.unused]) {
+    if (!used.has(u.index) && !rejected.has(u.index)) unused.set(u.index, u);
+  }
+  const byIndex = <T extends { index: number }>(m: Map<number, T>) =>
+    [...m.values()].sort((a, b) => a.index - b.index);
+  return {
+    used: byIndex(used),
+    rejected: byIndex(rejected),
+    unused: byIndex(unused),
+  };
+}
+
+/** @internal exported for tests (the guard branches the offline verifier pre-empts). */
+export async function finishVerify(
   out: Out,
   ctx: VerifyReportContext,
   artifacts: { genesisCbor: Uint8Array | undefined; receiptCbor: Uint8Array },
   result: ReceiptVerifyResult,
   anchorLeaf?: AnchorLeaf,
-  ks256?: Ks256ReportInfo,
+  ks256Info?: Ks256ReportInfo,
 ): Promise<void> {
+  let ks256 = ks256Info;
   // FOR-297 approach C: in a chain-anchored mode (live read OR cached
   // known-accumulator snapshot), a delegation the offline verifier cannot
   // resolve is not the end — the anchored accumulator IS the split-view
   // authority, so verify against it without the signature.
-  if (
-    (ctx.anchor === "chain" || ctx.anchor === "accumulator") &&
+  const chainAnchored = ctx.anchor === "chain" || ctx.anchor === "accumulator";
+  const fallbackEligible =
+    chainAnchored &&
     !result.ok &&
     result.stage === "signature" &&
-    result.reason === "delegation_invalid" &&
-    anchorLeaf !== undefined
-  ) {
+    isAnchorFallbackReason(result.reason) &&
+    // A caller-known key is the trust anchor: its mismatch is never excused
+    // by the chain (ES256 is remapped to known_key_mismatch; KS256 reasons
+    // are gated here for the same effect).
+    ctx.knownLogKey === undefined &&
+    anchorLeaf !== undefined;
+
+  // The anchor must belong to the genesis forest whenever a genesis was
+  // given: an accumulator from another contract/chain is never acceptable.
+  let forestMismatch: string | undefined;
+  if (chainAnchored && artifacts.genesisCbor !== undefined && (result.ok || fallbackEligible)) {
+    try {
+      forestMismatch = await anchorForestMismatch(ctx, artifacts.genesisCbor);
+    } catch (err) {
+      reportRunError(out, ctx, "anchor", err);
+      return;
+    }
+  }
+
+  if (fallbackEligible && forestMismatch === undefined) {
     const handled = await tryAnchorOnlyVerify(
       out,
       ctx,
       artifacts,
       result,
       anchorLeaf,
+      ks256,
     );
     if (handled) return;
   }
 
   let anchor: (AnchorCheck & Partial<SnapshotAnchorCheck>) | undefined;
-  if (ctx.anchor !== "offline" && result.ok) {
+  if (forestMismatch !== undefined) {
+    anchor = {
+      accumulator: [],
+      size: 0n,
+      anchored: false,
+      matchedPeak: null,
+      reason: ANCHOR_FOREST_MISMATCH,
+      forestMismatch,
+    } as AnchorCheck & { forestMismatch: string };
+  } else if (ctx.anchor !== "offline" && result.ok) {
     try {
       // Under a caller-known key there may be no genesis to locate a detached
       // peak by trust-key trial — recompute the peak from leaf + proof
       // instead (same strategy as the anchor-only path). The snapshot and
       // checkpoint-chain checks always work from the recomputed peak.
       let recomputedPeak: Uint8Array | undefined;
-      if (
-        // A KS256 root cannot locate a detached peak by signature trial
-        // (no_es256_trust_key), so it always works from the recomputed peak.
-        (ctx.knownLogKey !== undefined ||
-          ctx.anchor !== "chain" ||
-          ks256?.ks256Root === true) &&
-        anchorLeaf !== undefined
-      ) {
+      // Always recompute from leaf + proof when the leaf material is known,
+      // and require the inclusion proof to verify: an attached-peak receipt
+      // must never anchor on its claimed peak alone (the FOR-606 shape).
+      // The checkpoint-chain verifier does the same inside receipt-verify.
+      if (anchorLeaf !== undefined && ctx.anchor !== "checkpoints") {
         const recomputed = await recomputeReceiptPeak({
           receiptCbor: artifacts.receiptCbor,
           idtimestampBe8: anchorLeaf.idtimestampBe8,
           inner: await anchorLeaf.inner(),
         });
-        if (recomputed.inclusionOk) recomputedPeak = recomputed.peak;
+        if (!recomputed.inclusionOk) {
+          throw new Error(
+            "the receipt's inclusion proof does not verify against its attached peak",
+          );
+        }
+        recomputedPeak = recomputed.peak;
       }
       if (ctx.anchor === "accumulator") {
         if (anchorLeaf === undefined || recomputedPeak === undefined) {
@@ -579,17 +861,25 @@ async function finishVerify(
           recomputedPeak,
         );
       } else if (ctx.anchor === "checkpoints") {
-        if (anchorLeaf === undefined || recomputedPeak === undefined) {
+        if (anchorLeaf === undefined) {
           throw new Error(
             "cannot recompute the receipt peak for the checkpoint-chain check",
           );
         }
-        anchor = await checkCheckpointChainAnchor(
+        const chained = await checkCheckpointChainAnchor(
           ctx,
           artifacts.genesisCbor,
           artifacts.receiptCbor,
-          recomputedPeak,
+          anchorLeaf,
+          ks256?.attestations ?? [],
         );
+        anchor = chained;
+        if (ks256 !== undefined) {
+          ks256 = {
+            ...ks256,
+            usage: mergeAttestationUsage(ks256.usage, chained.attestationUsage),
+          };
+        }
       } else {
         anchor = await checkReceiptAnchored({
           genesisCbor: artifacts.genesisCbor,
@@ -678,6 +968,9 @@ async function finishVerify(
     if (anchor !== undefined) {
       printAnchorRow(out, ctx, anchor);
     }
+    if (ks256 !== undefined) {
+      printAttestationUsage(out, ks256);
+    }
     if (ok) {
       if (anchor !== undefined) {
         out.out(
@@ -694,6 +987,8 @@ async function finishVerify(
       } else {
         out.out("PASS: receipt verified offline against the cached checkpoint");
       }
+    } else if (forestMismatch !== undefined) {
+      out.out(`FAIL: stage=anchor reason=${ANCHOR_FOREST_MISMATCH}`);
     } else if (!result.ok) {
       out.out(
         `FAIL: stage=${result.stage} reason=${result.reason ?? "unknown"}`,
@@ -718,18 +1013,18 @@ export async function runVerify(
   options: VerifyOptions,
 ): Promise<void> {
   let artifacts: ReturnType<typeof loadPayloadVerifyArtifacts>;
-  let attestation: Ks256Attestation | undefined;
+  let attestations: Ks256Attestation[];
   let knownKey: Awaited<ReturnType<typeof parseKnownLogKey>> | undefined;
   try {
     artifacts = loadPayloadVerifyArtifacts(options);
-    attestation = loadAttestation(options.ks256Attestation);
+    attestations = loadAttestations(options.ks256Attestations);
     knownKey = await parseKnownKeyForRun(options);
   } catch (err) {
     reportRunError(out, options, "input", err);
     return;
   }
 
-  const run = (att: Ks256Attestation | undefined) =>
+  const run = (atts: Ks256Attestation[]) =>
     knownKey !== undefined
       ? // FOR-297 D1: caller-known log owner key replaces the genesis roots.
         // Genesis, if also given, only supplies the forest chain id.
@@ -738,7 +1033,7 @@ export async function runVerify(
           payload: artifacts.payload,
           idtimestampBe8: artifacts.idtimestampBe8,
           trustKeys: [knownKey],
-          ...(att !== undefined ? { ks256Attestation: att } : {}),
+          ...(atts.length > 0 ? { ks256Attestations: atts } : {}),
           ...(artifacts.genesisCbor !== undefined
             ? { forestGenesisCbor: artifacts.genesisCbor }
             : {}),
@@ -749,21 +1044,25 @@ export async function runVerify(
           payload: artifacts.payload,
           idtimestampBe8: artifacts.idtimestampBe8,
           genesisCbor: artifacts.genesisCbor!,
-          ...(att !== undefined ? { ks256Attestation: att } : {}),
+          ...(atts.length > 0 ? { ks256Attestations: atts } : {}),
         });
 
   let result: ReceiptVerifyResult;
   let ks256: Ks256ReportInfo | undefined;
   try {
-    result = await run(attestation);
+    result = await run(attestations);
+    // An attestation was needed only if the certificate does not verify by
+    // ecrecover alone.
     ks256 = await ks256Info(
-      options,
       artifacts.genesisCbor,
       knownKey,
-      attestation,
-      // The attestation was needed only if the certificate does not verify
-      // by ecrecover alone.
-      attestation !== undefined && result.ok ? !(await run(undefined)).ok : false,
+      attestations,
+      await receiptAttestationUsage(
+        artifacts.receiptCbor,
+        attestations,
+        result,
+        run,
+      ),
     );
   } catch (err) {
     reportRunError(out, options, "verify", err);
@@ -787,20 +1086,12 @@ export async function runVerify(
   );
 }
 
-/**
- * Parse `--known-log-key`, refusing a KS256 key where the chosen anchor mode
- * needs ES256 checkpoint signatures.
- */
+/** Parse `--known-log-key` (ES256 or KS256: every anchor mode accepts both). */
 async function parseKnownKeyForRun(options: {
   knownLogKey: string | undefined;
-  anchor: string;
 }): Promise<Awaited<ReturnType<typeof parseKnownLogKey>> | undefined> {
   if (options.knownLogKey === undefined) return undefined;
-  const key = await parseKnownLogKey(options.knownLogKey);
-  if (isKs256Root(key) && options.anchor === "checkpoints") {
-    throw new Error(KS256_CHECKPOINT_CHAIN_REFUSAL);
-  }
-  return key;
+  return parseKnownLogKey(options.knownLogKey);
 }
 
 /**
@@ -815,25 +1106,25 @@ export async function runVerifyGrant(
   options: VerifyGrantOptions,
 ): Promise<void> {
   let artifacts: ReturnType<typeof loadVerifyArtifacts>;
-  let attestation: Ks256Attestation | undefined;
+  let attestations: Ks256Attestation[];
   let knownKey: Awaited<ReturnType<typeof parseKnownLogKey>> | undefined;
   try {
     artifacts = loadVerifyArtifacts(options);
-    attestation = loadAttestation(options.ks256Attestation);
+    attestations = loadAttestations(options.ks256Attestations);
     knownKey = await parseKnownKeyForRun(options);
   } catch (err) {
     reportRunError(out, options, "input", err);
     return;
   }
 
-  const run = (att: Ks256Attestation | undefined) =>
+  const run = (atts: Ks256Attestation[]) =>
     knownKey !== undefined
       ? verifyGrantReceiptOfflineWithKeys({
           receiptCbor: artifacts.receiptCbor,
           grant: artifacts.grant,
           idtimestampBe8: artifacts.idtimestampBe8,
           trustKeys: [knownKey],
-          ...(att !== undefined ? { ks256Attestation: att } : {}),
+          ...(atts.length > 0 ? { ks256Attestations: atts } : {}),
           ...(artifacts.genesisCbor !== undefined
             ? { forestGenesisCbor: artifacts.genesisCbor }
             : {}),
@@ -843,19 +1134,23 @@ export async function runVerifyGrant(
           grant: artifacts.grant,
           idtimestampBe8: artifacts.idtimestampBe8,
           genesisCbor: artifacts.genesisCbor!,
-          ...(att !== undefined ? { ks256Attestation: att } : {}),
+          ...(atts.length > 0 ? { ks256Attestations: atts } : {}),
         });
 
   let result: ReceiptVerifyResult;
   let ks256: Ks256ReportInfo | undefined;
   try {
-    result = await run(attestation);
+    result = await run(attestations);
     ks256 = await ks256Info(
-      options,
       artifacts.genesisCbor,
       knownKey,
-      attestation,
-      attestation !== undefined && result.ok ? !(await run(undefined)).ok : false,
+      attestations,
+      await receiptAttestationUsage(
+        artifacts.receiptCbor,
+        attestations,
+        result,
+        run,
+      ),
     );
   } catch (err) {
     reportRunError(out, options, "verify", err);
