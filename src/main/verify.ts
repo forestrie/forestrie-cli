@@ -6,7 +6,6 @@ import {
   extractKs256DelegationDigest,
   grantCommitmentHashFromGrant,
   type Ks256Attestation,
-  type Ks256AttestationUsage,
   type RootVerifyKey,
   selectKs256Attestation,
   verifyGrantReceiptOffline,
@@ -49,6 +48,7 @@ import {
 import { isKs256Root, parseKnownLogKey } from "../lib/known-log-key.js";
 import {
   applyKs256Rows,
+  type AttestationUsage,
   type Ks256ReportInfo,
   anchorOnlyStageRows,
   buildVerifyReport,
@@ -180,7 +180,7 @@ async function checkCheckpointChainAnchor(
   receiptCbor: Uint8Array,
   anchorLeaf: AnchorLeaf,
   attestations: Ks256Attestation[],
-): Promise<CheckpointChainAnchorCheck & { attestationUsage: Ks256AttestationUsage }> {
+): Promise<CheckpointChainAnchorCheck & { attestationUsage: AttestationUsage }> {
   const rootKeys: RootVerifyKey[] = [];
   if (ctx.knownLogKey !== undefined) {
     rootKeys.push(await parseKnownLogKey(ctx.knownLogKey));
@@ -240,7 +240,7 @@ async function checkCheckpointChainAnchor(
           chainFailure: `${outcome.stage} refused${where}${outcome.detail !== undefined ? `: ${outcome.detail}` : ""}`,
         }
       : {}),
-  } as CheckpointChainAnchorCheck & { attestationUsage: Ks256AttestationUsage };
+  } as CheckpointChainAnchorCheck & { attestationUsage: AttestationUsage };
 }
 
 /** One stderr line per supplied attestation: used, or unused with a reason. */
@@ -373,14 +373,14 @@ async function receiptAttestationUsage(
   attestations: readonly Ks256Attestation[],
   result: ReceiptVerifyResult,
   run: (atts: Ks256Attestation[]) => Promise<ReceiptVerifyResult>,
-): Promise<Ks256AttestationUsage> {
+): Promise<AttestationUsage> {
   let cert: ReturnType<typeof extractKs256DelegationDigest> = null;
   try {
     cert = extractKs256DelegationDigest(receiptCbor);
   } catch {
     cert = null;
   }
-  const usage: Ks256AttestationUsage = { used: [], rejected: [], unused: [] };
+  const usage: AttestationUsage = { used: [], rejected: [], unused: [] };
   const hex = (a: Ks256Attestation) =>
     Array.from(a.digest, (b) => b.toString(16).padStart(2, "0")).join("");
   const matching: number[] = [];
@@ -395,6 +395,12 @@ async function receiptAttestationUsage(
       });
     }
   });
+  // Rejected only when the run actually failed on an attestation; a failure
+  // at another stage says nothing about them.
+  const attestationFailure =
+    !result.ok &&
+    result.stage === "signature" &&
+    (result.reason ?? "").startsWith("ks256_attestation_");
   const withoutOk = result.ok && matching.length > 0 ? (await run([])).ok : false;
   let winner: number | undefined;
   if (result.ok && !withoutOk) {
@@ -410,6 +416,8 @@ async function receiptAttestationUsage(
     const digestHex = hex(attestations[index]!);
     if (withoutOk) {
       usage.unused.push({ index, digestHex, reason: "not_needed" });
+    } else if (winner === undefined && !result.ok && !attestationFailure) {
+      usage.unused.push({ index, digestHex, reason: "not_evaluated" });
     } else if (winner === undefined) {
       usage.rejected.push({ index, digestHex, links: [] });
     } else if (index === winner) {
@@ -430,7 +438,7 @@ async function ks256Info(
   genesisCbor: Uint8Array | undefined,
   knownKey: Awaited<ReturnType<typeof parseKnownLogKey>> | undefined,
   attestations: Ks256Attestation[],
-  usage: Ks256AttestationUsage,
+  usage: AttestationUsage,
 ): Promise<Ks256ReportInfo | undefined> {
   let ks256Root = false;
   if (knownKey !== undefined) {
@@ -508,6 +516,7 @@ async function tryAnchorOnlyVerify(
   artifacts: { genesisCbor: Uint8Array | undefined; receiptCbor: Uint8Array },
   result: ReceiptVerifyResult,
   anchorLeaf: AnchorLeaf,
+  ks256?: Ks256ReportInfo,
 ): Promise<boolean> {
   let recomputed: Awaited<ReturnType<typeof recomputeReceiptPeak>>;
   try {
@@ -577,6 +586,24 @@ async function tryAnchorOnlyVerify(
   const isSnapshot = ctx.anchor === "accumulator";
   const offlineReason = result.ok ? "unknown" : (result.reason ?? "unknown");
   const okResult: ReceiptVerifyResult = { ok: true, stage: "binding" };
+  // The fallback never consults attestations: authority is the anchor.
+  const ks256Report: Ks256ReportInfo | undefined =
+    ks256 !== undefined && ks256.attestations.length > 0
+      ? {
+          ...ks256,
+          usage: {
+            used: [],
+            rejected: [],
+            unused: ks256.attestations.map((a, index) => ({
+              index,
+              digestHex: Array.from(a.digest, (b) =>
+                b.toString(16).padStart(2, "0"),
+              ).join(""),
+              reason: "not_consulted",
+            })),
+          },
+        }
+      : undefined;
   if (ctx.json) {
     const report = buildVerifyReport({
       ok: true,
@@ -587,6 +614,7 @@ async function tryAnchorOnlyVerify(
       logId: ctx.logId,
       stagesOverride: anchorOnlyStageRows(offlineReason),
       offlineReason,
+      ...(ks256Report !== undefined ? { ks256: ks256Report } : {}),
     });
     out.out(JSON.stringify(report, null, 2));
   } else {
@@ -600,6 +628,9 @@ async function tryAnchorOnlyVerify(
       );
     }
     printAnchorRow(out, ctx, anchor);
+    if (ks256Report !== undefined) {
+      printAttestationUsage(out, ks256Report);
+    }
     out.out(
       isSnapshot
         ? `PASS: verified against the known accumulator (anchored size ${anchor.size}, read from chain at block ${anchor.blockNumber}); signature not checked offline (${offlineReason})`
@@ -701,10 +732,10 @@ async function anchorForestMismatch(
  * the chain's reason when it saw the attestation, else the receipt's.
  */
 function mergeAttestationUsage(
-  receipt: Ks256AttestationUsage,
-  chain: Ks256AttestationUsage,
-): Ks256AttestationUsage {
-  const used = new Map<number, Ks256AttestationUsage["used"][number]>();
+  receipt: AttestationUsage,
+  chain: AttestationUsage,
+): AttestationUsage {
+  const used = new Map<number, AttestationUsage["used"][number]>();
   for (const u of [...receipt.used, ...chain.used]) {
     const prev = used.get(u.index);
     used.set(u.index, {
@@ -712,7 +743,7 @@ function mergeAttestationUsage(
       links: [...new Set([...(prev?.links ?? []), ...u.links])],
     });
   }
-  const rejected = new Map<number, Ks256AttestationUsage["rejected"][number]>();
+  const rejected = new Map<number, AttestationUsage["rejected"][number]>();
   for (const u of [...receipt.rejected, ...chain.rejected]) {
     const prev = rejected.get(u.index);
     rejected.set(u.index, {
@@ -720,7 +751,7 @@ function mergeAttestationUsage(
       links: [...new Set([...(prev?.links ?? []), ...u.links])],
     });
   }
-  const unused = new Map<number, Ks256AttestationUsage["unused"][number]>();
+  const unused = new Map<number, AttestationUsage["unused"][number]>();
   for (const u of [...receipt.unused, ...chain.unused]) {
     if (!used.has(u.index) && !rejected.has(u.index)) unused.set(u.index, u);
   }
@@ -733,7 +764,8 @@ function mergeAttestationUsage(
   };
 }
 
-async function finishVerify(
+/** @internal exported for tests (the guard branches the offline verifier pre-empts). */
+export async function finishVerify(
   out: Out,
   ctx: VerifyReportContext,
   artifacts: { genesisCbor: Uint8Array | undefined; receiptCbor: Uint8Array },
@@ -777,6 +809,7 @@ async function finishVerify(
       artifacts,
       result,
       anchorLeaf,
+      ks256,
     );
     if (handled) return;
   }

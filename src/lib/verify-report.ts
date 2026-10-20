@@ -133,7 +133,17 @@ export type Ks256ReportInfo = {
   ks256Root: boolean;
   knownKey: boolean;
   attestations: Ks256Attestation[];
-  usage: Ks256AttestationUsage;
+  usage: AttestationUsage;
+};
+
+/**
+ * receipt-verify's usage accounting, with the CLI's own unused reasons added:
+ * `not_evaluated` (the run failed at a stage where attestations did not
+ * matter) and `not_consulted` (the chain-anchored fallback never consulted
+ * them: authority is the anchor).
+ */
+export type AttestationUsage = Omit<Ks256AttestationUsage, "unused"> & {
+  unused: { index: number; digestHex: string; reason: string }[];
 };
 
 /** Short narration of which attestations carried the verdict. */

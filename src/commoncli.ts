@@ -49,10 +49,13 @@ export function withRepeatedFlags<
     for (const name of names) {
       const values: string[] = [];
       const raw = context.rawArgs;
+      const camel = name.replace(/-([a-z0-9])/g, (_, c: string) =>
+        c.toUpperCase(),
+      );
       for (let i = 0; i < raw.length; i++) {
         const a = raw[i]!;
         if (a === "--") break;
-        if (a === `--${name}`) {
+        if (a === `--${name}` || a === `--${camel}`) {
           const next = raw[i + 1];
           if (next !== undefined && !next.startsWith("--")) {
             values.push(next);
@@ -60,6 +63,8 @@ export function withRepeatedFlags<
           }
         } else if (a.startsWith(`--${name}=`)) {
           values.push(a.slice(name.length + 3));
+        } else if (a.startsWith(`--${camel}=`)) {
+          values.push(a.slice(camel.length + 3));
         }
       }
       if (values.length > 1) args[name] = values;

@@ -386,8 +386,22 @@ authority from the on-chain accumulator"), `--json` adds `offlineReason` and
 offline. The authority is univocity, which accepts a checkpoint only if its
 receipt verifies under the log's root key (ES256, or KS256 by ecrecover /
 ERC-1271) or a delegate the root signed. It does **not** check delegation
-expiry, so `delegation_expired` and `delegation_out_of_range` never fall back,
-and a `--known-log-key` run never falls back.
+expiry. The fallback never checks the receipt's signature, and the label-1000
+certificate is in the unprotected header, so "`delegation_expired` and
+`delegation_out_of_range` never fall back" is a diagnostic, not a guarantee: a
+stripped or corrupted certificate reaches the fallback as another reason. What
+the fallback does guarantee is content inclusion in the anchored log state,
+which univocity authorised (and univocity does not check expiry). A
+`--known-log-key` run never falls back.
+
+A `--known-accumulator` snapshot is unsigned. Forest binding catches mistakes
+(the wrong contract or chain, or a snapshot written by forestrie-cli 0.11.1 or
+earlier, which recorded a shifted univocity address — re-run
+`fetch-accumulator`), not a malicious snapshot supplier: trust the snapshot as
+you would whoever fetched it, and pass `--log-id` to bind the log. A genesis
+older than v2 carries no chain binding, so a chain-anchored run that needs it
+fails closed ("this genesis predates chain binding (v1); chain-anchored verify
+needs a v2 genesis").
 
 Note that **freshness is not one of the four**. It is a weaker axis that bears
 only on *coverage* — whether a given accumulator snapshot reaches your leaf —

@@ -13,7 +13,16 @@ import {
   type VerifyReport,
 } from "../src/lib/verify-report.js";
 import { readFileSync } from "node:fs";
-import { runVerifyGrant, type VerifyErrorReport } from "../src/main/verify.js";
+import {
+  finishVerify,
+  runVerifyGrant,
+  type VerifyErrorReport,
+} from "../src/main/verify.js";
+import {
+  decodeCborDeterministic,
+  encodeCborDeterministic,
+} from "@forestrie/encoding";
+import { grantCommitmentHashFromGrant } from "@forestrie/receipt-verify";
 import { runFetchAccumulator } from "../src/main/fetch-accumulator.js";
 import { runCreateConsistencyProof } from "../src/main/create-consistency-proof.js";
 import { parseVerifyGrantOptions } from "../src/options/verify.js";
@@ -1565,4 +1574,124 @@ describe("forged attached-peak receipts fail in every anchored mode (FOR-606 sha
     expect(r.exitCode).toBe(1);
     expect(jsonReport(r.stdout).ok).toBe(false);
   });
+});
+
+describe("anchor hardening: stale snapshots, pre-v2 genesis, guard branches", () => {
+  const logIdBytes = () => {
+    const hex = toContractLogId(FIXTURE_LOG_ID).slice(2);
+    return Uint8Array.from({ length: 32 }, (_, i) =>
+      Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16),
+    );
+  };
+  const snap = (name: string, univocity: Uint8Array): string => {
+    writeFileSync(
+      file(name),
+      encodeKnownAccumulator({
+        version: 1,
+        chainId: 84532n,
+        univocity,
+        logId: logIdBytes(),
+        size: 3n,
+        accumulator: [fx.peak],
+        blockNumber: 123n,
+        blockHash: new Uint8Array(32).fill(0xbb),
+      }),
+    );
+    return file(name);
+  };
+
+  test("a snapshot written by forestrie-cli <=0.11.1 (shifted address) names the cause", async () => {
+    const shifted = new Uint8Array(20).fill(0xab);
+    shifted[0] = 0x00; // leading 0x00, last byte dropped
+    const r = await verifyInProcess(
+      baseArgs({
+        "known-accumulator": snap("acc-shifted.cbor", shifted),
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = jsonReport(r.stdout);
+    expect(report.reason).toBe("anchor_forest_mismatch");
+    expect(report.anchor?.detail).toContain("forestrie-cli <=0.11.1");
+    expect(report.anchor?.detail).toContain("re-run fetch-accumulator");
+  });
+
+  test("an unrelated wrong address keeps the generic detail", async () => {
+    const r = await verifyInProcess(
+      baseArgs({
+        "known-accumulator": snap("acc-other.cbor", new Uint8Array(20).fill(0xcd)),
+        json: true,
+      }),
+    );
+    expect(jsonReport(r.stdout).anchor?.detail).not.toContain("0.11.1");
+  });
+
+  test("a pre-v2 genesis on a chain-anchored run fails closed with a clear message", async () => {
+    const m = decodeCborDeterministic(fx.genesisCbor) as Map<number, unknown>;
+    const v1 = new Map(m);
+    v1.set(-68009, 1);
+    writeFileSync(file("genesis-v1.cbor"), encodeCborDeterministic(v1));
+    const rootRaw = new Uint8Array(
+      (await crypto.subtle.exportKey(
+        "raw",
+        fx.rootKeyPair.publicKey,
+      )) as ArrayBuffer,
+    );
+    // A known key makes the offline verify pass; the genesis then supplies
+    // only the forest binding, which a v1 genesis does not carry.
+    const r = await verifyInProcess(
+      baseArgs({
+        genesis: file("genesis-v1.cbor"),
+        "known-log-key": Buffer.from(rootRaw.slice(1)).toString("base64"),
+        "known-accumulator": snap("acc-v1.cbor", new Uint8Array(20).fill(0xab)),
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(1);
+    expect(r.stdout).not.toContain('"ok": true');
+    expect(r.stdout + r.stderr).toContain("predates chain binding (v1)");
+    expect(r.stdout + r.stderr).not.toContain("is not 2");
+  });
+
+  for (const mode of ["chain", "accumulator"] as const) {
+    test(`${mode}: an attached peak whose inclusion proof fails is never trusted (guard, called directly)`, async () => {
+      const out = createCaptureOut(0);
+      const saved = process.exitCode;
+      process.exitCode = 0;
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = forbiddenFetch;
+      try {
+        await finishVerify(
+          out,
+          {
+            json: true,
+            anchor: mode,
+            univocity: UNIVOCITY,
+            logId: FIXTURE_LOG_ID,
+            rpcUrl: "http://rpc.mock",
+            knownAccumulator: snap("acc-guard.cbor", new Uint8Array(20).fill(0xab)),
+            knownLogKey: undefined,
+          },
+          {
+            genesisCbor: undefined,
+            receiptCbor: fx.tamperedPathReceiptCbor,
+          },
+          // The offline verifier is told "ok": the guard must still refuse.
+          { ok: true, stage: "binding" },
+          {
+            idtimestampBe8: fx.idtimestampBe8,
+            inner: () => grantCommitmentHashFromGrant(fx.grant),
+          },
+        );
+      } finally {
+        globalThis.fetch = realFetch;
+      }
+      const exitCode = Number(process.exitCode ?? 0);
+      process.exitCode = saved;
+      const text = out.lines.map((l) => l.text).join("\n");
+      expect(exitCode).toBe(1);
+      expect(text).toContain("inclusion proof does not verify");
+      expect(text).not.toContain('"ok": true');
+    });
+  }
 });

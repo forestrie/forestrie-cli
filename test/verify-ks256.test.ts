@@ -17,7 +17,7 @@ import { parseFetchKs256AttestationOptions } from "../src/options/fetch-ks256-at
 import { parseVerifyGrantOptions, parseVerifyOptions } from "../src/options/verify.js";
 import type { VerifyReport } from "../src/lib/verify-report.js";
 import { runCli } from "./support.js";
-import { buildKs256Fixture, bytesToHex, encodeLogStateResult, FIXTURE_LOG_ID } from "./verify-fixture.js";
+import { buildKs256Fixture, buildVerifyFixture, bytesToHex, encodeLogStateResult, FIXTURE_LOG_ID } from "./verify-fixture.js";
 
 type LooseArgs = Parameters<typeof parseVerifyGrantOptions>[0];
 type Fx = Awaited<ReturnType<typeof buildKs256Fixture>>;
@@ -750,6 +750,75 @@ describe("KS256 chain-anchored fallback (approach C) and forest binding", () => 
     const rep = report(r.stdout);
     expect(rep.stage).toBe("signature");
     expect(rep.reason).toBe("ks256_root_not_recovered");
+  });
+
+  test("a ks256_attestation_* offline failure also falls back to the anchor", async () => {
+    // An attestation for some other digest: the Safe certificate then fails
+    // with a precise attestation reason, not a bare ks256_root_not_recovered.
+    writeFileSync(
+      file("safe-other.att"),
+      encodeKs256Attestation({
+        version: 1,
+        chainId: 84532n,
+        address: safe.rootAddress,
+        digest: new Uint8Array(32).fill(0x42),
+        signatureHash: new Uint8Array(32).fill(0x43),
+        blockNumber: 1n,
+        blockHash: new Uint8Array(32).fill(0xbb),
+        magic: ERC1271_MAGIC_VALUE,
+      }),
+    );
+    const offline = await verify(safe, "safe", {
+      genesis: file("safe-genesis.cbor"),
+      "ks256-attestation": file("safe-other.att"),
+    });
+    const offlineReason = report(offline.stdout).reason!;
+    expect(offlineReason).toStartWith("ks256_attestation_");
+    const r = await verify(
+      safe,
+      "safe",
+      liveArgs("safe", { "ks256-attestation": file("safe-other.att") }),
+      anchorRpc([safe.peak]),
+    );
+    expect(r.exitCode).toBe(0);
+    const rep = report(r.stdout);
+    expect(rep.offlineReason).toBe(offlineReason);
+    // The fallback never consults attestations.
+    expect(rep.ks256?.attestations?.unused).toMatchObject([
+      { index: 0, reason: "not_consulted" },
+    ]);
+  });
+
+  test("ks256_root_requires_delegation (no certificate under a KS256 root) falls back too", async () => {
+    const es = await buildVerifyFixture();
+    writeFileSync(file("nocert-receipt.cbor"), es.receiptCbor);
+    const args = {
+      receipt: file("nocert-receipt.cbor"),
+      "committed-grant": es.grantCoseB64,
+      genesis: file("eoa-genesis.cbor"),
+      json: true,
+    };
+    const parse = (extra: Record<string, unknown>) =>
+      parseVerifyGrantOptions({ ...args, ...extra } as LooseArgs);
+    const offline = await capture(
+      (out) => runVerifyGrant(out, parse({})),
+      forbiddenFetch,
+    );
+    expect(report(offline.stdout).reason).toBe("ks256_root_requires_delegation");
+    const r = await capture(
+      (out) =>
+        runVerifyGrant(
+          out,
+          parse({
+            univocity: UNIV,
+            "log-id": FIXTURE_LOG_ID,
+            "rpc-url": "http://rpc.mock",
+          }),
+        ),
+      anchorRpc([es.peak]),
+    );
+    expect(r.exitCode).toBe(0);
+    expect(report(r.stdout).offlineReason).toBe("ks256_root_requires_delegation");
   });
 
   test("a wrong-signer certificate passes via the anchor too (ks256_root_not_recovered)", async () => {

@@ -1,6 +1,9 @@
 import { bytesEqual } from "./bytes.js";
 import { ethCall, ethRpc, normalizeHexAddress } from "@forestrie/chain-rpc";
-import { verifyCoseSign1WithParsedKey } from "@forestrie/encoding";
+import {
+  decodeCborDeterministic,
+  verifyCoseSign1WithParsedKey,
+} from "@forestrie/encoding";
 import {
   calculateRoot,
   verifyInclusion,
@@ -330,22 +333,69 @@ export async function checkReceiptAnchored(opts: {
 export const ANCHOR_FOREST_MISMATCH = "anchor_forest_mismatch";
 
 /**
+ * The genesis forest's contract and chain id (chain id exact, as a bigint).
+ * A pre-v2 genesis carries no chain binding: say so, and fail closed.
+ */
+export function genesisForestBinding(genesisCbor: Uint8Array): {
+  univocity: string;
+  chainId: bigint;
+} {
+  let binding: ReturnType<typeof decodeChainBindingFromGenesis>;
+  try {
+    binding = decodeChainBindingFromGenesis(genesisCbor);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const old = /^genesis version (\d+) is not/.exec(message);
+    if (old !== null) {
+      throw new Error(
+        `this genesis predates chain binding (v${old[1]}); chain-anchored verify needs a v2 genesis`,
+      );
+    }
+    throw err;
+  }
+  // decodeChainBindingFromGenesis returns the chain id as a JS number; read
+  // the decimal string label itself so a large id is never rounded.
+  const raw = decodeCborDeterministic(genesisCbor) as unknown;
+  const m =
+    raw instanceof Map
+      ? (raw as Map<number, unknown>)
+      : new Map(
+          Object.entries(raw as Record<string, unknown>).map(([k, v]) => [
+            Number(k),
+            v,
+          ]),
+        );
+  const chainId = m.get(-68013);
+  if (typeof chainId !== "string" || !/^[0-9]+$/.test(chainId)) {
+    throw new Error("genesis chain id label absent or not a decimal string");
+  }
+  return { univocity: binding.univocity, chainId: BigInt(chainId) };
+}
+
+/**
  * Forest binding of an anchor (chain or snapshot) to the genesis: the
  * univocity contract and chain id the genesis names. Returns a human detail
  * string on mismatch, undefined when the anchor belongs to the genesis forest.
  * An anchor from another forest is never acceptable once a genesis is given.
+ * (This catches mistakes; a snapshot is unsigned, so it cannot catch a
+ * malicious supplier.)
  */
 export function forestMismatchDetail(
   genesisCbor: Uint8Array,
   anchor: { univocity: string; chainId: bigint },
 ): string | undefined {
-  const binding = decodeChainBindingFromGenesis(genesisCbor);
+  const binding = genesisForestBinding(genesisCbor);
   const given = normalizeHexAddress(anchor.univocity);
   const want = normalizeHexAddress(binding.univocity);
   if (given === null || given !== want) {
+    // forestrie-cli <= 0.11.1 wrote the snapshot's address shifted one byte
+    // (leading 0x00, last byte dropped).
+    if (given !== null && want !== null && given === "00" + want.slice(0, 38)) {
+      return "snapshot written by forestrie-cli <=0.11.1 records a shifted univocity address; re-run fetch-accumulator";
+    }
     return `anchor univocity ${anchor.univocity} is not the genesis forest's contract ${binding.univocity}`;
   }
-  if (anchor.chainId !== BigInt(binding.chainId)) {
+  if (anchor.chainId !== binding.chainId) {
     return `anchor chain id ${anchor.chainId} differs from the genesis chain id ${binding.chainId}`;
   }
   return undefined;

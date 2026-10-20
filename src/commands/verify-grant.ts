@@ -56,7 +56,7 @@ export default defineForestrieCommand({
     univocity: {
       type: "string",
       description:
-        "ImutableUnivocity contract address — enables the chain-anchored check (with --log-id and --rpc-url). With --genesis the anchor must be the genesis forest's contract and chain (else anchor_forest_mismatch); without --genesis (known-key runs) it is trusted as named. When offline verify cannot resolve the signature (delegation_invalid, or a KS256 root it cannot recover) a matching anchor still passes, reported as `anchored` — signature not checked offline, authority is the chain (univocity checks signature and delegation at publish, not expiry); delegation_expired and out-of-range delegations never fall back",
+        "ImutableUnivocity contract address — enables the chain-anchored check (with --log-id and --rpc-url). With --genesis the anchor must be the genesis forest's contract and chain (else anchor_forest_mismatch); without --genesis (known-key runs) it is trusted as named. When offline verify cannot resolve the signature (delegation_invalid, or a KS256 root it cannot recover) a matching anchor still passes, reported as `anchored` — signature not checked offline, authority is the chain (univocity checks signature and delegation at publish, not expiry); delegation_expired and out-of-range delegations do not fall back (a diagnostic, not a guarantee: the fallback never checks the receipt signature and the certificate header is unprotected — what it guarantees is inclusion in the log state univocity authorised). A --known-accumulator snapshot is unsigned: forest binding catches mistakes, not a malicious supplier — trust it as you would its fetcher, and pass --log-id",
       valueHint: "address",
     },
     "log-id": {

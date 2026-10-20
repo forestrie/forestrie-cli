@@ -336,6 +336,47 @@ describe("--checkpoint-chain with KS256 roots", () => {
     expect(report.ks256?.attestations?.unused).toEqual([]);
   });
 
+  test("camelCase --ks256Attestation repeats are collected too", () => {
+    const a = attestationFile("rot-a.att", rotated, rotated.certs[0]!);
+    const b = attestationFile("rot-b.att", rotated, rotated.certs[1]!);
+    const r = runCli([
+      "verify-grant",
+      "--json",
+      "--genesis",
+      file("rot-genesis.cbor"),
+      "--receipt",
+      file("rot-receipt.cbor"),
+      "--committed-grant",
+      rotated.grantCoseB64,
+      "--checkpoint-chain",
+      path.join(dir, "rot-sths"),
+      `--ks256Attestation=${a}`,
+      "--ks256Attestation",
+      b,
+    ]);
+    expect(r.exitCode).toBe(0);
+    expect(
+      (JSON.parse(r.stdout) as VerifyReport).ks256?.attestations?.used,
+    ).toHaveLength(2);
+  });
+
+  test("a failure at a non-attestation stage does not mark attestations rejected", async () => {
+    const a = attestationFile("safe-a.att", safe, safe.certs[0]!);
+    // Right certificate, wrong grant: the signature stage passes, the leaf
+    // binding fails.
+    const r = await run({
+      genesis: file("safe-genesis.cbor"),
+      receipt: file("safe-receipt.cbor"),
+      "committed-grant": eoa.grantCoseB64,
+      "ks256-attestation": a,
+      json: true,
+    });
+    expect(r.exitCode).toBe(1);
+    const att = rep(r.stdout).ks256?.attestations;
+    expect(att?.rejected).toEqual([]);
+    expect(att?.unused).toMatchObject([{ index: 0, reason: "not_evaluated" }]);
+  });
+
   test("comma-separated attestations are accepted too", async () => {
     const a = attestationFile("rot-a.att", rotated, rotated.certs[0]!);
     const b = attestationFile("rot-b.att", rotated, rotated.certs[1]!);
