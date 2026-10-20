@@ -1090,6 +1090,12 @@ describe("forestrie fetch-accumulator (FOR-297 D5 producer)", () => {
     expect(snapshot.chainId).toBe(84532n);
     expect(snapshot.blockNumber).toBe(123n);
     expect(bytesToHex(snapshot.accumulator[0]!)).toBe(bytesToHex(fx.peak));
+    // The recorded contract address is exactly the 20 bytes of --univocity
+    // (the fetch-accumulator address bug shifted it by one byte).
+    expect(snapshot.univocity.length).toBe(20);
+    expect(bytesToHex(snapshot.univocity)).toBe(
+      UNIVOCITY.replace(/^0x/, "").toLowerCase(),
+    );
 
     // Round-trip: the fetched snapshot anchors the child receipt offline.
     const v = await verifyInProcess(

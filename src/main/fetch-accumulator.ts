@@ -129,7 +129,7 @@ export async function runFetchAccumulator(
     const snapshot: KnownAccumulator = {
       version: 1,
       chainId,
-      univocity: hexAddressToBytes(`0x${address}`),
+      univocity: hexAddressToBytes(address),
       logId: hexToBytes32(contractLogId, "log id"),
       size: state.size,
       accumulator: state.accumulator,
