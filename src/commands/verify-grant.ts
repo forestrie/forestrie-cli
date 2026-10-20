@@ -91,7 +91,7 @@ export default defineForestrieCommand({
     "checkpoint-chain": {
       type: "string",
       description:
-        "Retained .sth checkpoint chain — a directory of .sth objects or comma-separated files in chain order. Folds the chain from size 0, authenticating the accumulator at every retained seal from the public log store alone (no tiles, no RPC); the receipt peak may match ANY link [FOR-368]",
+        "Retained .sth checkpoint chain — a directory of .sth objects or comma-separated files in chain order. Folds the chain from size 0, authenticating the accumulator at every retained seal from the public log store alone (no tiles, no RPC); the receipt peak may match ANY link [FOR-368]. Signatures root in --genesis and/or --known-log-key (ES256 or KS256); each certificate's mmrStart/mmrEnd window is enforced per link and its expiry at the leaf time once the receipt matches; --ks256-attestation vouches for contract-root certificates (needs --genesis)",
       valueHint: "dir|paths",
     },
   },

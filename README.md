@@ -339,8 +339,7 @@ signature — no operator trust required.
   base64 `x||y` (a 64-byte ES256 key) or a 20-byte KS256 address (`0x` + 40
   hex, or base64); fully offline, checks the signature under a key you trust
   out of band (the SCITT / SSH-known-hosts posture). A KS256 address asserts,
-  and does not prove, the key-to-log binding, and cannot root
-  `--checkpoint-chain` (which needs ES256). `--genesis` may accompany it: it
+  and does not prove, the key-to-log binding. `--genesis` may accompany it: it
   then supplies only the forest chain id an attestation must match.
 - **`--genesis`** — a cached `genesis.cbor` (the univocity-instance root
   registration). Roots a receipt whose signer chains to that root owner; for a
@@ -351,6 +350,13 @@ signature — no operator trust required.
   signature needed. Never source it unauthenticated from the operator's tile
   store. Older receipts extend to a newer snapshot via `--massif`.
 - **`--rpc-url`** — a live chain read; same as `--known-accumulator`, current.
+- **`--checkpoint-chain`** — a retained `.sth` chain, folded from size 0 under
+  the genesis root and/or `--known-log-key` (ES256 or KS256) by
+  receipt-verify's shared verifier: every link's signature, the delegation
+  certificate's `mmrStart`/`mmrEnd` window per link, and — once the receipt
+  matches a link — certificate expiry at the leaf's time. Typed refusals
+  (`delegation_out_of_range`, `delegation_expired`, `ks256_*`,
+  `peak_not_in_checkpoint_chain`, …) are the anchor's `reason`.
 
 What each actually proves — and how forestrie separates **split-view** (is this
 a single, un-forked history) from **sealing** (who signed this state) from
@@ -400,7 +406,15 @@ contract's signers at the attested block* — a narrower guarantee than a
 signature by one key, reported as such. The attestation must bind the root
 address, the certificate digest and signature, and the forest's genesis chain
 id (`--genesis`; under `--known-log-key` without it the result is
-`ks256_attestation_chain_unbound`). Offline `verify` never calls the chain.
+`ks256_attestation_chain_unbound`). `--ks256-attestation` is repeatable (or
+comma-separated): a Safe that rotated its delegate signs one certificate per
+delegate, and each needs its own attestation, matched by certificate digest and
+signature hash. Every attestation supplied is reported used (with the chain
+links it carried) or unused with a reason (`no_matching_certificate`,
+`not_needed`, `rejected`) — human lines on stderr, `ks256.attestations` in
+`--json`. With `--checkpoint-chain` the attestations vouch for every link's
+certificate, and a KS256 genesis or known key roots the chain (attestations
+there need `--genesis` for the chain id). Offline `verify` never calls the chain.
 With a chain anchor, a KS256 failure above can instead be settled by the
 on-chain accumulator (see *Chain-anchored fallback* under Trust anchors); the
 report then says the signature was not checked offline.
