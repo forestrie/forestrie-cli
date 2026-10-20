@@ -1440,3 +1440,129 @@ describe("forestrie verify-grant — consistency-proof top-up (FOR-368 Phase 3)"
     ).toThrow(/--consistency-proof only applies/);
   });
 });
+
+describe("forged attached-peak receipts fail in every anchored mode (FOR-606 shape)", () => {
+  // The attached peak is genuinely signed and genuinely on-chain, but the
+  // inclusion path does not lead the leaf to it. No anchored mode may accept
+  // the claimed peak without proving inclusion.
+  const rpcAnchored = (): typeof fetch =>
+    (async (_u: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { method: string };
+      const result =
+        body.method === "eth_chainId"
+          ? "0x14a34"
+          : body.method === "eth_getLogs"
+            ? []
+            : encodeLogStateResult([fx.peak], 3n);
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+  const snapshot = (): string => {
+    const hex = toContractLogId(FIXTURE_LOG_ID).slice(2);
+    const logId = Uint8Array.from({ length: 32 }, (_, i) =>
+      Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16),
+    );
+    writeFileSync(
+      file("acc-forged.cbor"),
+      encodeKnownAccumulator({
+        version: 1,
+        chainId: 84532n,
+        univocity: new Uint8Array(20).fill(0xab),
+        logId,
+        size: 3n,
+        accumulator: [fx.peak],
+        blockNumber: 123n,
+        blockHash: new Uint8Array(32).fill(0xbb),
+      }),
+    );
+    return file("acc-forged.cbor");
+  };
+
+  const forged = [
+    ["root-signed", "receipt-bad-path.cbor"],
+    ["delegated child", "receipt-child-bad-path.cbor"],
+  ] as const;
+
+  for (const [label, receipt] of forged) {
+    test(`${label}: live chain anchor rejects`, async () => {
+      const r = await verifyInProcess(
+        baseArgs({
+          receipt: file(receipt),
+          univocity: UNIVOCITY,
+          "log-id": FIXTURE_LOG_ID,
+          "rpc-url": "http://rpc.mock",
+          json: true,
+        }),
+        rpcAnchored(),
+      );
+      expect(r.exitCode).toBe(1);
+      expect(jsonReport(r.stdout).ok).toBe(false);
+    });
+
+    test(`${label}: known-accumulator anchor rejects`, async () => {
+      const r = await verifyInProcess(
+        baseArgs({
+          receipt: file(receipt),
+          "known-accumulator": snapshot(),
+          json: true,
+        }),
+      );
+      expect(r.exitCode).toBe(1);
+      expect(jsonReport(r.stdout).ok).toBe(false);
+    });
+
+    test(`${label}: known-key live anchor rejects`, async () => {
+      const r = await verifyInProcess(
+        baseArgs({
+          genesis: undefined,
+          "known-log-key":
+            receipt === "receipt-bad-path.cbor"
+              ? Buffer.from(
+                  new Uint8Array(
+                    (await crypto.subtle.exportKey(
+                      "raw",
+                      fx.rootKeyPair.publicKey,
+                    )) as ArrayBuffer,
+                  ).slice(1),
+                ).toString("base64")
+              : fx.childOwnerKeyXyB64,
+          receipt: file(receipt),
+          univocity: UNIVOCITY,
+          "log-id": FIXTURE_LOG_ID,
+          "rpc-url": "http://rpc.mock",
+          json: true,
+        }),
+        rpcAnchored(),
+      );
+      expect(r.exitCode).toBe(1);
+      expect(jsonReport(r.stdout).ok).toBe(false);
+    });
+  }
+
+  test("checkpoint-chain anchor rejects a forged attached peak", async () => {
+    const d = path.join(dir, "sths-forged");
+    mkdirSync(d, { recursive: true });
+    writeFileSync(
+      path.join(d, "0000000000000000.sth"),
+      await buildCheckpoint({
+        signer: fx.rootKeyPair,
+        treeSize1: 0n,
+        treeSize2: 3n,
+        paths: [],
+        rightPeaks: [fx.peak],
+        accumulator: [fx.peak],
+      }),
+    );
+    const r = await verifyInProcess(
+      baseArgs({
+        receipt: file("receipt-bad-path.cbor"),
+        "checkpoint-chain": d,
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(1);
+    expect(jsonReport(r.stdout).ok).toBe(false);
+  });
+});
