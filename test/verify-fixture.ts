@@ -667,6 +667,8 @@ export function encodeLogStateResult(
 export async function buildKs256Fixture(opts?: {
   contractRoot?: boolean;
   wrongSigner?: boolean;
+  /** The certificate's validity window ended before the leaf time. */
+  expired?: boolean;
   /** Leaf commits SHA-256(payload) (the `verify` statement path) instead of the grant. */
   statementPayload?: Uint8Array;
 }): Promise<{
@@ -728,7 +730,7 @@ export async function buildKs256Fixture(opts?: {
       mmrEnd: 65535,
       delegatedPublicKeyCbor,
       issuedAt: leafTime - 3600,
-      expiresAt: leafTime + 3600,
+      expiresAt: opts?.expired ? leafTime - 60 : leafTime + 3600,
       delegationId: new Uint8Array(16),
     },
     rootAddress,

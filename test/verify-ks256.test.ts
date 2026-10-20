@@ -6,9 +6,11 @@ import { keccak256 } from "viem";
 import { createCaptureOut } from "@forestrie/cli-kit/reporting";
 import {
   decodeKs256Attestation,
+  encodeKnownAccumulator,
   encodeKs256Attestation,
   ERC1271_MAGIC_VALUE,
 } from "@forestrie/receipt-verify";
+import { toContractLogId } from "../src/lib/verify-anchored.js";
 import { runFetchKs256Attestation } from "../src/main/fetch-ks256-attestation.js";
 import { runVerify, runVerifyGrant } from "../src/main/verify.js";
 import { parseFetchKs256AttestationOptions } from "../src/options/fetch-ks256-attestation.js";
@@ -26,6 +28,7 @@ const file = (name: string) => path.join(dir, name);
 let eoa: Fx;
 let wrongSigner: Fx;
 let safe: Fx;
+let expired: Fx;
 
 const forbiddenFetch = (() => {
   throw new Error("network forbidden during offline verify");
@@ -41,10 +44,12 @@ beforeAll(async () => {
   eoa = await buildKs256Fixture();
   wrongSigner = await buildKs256Fixture({ wrongSigner: true });
   safe = await buildKs256Fixture({ contractRoot: true });
+  expired = await buildKs256Fixture({ expired: true });
   for (const [name, fx] of [
     ["eoa", eoa],
     ["wrong", wrongSigner],
     ["safe", safe],
+    ["expired", expired],
   ] as const) {
     writeFileSync(file(`${name}-genesis.cbor`), fx.genesisCbor);
     writeFileSync(file(`${name}-receipt.cbor`), fx.receiptCbor);
@@ -644,6 +649,231 @@ describe("KS256 genesis with a live chain anchor", () => {
     const rep = report(r.stdout);
     expect(rep.mode).toBe("chain-anchored");
     expect(rep.anchor?.anchored).toBe(true);
+  });
+});
+
+describe("KS256 chain-anchored fallback (approach C) and forest binding", () => {
+  const UNIV = "0x" + "ab".repeat(20);
+  const calls: RpcCall[] = [];
+
+  function anchorRpc(peaks: Uint8Array[], chainId = "0x14a34"): typeof fetch {
+    calls.length = 0;
+    return (async (_u: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as RpcCall;
+      calls.push(body);
+      const result =
+        body.method === "eth_chainId"
+          ? chainId
+          : body.method === "eth_call"
+            ? encodeLogStateResult(peaks, 3n)
+            : body.method === "eth_getLogs"
+              ? []
+              : (() => {
+                  throw new Error(`unexpected RPC method ${body.method}`);
+                })();
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: 1, result }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+  }
+
+  const liveArgs = (name: string, over: Record<string, unknown> = {}) => ({
+    genesis: file(`${name}-genesis.cbor`),
+    univocity: UNIV,
+    "log-id": FIXTURE_LOG_ID,
+    "rpc-url": "http://rpc.mock",
+    ...over,
+  });
+
+  const logIdBytes = () => {
+    const h = toContractLogId(FIXTURE_LOG_ID).slice(2);
+    return Uint8Array.from({ length: 32 }, (_, i) =>
+      Number.parseInt(h.slice(i * 2, i * 2 + 2), 16),
+    );
+  };
+  const snapshot = (
+    name: string,
+    peak: Uint8Array,
+    over: { univocity?: Uint8Array; chainId?: bigint } = {},
+  ) => {
+    writeFileSync(
+      file(name),
+      encodeKnownAccumulator({
+        version: 1,
+        chainId: over.chainId ?? 84532n,
+        univocity: over.univocity ?? new Uint8Array(20).fill(0xab),
+        logId: logIdBytes(),
+        size: 3n,
+        accumulator: [peak],
+        blockNumber: 123n,
+        blockHash: new Uint8Array(32).fill(0xbb),
+      }),
+    );
+    return file(name);
+  };
+
+  test("a Safe root without an attestation passes via the anchor, with honest rows", async () => {
+    const r = await verify(safe, "safe", liveArgs("safe"), anchorRpc([safe.peak]));
+    expect(r.exitCode).toBe(0);
+    const rep = report(r.stdout);
+    expect(rep.ok).toBe(true);
+    expect(rep.mode).toBe("chain-anchored");
+    expect(rep.offlineReason).toBe("ks256_root_not_recovered");
+    expect(rep.authority).toBe("on-chain");
+    const sig = rep.stages.find((s) => s.stage === "signature");
+    expect(sig?.status).toBe("anchored");
+    expect(sig?.reason).toContain("not verified offline (ks256_root_not_recovered)");
+    expect(sig?.reason).toContain("expiry is not checked on-chain");
+    expect(calls.map((c) => c.method)).toContain("eth_chainId");
+  });
+
+  test("human PASS line says the signature was not checked offline", async () => {
+    const r = await verify(
+      safe,
+      "safe",
+      liveArgs("safe", { json: undefined }),
+      anchorRpc([safe.peak]),
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain(
+      "PASS: verified against the on-chain accumulator",
+    );
+    expect(r.stdout).toContain(
+      "signature not checked offline (ks256_root_not_recovered)",
+    );
+    expect(r.stderr).toContain("signature anchored");
+  });
+
+  test("a Safe root with the peak NOT anchored still fails at the signature", async () => {
+    const r = await verify(
+      safe,
+      "safe",
+      liveArgs("safe"),
+      anchorRpc([new Uint8Array(32).fill(0x77)]),
+    );
+    expect(r.exitCode).toBe(1);
+    const rep = report(r.stdout);
+    expect(rep.stage).toBe("signature");
+    expect(rep.reason).toBe("ks256_root_not_recovered");
+  });
+
+  test("a wrong-signer certificate passes via the anchor too (ks256_root_not_recovered)", async () => {
+    const r = await verify(
+      wrongSigner,
+      "wrong",
+      liveArgs("wrong"),
+      anchorRpc([wrongSigner.peak]),
+    );
+    expect(r.exitCode).toBe(0);
+    expect(report(r.stdout).offlineReason).toBe("ks256_root_not_recovered");
+  });
+
+  test("an expired delegation is never excused by the anchor", async () => {
+    const offline = await verify(expired, "expired", { genesis: file("expired-genesis.cbor") });
+    expect(report(offline.stdout).reason).toBe("delegation_expired");
+    const r = await verify(
+      expired,
+      "expired",
+      liveArgs("expired"),
+      anchorRpc([expired.peak]),
+    );
+    expect(r.exitCode).toBe(1);
+    const rep = report(r.stdout);
+    expect(rep.stage).toBe("signature");
+    expect(rep.reason).toBe("delegation_expired");
+    expect(calls.map((c) => c.method)).not.toContain("eth_call");
+  });
+
+  test("known-key KS256: no fallback, the signature failure stands", async () => {
+    const r = await verify(
+      safe,
+      "safe",
+      liveArgs("safe", { "known-log-key": hex0x(safe.rootAddress) }),
+      anchorRpc([safe.peak]),
+    );
+    expect(r.exitCode).toBe(1);
+    const rep = report(r.stdout);
+    expect(rep.stage).toBe("signature");
+    expect(rep.reason).toBe("ks256_root_not_recovered");
+    expect(calls.map((c) => c.method)).not.toContain("eth_call");
+  });
+
+  test("live anchor with the wrong --univocity fails at anchor (fallback path)", async () => {
+    const r = await verify(
+      safe,
+      "safe",
+      liveArgs("safe", { univocity: "0x" + "cd".repeat(20) }),
+      anchorRpc([safe.peak]),
+    );
+    expect(r.exitCode).toBe(1);
+    const rep = report(r.stdout);
+    expect(rep.stage).toBe("anchor");
+    expect(rep.reason).toBe("anchor_forest_mismatch");
+    expect(rep.anchor?.detail).toContain("not the genesis forest's contract");
+    expect(rep.ok).toBe(false);
+  });
+
+  test("live anchor on the wrong chain fails at anchor, even when offline verify passed", async () => {
+    const r = await verify(eoa, "eoa", liveArgs("eoa"), anchorRpc([eoa.peak], "0x1"));
+    expect(r.exitCode).toBe(1);
+    const rep = report(r.stdout);
+    expect(rep.stage).toBe("anchor");
+    expect(rep.reason).toBe("anchor_forest_mismatch");
+    expect(rep.anchor?.detail).toContain("chain id 1 differs");
+    expect(calls.map((c) => c.method)).not.toContain("eth_call");
+  });
+
+  test("human output names the mismatch", async () => {
+    const r = await verify(
+      eoa,
+      "eoa",
+      liveArgs("eoa", { json: undefined }),
+      anchorRpc([eoa.peak], "0x1"),
+    );
+    expect(r.exitCode).toBe(1);
+    expect(r.stdout).toContain("FAIL: stage=anchor reason=anchor_forest_mismatch");
+  });
+
+  test("known-accumulator snapshot: matching forest passes via the fallback", async () => {
+    const r = await verify(safe, "safe", {
+      genesis: file("safe-genesis.cbor"),
+      "known-accumulator": snapshot("snap-ok.cbor", safe.peak),
+    });
+    expect(r.exitCode).toBe(0);
+    const rep = report(r.stdout);
+    expect(rep.mode).toBe("accumulator-anchored");
+    expect(rep.stages.find((s) => s.stage === "signature")?.status).toBe("anchored");
+  });
+
+  test("known-accumulator snapshot from another univocity or chain fails at anchor", async () => {
+    for (const over of [
+      { univocity: new Uint8Array(20).fill(0xcd) },
+      { chainId: 1n },
+    ]) {
+      for (const [fx, name] of [
+        [safe, "safe"],
+        [eoa, "eoa"],
+      ] as const) {
+        const r = await verify(fx, name, {
+          genesis: file(`${name}-genesis.cbor`),
+          "known-accumulator": snapshot("snap-bad.cbor", fx.peak, over),
+        });
+        expect(r.exitCode).toBe(1);
+        const rep = report(r.stdout);
+        expect(rep.stage).toBe("anchor");
+        expect(rep.reason).toBe("anchor_forest_mismatch");
+      }
+    }
+  });
+
+  test("without --genesis (known key) there is no binding check", async () => {
+    const r = await verify(eoa, "eoa", {
+      "known-log-key": hex0x(eoa.rootAddress),
+      "known-accumulator": snapshot("snap-other.cbor", eoa.peak, {
+        univocity: new Uint8Array(20).fill(0xcd),
+      }),
+    });
+    expect(r.exitCode).toBe(0);
   });
 });
 

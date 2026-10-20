@@ -27,6 +27,7 @@ import {
 import { runCli } from "./support.js";
 import {
   buildCheckpoint,
+  buildKs256Fixture,
   buildVerifyFixture,
   bytesToHex,
   encodeLogStateResult,
@@ -339,7 +340,7 @@ describe("forestrie verify — chain-anchored mode", () => {
 
   test("anchored: receipt peak found in the on-chain accumulator (detached receipt)", async () => {
     const otherPeak = new Uint8Array(32).fill(0x11);
-    const calls: { params: [{ data: string }, string] }[] = [];
+    const calls: { method: string; params: [{ data: string }, string] }[] = [];
     const r = await verifyInProcess(
       chainArgs(),
       rpcFetch(encodeLogStateResult([otherPeak, fx.peak], 3n), calls),
@@ -357,7 +358,9 @@ describe("forestrie verify — chain-anchored mode", () => {
       matchedPeak: 1,
     });
     // logState(bytes32) selector + zero-padded contract log id
-    expect(calls[0]!.params[0].data).toBe(
+    expect(
+      calls.find((c) => c.method === "eth_call")!.params[0].data,
+    ).toBe(
       "0xeecac1b7" + toContractLogId(FIXTURE_LOG_ID).slice(2),
     );
   });
@@ -702,6 +705,64 @@ describe("forestrie verify — anchor-only child-log fallback (FOR-297 approach 
     );
   });
 
+  test("KS256 genesis + ES256 child-log certificate: passes via the anchor, offline reason named", async () => {
+    const ks = await buildKs256Fixture();
+    writeFileSync(file("ks256-genesis.cbor"), ks.genesisCbor);
+    const offline = await verifyInProcess(
+      baseArgs({
+        genesis: file("ks256-genesis.cbor"),
+        receipt: file("receipt-child.cbor"),
+        json: true,
+      }),
+    );
+    expect(offline.exitCode).toBe(1);
+    const offlineReason = jsonReport(offline.stdout).reason!;
+    expect(offlineReason).toBe("delegation_not_ks256");
+    const r = await verifyInProcess(
+      childChainArgs({ genesis: file("ks256-genesis.cbor") }),
+      rpcFetch(encodeLogStateResult([fx.peak], 2n)),
+    );
+    expect(r.exitCode).toBe(0);
+    const report = jsonReport(r.stdout);
+    expect(report.offlineReason).toBe(offlineReason);
+    expect(report.authority).toBe("on-chain");
+    const sig = report.stages.find((s: StageRow) => s.stage === "signature");
+    expect(sig?.status).toBe("anchored");
+  });
+
+  test("forest mismatch (wrong --univocity, wrong chain id, other-forest snapshot) fails at anchor", async () => {
+    const wrongUniv = await verifyInProcess(
+      childChainArgs({ univocity: "0x" + "cd".repeat(20) }),
+      rpcFetch(encodeLogStateResult([fx.peak], 2n)),
+    );
+    expect(wrongUniv.exitCode).toBe(1);
+    expect(jsonReport(wrongUniv.stdout).anchor?.reason).toBe(
+      "anchor_forest_mismatch",
+    );
+    const wrongChain = await verifyInProcess(
+      childChainArgs(),
+      (async (_u: unknown, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { method: string };
+        return new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result:
+              body.method === "eth_chainId"
+                ? "0x1"
+                : encodeLogStateResult([fx.peak], 2n),
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        );
+      }) as unknown as typeof fetch,
+    );
+    expect(wrongChain.exitCode).toBe(1);
+    const rep = jsonReport(wrongChain.stdout);
+    expect(rep.stage).toBe("anchor");
+    expect(rep.reason).toBe("anchor_forest_mismatch");
+    expect(rep.ok).toBe(false);
+  });
+
   test("chain mode: peak NOT anchored → original delegation_invalid failure stands", async () => {
     const otherPeak = new Uint8Array(32).fill(0x77);
     const r = await verifyInProcess(
@@ -893,6 +954,25 @@ describe("forestrie verify-grant — known accumulator snapshot (FOR-297 D5)", (
       blockNumber: "123",
       extended: false,
     });
+  });
+
+  test("a snapshot from another univocity fails at anchor under a genesis", async () => {
+    const snap = snapshotFile(
+      "acc-other-forest.cbor",
+      snapshotBytes({ univocity: new Uint8Array(20).fill(0xcd) }),
+    );
+    const r = await verifyInProcess(
+      baseArgs({
+        receipt: file("receipt-child.cbor"),
+        "known-accumulator": snap,
+        json: true,
+      }),
+    );
+    expect(r.exitCode).toBe(1);
+    const report = jsonReport(r.stdout);
+    expect(report.stage).toBe("anchor");
+    expect(report.reason).toBe("anchor_forest_mismatch");
+    expect(report.anchor?.detail).toContain("0x" + "cd".repeat(20));
   });
 
   test("human narration names the known accumulator and the block", async () => {
