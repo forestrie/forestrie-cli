@@ -361,6 +361,28 @@ model: see
 The receipt never expires, and the anchor never needs to be current — only
 trusted.
 
+**Chain anchors and the genesis forest.** With `--genesis`, a chain anchor must
+belong to the genesis forest: `--univocity` and the RPC's `eth_chainId` (live
+read), or the snapshot's recorded contract and chain (`--known-accumulator`),
+must equal the genesis binding, else `verify` fails at stage `anchor` with
+`anchor_forest_mismatch`. Without `--genesis` (a `--known-log-key` run) there
+is no such check: the anchor is trusted as named.
+
+**Chain-anchored fallback.** When offline verify cannot resolve the signature
+— `delegation_invalid` (a child log's delegation does not chain to genesis), or
+a KS256 root it cannot recover (`delegation_not_ks256`,
+`ks256_root_not_recovered`, `ks256_root_requires_delegation`,
+`ks256_attestation_*`) — a chain anchor still passes if the leaf and proof
+path recompute to a peak in the anchored accumulator. The report is explicit:
+the `signature` row is `anchored`, not `ok` ("not verified offline (<reason>);
+authority from the on-chain accumulator"), `--json` adds `offlineReason` and
+`authority: "on-chain"`, and the PASS line says the signature was not checked
+offline. The authority is univocity, which accepts a checkpoint only if its
+receipt verifies under the log's root key (ES256, or KS256 by ecrecover /
+ERC-1271) or a delegate the root signed. It does **not** check delegation
+expiry, so `delegation_expired` and `delegation_out_of_range` never fall back,
+and a `--known-log-key` run never falls back.
+
 Note that **freshness is not one of the four**. It is a weaker axis that bears
 only on *coverage* — whether a given accumulator snapshot reaches your leaf —
 and collapsing it into split-view is the specific confusion the trust model
@@ -378,7 +400,10 @@ contract's signers at the attested block* — a narrower guarantee than a
 signature by one key, reported as such. The attestation must bind the root
 address, the certificate digest and signature, and the forest's genesis chain
 id (`--genesis`; under `--known-log-key` without it the result is
-`ks256_attestation_chain_unbound`). `verify` never calls the chain.
+`ks256_attestation_chain_unbound`). Offline `verify` never calls the chain.
+With a chain anchor, a KS256 failure above can instead be settled by the
+on-chain accumulator (see *Chain-anchored fallback* under Trust anchors); the
+report then says the signature was not checked offline.
 
 ### `fetch-accumulator`
 
