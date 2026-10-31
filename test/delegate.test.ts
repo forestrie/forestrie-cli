@@ -19,12 +19,9 @@ import {
 import {
   DelegateFlowError,
   runDelegateFlow,
+  VOUCHER_CLOCK_SKEW_SECONDS,
   type StandingDelegationEntry,
 } from "../src/lib/delegate-flow.js";
-import {
-  parseRegistrarKeyXY,
-  verifyDelegateKeyVoucher,
-} from "../src/lib/delegate-voucher.js";
 import { runDelegate } from "../src/main/delegate.js";
 import type { DelegateOptions } from "../src/options/delegate.js";
 
@@ -32,6 +29,8 @@ const LOG_ID = "11111111-2222-3333-4444-555555555555";
 const COORD = "https://coordinator.example";
 const SEALER_ID = "sealer-1";
 const EPOCH = 7;
+const NOW = Math.floor(Date.now() / 1000);
+const DAY = 24 * 3600;
 
 function b64(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64");
@@ -66,18 +65,29 @@ async function delegatedCoseKey(pub: CryptoKey): Promise<Uint8Array> {
   );
 }
 
-/** COSE Sign1 registrar voucher over `{1:sealerId, 2:epoch, 3:publicKey}`. */
+/**
+ * COSE Sign1 registrar voucher over `{1:sealerId, 2:epoch, 3:publicKey,
+ * 4:notAfter}`. `notAfter` defaults to a day from now; `null` omits claim 4,
+ * the shape vouchers had before plan-2609-12 slice 07.
+ */
 async function makeVoucher(
   signerPriv: CryptoKey,
-  claims: { sealerId: string; epoch: number; publicKey: Uint8Array },
+  claims: {
+    sealerId: string;
+    epoch: number;
+    publicKey: Uint8Array;
+    notAfter?: number | null;
+  },
 ): Promise<Uint8Array> {
-  const payload = encodeCborDeterministic(
-    new Map<number, unknown>([
-      [1, claims.sealerId],
-      [2, claims.epoch],
-      [3, claims.publicKey],
-    ]),
-  );
+  const map = new Map<number, unknown>([
+    [1, claims.sealerId],
+    [2, claims.epoch],
+    [3, claims.publicKey],
+  ]);
+  const notAfter =
+    claims.notAfter === undefined ? NOW + DAY : claims.notAfter;
+  if (notAfter !== null) map.set(4, notAfter);
+  const payload = encodeCborDeterministic(map);
   return signCoseSign1Statement(payload, new Uint8Array(0), signerPriv, {
     alg: -7,
   });
@@ -151,95 +161,6 @@ const baseParams = {
   knownSealerKey: PINNED_KEY_B64,
   horizonMmrEnd: 1000,
 };
-
-// --- voucher verifier unit ----------------------------------------------
-
-describe("verifyDelegateKeyVoucher", () => {
-  test("parseRegistrarKeyXY rejects non-64-byte input", () => {
-    expect(parseRegistrarKeyXY(new Uint8Array(63))).toBeNull();
-    expect(parseRegistrarKeyXY(new Uint8Array(64))).not.toBeNull();
-  });
-
-  test("verifies a well-formed voucher against the pinned key", async () => {
-    const pinned = parseRegistrarKeyXY(
-      new Uint8Array(Buffer.from(PINNED_KEY_B64, "base64")),
-    )!;
-    const res = await verifyDelegateKeyVoucher(
-      new Uint8Array(Buffer.from(VOUCHER_B64, "base64")),
-      pinned,
-      { sealerId: SEALER_ID, epoch: EPOCH, publicKey: DELEGATED_KEY },
-    );
-    expect(res.ok).toBe(true);
-  });
-
-  test("fails closed on a wrong-signer voucher (reason signature)", async () => {
-    const pinned = parseRegistrarKeyXY(
-      new Uint8Array(Buffer.from(PINNED_KEY_B64, "base64")),
-    )!;
-    const res = await verifyDelegateKeyVoucher(
-      new Uint8Array(Buffer.from(BAD_SIG_VOUCHER_B64, "base64")),
-      pinned,
-      { sealerId: SEALER_ID, epoch: EPOCH, publicKey: DELEGATED_KEY },
-    );
-    expect(res).toEqual({ ok: false, reason: "signature" });
-  });
-
-  test("fails closed on an epoch claim mismatch (reason epoch)", async () => {
-    const pinned = parseRegistrarKeyXY(
-      new Uint8Array(Buffer.from(PINNED_KEY_B64, "base64")),
-    )!;
-    const res = await verifyDelegateKeyVoucher(
-      new Uint8Array(Buffer.from(VOUCHER_B64, "base64")),
-      pinned,
-      { sealerId: SEALER_ID, epoch: EPOCH + 1, publicKey: DELEGATED_KEY },
-    );
-    expect(res).toEqual({ ok: false, reason: "epoch" });
-  });
-
-  test("fails closed on a sealerId mismatch (reason sealerId)", async () => {
-    const pinned = parseRegistrarKeyXY(
-      new Uint8Array(Buffer.from(PINNED_KEY_B64, "base64")),
-    )!;
-    const res = await verifyDelegateKeyVoucher(
-      new Uint8Array(Buffer.from(VOUCHER_B64, "base64")),
-      pinned,
-      { sealerId: "sealer-evil", epoch: EPOCH, publicKey: DELEGATED_KEY },
-    );
-    expect(res).toEqual({ ok: false, reason: "sealerId" });
-  });
-
-  test("fails closed on a delegated-key (claim 3) mismatch (reason publicKey)", async () => {
-    const pinned = parseRegistrarKeyXY(
-      new Uint8Array(Buffer.from(PINNED_KEY_B64, "base64")),
-    )!;
-    // Signature + sealerId + epoch all match; only the bound delegate key differs.
-    const res = await verifyDelegateKeyVoucher(
-      new Uint8Array(Buffer.from(VOUCHER_B64, "base64")),
-      pinned,
-      { sealerId: SEALER_ID, epoch: EPOCH, publicKey: new Uint8Array([9, 9, 9]) },
-    );
-    expect(res).toEqual({ ok: false, reason: "publicKey" });
-  });
-
-  test("fails closed on a non-map (garbage) payload (reason decode)", async () => {
-    const pinned = parseRegistrarKeyXY(
-      new Uint8Array(Buffer.from(PINNED_KEY_B64, "base64")),
-    )!;
-    // Validly signed by the registrar, but the payload is not a CBOR claims map.
-    const garbage = await signCoseSign1Statement(
-      encodeCborDeterministic("not a claims map"),
-      new Uint8Array(0),
-      registrar.privateKey,
-      { alg: -7 },
-    );
-    const res = await verifyDelegateKeyVoucher(garbage, pinned, {
-      sealerId: SEALER_ID,
-      epoch: EPOCH,
-      publicKey: DELEGATED_KEY,
-    });
-    expect(res).toEqual({ ok: false, reason: "decode" });
-  });
-});
 
 // --- delegation flow -----------------------------------------------------
 
@@ -344,6 +265,122 @@ describe("runDelegateFlow", () => {
     );
     expect(err).toBeInstanceOf(DelegateFlowError);
     expect((err as Error).message).toContain("no standing delegate-key entry");
+  });
+});
+
+// --- voucher expiry (claim 4, plan-2609-12 slice 07 part 4) ---------------
+
+/** Run the flow at `NOW` against one standing entry with this voucher. */
+async function delegateWith(
+  voucher: Uint8Array,
+  entry: Partial<StandingDelegationEntry> = {},
+): Promise<{ err: unknown; captured: Captured[] }> {
+  const captured: Captured[] = [];
+  const err = await runDelegateFlow(baseParams, {
+    fetchImpl: mockCoordinator(
+      [{ ...STANDING, voucher: b64(voucher), ...entry }],
+      captured,
+    ),
+    now: () => NOW,
+  }).then(
+    () => null,
+    (e: unknown) => e,
+  );
+  return { err, captured };
+}
+
+function posted(captured: Captured[]): boolean {
+  return captured.some((c) => c.url.endsWith("/api/delegations/certificate"));
+}
+
+function voucherFor(notAfter: number | null): Promise<Uint8Array> {
+  return makeVoucher(registrar.privateKey, {
+    sealerId: SEALER_ID,
+    epoch: EPOCH,
+    publicKey: DELEGATED_KEY,
+    notAfter,
+  });
+}
+
+describe("runDelegateFlow voucher expiry", () => {
+  test("refuses a voucher without claim 4 and says so", async () => {
+    const { err, captured } = await delegateWith(await voucherFor(null));
+    expect(err).toBeInstanceOf(DelegateFlowError);
+    expect((err as Error).message).toContain(
+      "failed verification (not_after_missing)",
+    );
+    expect((err as Error).message).toContain("no expiry");
+    expect(posted(captured)).toBe(false);
+  });
+
+  test("refuses a voucher expired beyond the clock-skew allowance", async () => {
+    const { err, captured } = await delegateWith(
+      await voucherFor(NOW - VOUCHER_CLOCK_SKEW_SECONDS - 1),
+    );
+    expect(err).toBeInstanceOf(DelegateFlowError);
+    expect((err as Error).message).toContain("failed verification (expired)");
+    expect(posted(captured)).toBe(false);
+  });
+
+  test("accepts a voucher expired within the clock-skew allowance", async () => {
+    const { err, captured } = await delegateWith(
+      await voucherFor(NOW - VOUCHER_CLOCK_SKEW_SECONDS + 1),
+    );
+    expect(err).toBeNull();
+    expect(posted(captured)).toBe(true);
+  });
+
+  test("allows 5 minutes of clock skew", () => {
+    expect(VOUCHER_CLOCK_SKEW_SECONDS).toBe(300);
+  });
+
+  test("accepts an epoch the coordinator sends as a decimal string", async () => {
+    const { err } = await delegateWith(await voucherFor(NOW + DAY), {
+      epoch: String(EPOCH),
+    });
+    expect(err).toBeNull();
+  });
+
+  test("refuses a voucher attesting a different sealer", async () => {
+    const { err, captured } = await delegateWith(await voucherFor(NOW + DAY), {
+      sealerId: "sealer-other",
+    });
+    expect((err as Error).message).toContain("failed verification (sealerId)");
+    expect(posted(captured)).toBe(false);
+  });
+
+  test("refuses a voucher for a key other than the advertised one", async () => {
+    const other = await delegatedCoseKey((await p256Pair()).publicKey);
+    const voucher = await makeVoucher(registrar.privateKey, {
+      sealerId: SEALER_ID,
+      epoch: EPOCH,
+      publicKey: other,
+    });
+    const { err, captured } = await delegateWith(voucher);
+    expect((err as Error).message).toContain("failed verification (publicKey)");
+    expect(posted(captured)).toBe(false);
+  });
+
+  test("refuses a voucher for an epoch other than the advertised one", async () => {
+    const voucher = await makeVoucher(registrar.privateKey, {
+      sealerId: SEALER_ID,
+      epoch: EPOCH + 1,
+      publicKey: DELEGATED_KEY,
+    });
+    const { err, captured } = await delegateWith(voucher);
+    expect((err as Error).message).toContain("failed verification (epoch)");
+    expect(posted(captured)).toBe(false);
+  });
+
+  test("refuses a malformed coordinator epoch as the coordinator's fault", async () => {
+    const { err, captured } = await delegateWith(await voucherFor(NOW + DAY), {
+      epoch: "seven",
+    });
+    expect((err as Error).message).toContain(
+      "failed verification (coordinator_epoch)",
+    );
+    expect((err as Error).message).toContain("coordinator");
+    expect(posted(captured)).toBe(false);
   });
 });
 

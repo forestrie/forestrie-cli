@@ -9,7 +9,7 @@
         "@forestrie/cli-kit": "^0.1.1",
         "@forestrie/delegation-cose": "0.4.0",
         "@forestrie/deploy-core": "^0.7.1",
-        "@forestrie/encoding": "^0.9.1",
+        "@forestrie/encoding": "^0.10.0",
         "@forestrie/grant-builder": "^0.5.0",
         "@forestrie/merklelog": "^0.5.0",
         "@forestrie/receipt-verify": "3.2.0",
@@ -34,7 +34,7 @@
 
     "@forestrie/deploy-core": ["@forestrie/deploy-core@0.7.1", "", { "dependencies": { "viem": "^2.31.0" } }, "sha512-a6PAaij1iBe9O+67S0f9E3HZ1lXNBJWngEyr/twYPMgsGlaTu9S7J9cwOCIC5Nm7y1LVnFkW9Uja+T3De+A7MQ=="],
 
-    "@forestrie/encoding": ["@forestrie/encoding@0.9.1", "", { "dependencies": { "@noble/curves": "^1.8.1" } }, "sha512-hvZQDSM2xDTiSMwznyeK15gf9+Sqt5I5V8WojBwchku1KWcznLb4uN2rk7CXv9W3rXzAYfY7+xl4RGXfSvWHPQ=="],
+    "@forestrie/encoding": ["@forestrie/encoding@0.10.0", "", { "dependencies": { "@noble/curves": "^1.8.1" } }, "sha512-3/nPSy654HmcLOwFgKbxXzMlzy6cWmqqR6FKJnGIrOTBWyP1U5jddFtrCOCRp7BPBJLHL1dfOtbWQs2ITB7yYw=="],
 
     "@forestrie/grant-builder": ["@forestrie/grant-builder@0.5.0", "", { "dependencies": { "@forestrie/encoding": "0.8.0", "@noble/curves": "^1.9.7", "@noble/hashes": "^1.7.1" } }, "sha512-TK99asMGFUaG4mrj4OCeR+WqkOH7S4iWAa6wp2SsCk+2KV+3bVsJgiSdagzlMNjEtE6jdoJNYRVUUpLw/epabg=="],
 
@@ -80,7 +80,11 @@
 
     "ws": ["ws@8.21.0", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g=="],
 
+    "@forestrie/delegation-cose/@forestrie/encoding": ["@forestrie/encoding@0.9.1", "", { "dependencies": { "@noble/curves": "^1.8.1" } }, "sha512-hvZQDSM2xDTiSMwznyeK15gf9+Sqt5I5V8WojBwchku1KWcznLb4uN2rk7CXv9W3rXzAYfY7+xl4RGXfSvWHPQ=="],
+
     "@forestrie/grant-builder/@forestrie/encoding": ["@forestrie/encoding@0.8.0", "", { "dependencies": { "@noble/curves": "^1.8.1" } }, "sha512-2UquoDJj0CcCMA4dN2CQabMqWbU3/hyTnQqEKGvrG1jZJqOiJ78owq9LkcmLLWtQQ68q/oC72dxnp0EhwSSfew=="],
+
+    "@forestrie/receipt-verify/@forestrie/encoding": ["@forestrie/encoding@0.9.1", "", { "dependencies": { "@noble/curves": "^1.8.1" } }, "sha512-hvZQDSM2xDTiSMwznyeK15gf9+Sqt5I5V8WojBwchku1KWcznLb4uN2rk7CXv9W3rXzAYfY7+xl4RGXfSvWHPQ=="],
 
     "@forestrie/scrapi-client/@forestrie/encoding": ["@forestrie/encoding@0.7.0", "", { "dependencies": { "@noble/curves": "^1.8.1" } }, "sha512-3Q8s678bQa8J0RBv92jAjwQE0OTqV9vP8YxASoCB9LQt7VKQ1pxl6h0SvUlggY3RMEvBBLNBcXduh7Szx5r2DA=="],
 
