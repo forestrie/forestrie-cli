@@ -50,12 +50,14 @@ export const VOUCHER_CLOCK_SKEW_SECONDS = 300;
  * `@forestrie/encoding` verifier's reason.
  */
 const VOUCHER_FAILURE_EXPLANATIONS: Record<string, string> = {
-  signature: "it is not signed by the known sealer-voucher key",
+  signature: "it is not a voucher signed by the known sealer-voucher key",
   decode: "it is not a COSE_Sign1 voucher",
   claims_decode: "its claims are not valid CBOR",
   claims_shape: "its claims are not a voucher's claims",
   sealerId: "it vouches for a different sealer than the coordinator advertises",
-  epoch: "its epoch does not match the one the coordinator advertises",
+  epoch: "it vouches for a different epoch than the coordinator advertises",
+  coordinator_epoch:
+    "the coordinator advertises an epoch that is not a non-negative integer",
   publicKey: "it vouches for a different key than the coordinator advertises",
   not_after_missing:
     "it has no expiry (claim 4), so it predates expiring vouchers; ask the operator to refresh the sealer's registration",
@@ -250,7 +252,7 @@ export async function runDelegateFlow(
     );
   }
   const epoch = epochNumber(standing.epoch);
-  if (epoch === null) refuseVoucher("epoch");
+  if (epoch === null) refuseVoucher("coordinator_epoch");
   const now = deps.now?.() ?? Math.floor(Date.now() / 1000);
   const voucherResult = await verifyDelegateKeyVoucher(
     b64ToBytes(standing.voucher),

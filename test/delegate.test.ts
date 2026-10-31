@@ -349,11 +349,37 @@ describe("runDelegateFlow voucher expiry", () => {
     expect(posted(captured)).toBe(false);
   });
 
-  test("refuses a non-integer epoch without verifying", async () => {
+  test("refuses a voucher for a key other than the advertised one", async () => {
+    const other = await delegatedCoseKey((await p256Pair()).publicKey);
+    const voucher = await makeVoucher(registrar.privateKey, {
+      sealerId: SEALER_ID,
+      epoch: EPOCH,
+      publicKey: other,
+    });
+    const { err, captured } = await delegateWith(voucher);
+    expect((err as Error).message).toContain("failed verification (publicKey)");
+    expect(posted(captured)).toBe(false);
+  });
+
+  test("refuses a voucher for an epoch other than the advertised one", async () => {
+    const voucher = await makeVoucher(registrar.privateKey, {
+      sealerId: SEALER_ID,
+      epoch: EPOCH + 1,
+      publicKey: DELEGATED_KEY,
+    });
+    const { err, captured } = await delegateWith(voucher);
+    expect((err as Error).message).toContain("failed verification (epoch)");
+    expect(posted(captured)).toBe(false);
+  });
+
+  test("refuses a malformed coordinator epoch as the coordinator's fault", async () => {
     const { err, captured } = await delegateWith(await voucherFor(NOW + DAY), {
       epoch: "seven",
     });
-    expect((err as Error).message).toContain("failed verification (epoch)");
+    expect((err as Error).message).toContain(
+      "failed verification (coordinator_epoch)",
+    );
+    expect((err as Error).message).toContain("coordinator");
     expect(posted(captured)).toBe(false);
   });
 });
