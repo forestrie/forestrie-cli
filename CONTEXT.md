@@ -47,9 +47,10 @@ or verify COSE artefacts.
   voucher against a **pinned registrar key**, then signs a wide-horizon
   delegation authorizing that sealer to publish checkpoints. See ADR-0050.
 - **Voucher / pinned registrar key** — the voucher is the custodian's
-  attestation `(sealerId, epoch, delegatePublicKey)`. `delegate` verifies it
-  against a caller-supplied pinned registrar key and **fails closed** if it is
-  absent or invalid — so *"I authorized my custodian-vouched sealer"* is a true
+  attestation `(sealerId, epoch, delegatePublicKey)`, valid until its signed
+  expiry (claim 4, `notAfter`). `delegate` verifies it against a
+  caller-supplied pinned registrar key and **fails closed** if it is absent,
+  invalid, has no expiry, or expired more than 5 min ago — so *"I authorized my custodian-vouched sealer"* is a true
   statement, not blind trust in the coordinator.
 - **Horizon** — the MMR range a delegation authorizes (`mmrStart..mmrEnd`).
   On-chain this is effectively permanent within its range (ADR-0050 V4), so
