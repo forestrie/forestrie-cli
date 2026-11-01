@@ -11,7 +11,7 @@
  *      canonical decimal strings, plan-2611-01 D1); find the STANDING
  *      delegate-key entry (has `suggestedTtlSeconds`, no `mmrStart`).
  *   3. Verify the registrar voucher against the caller-known registrar key
- *      (mandatory — fail closed).
+ *      (mandatory — fail closed), including its expiry (claim 4).
  *   4. Build the delegation certificate + on-chain delegation proof over the
  *      horizon `mmr 0..end`.
  *   5. POST the certificate to the coordinator (range as decimal strings).
@@ -30,17 +30,59 @@ import {
   signOnchainDelegationEs256,
   type DelegationInput,
 } from "@forestrie/delegation-cose";
-import { uuidToBytes } from "@forestrie/encoding";
-import { formatDecimalUint64, parseDecimalUint64 } from "./decimal-uint64.js";
 import {
   parseRegistrarKeyXY,
+  uuidToBytes,
   verifyDelegateKeyVoucher,
-} from "./delegate-voucher.js";
+} from "@forestrie/encoding";
+import { formatDecimalUint64, parseDecimalUint64 } from "./decimal-uint64.js";
 
 import { responseProblemDetail } from "./http-problem.js";
 
 /** Fixed inclusive MMR start for a horizon delegation lease. */
 const MMR_START = 0n;
+
+/**
+ * How far past its claim 4 (notAfter) a voucher is still accepted, to allow
+ * for clock skew between this machine and the custodian that signed it
+ * (devdocs plan-2609-12 slice 07 part 4).
+ */
+export const VOUCHER_CLOCK_SKEW_SECONDS = 300;
+
+/**
+ * Why a voucher failed, for the person running `delegate`, keyed by the
+ * `@forestrie/encoding` verifier's reason.
+ */
+const VOUCHER_FAILURE_EXPLANATIONS: Record<string, string> = {
+  signature: "it is not a voucher signed by the known sealer-voucher key",
+  decode: "it is not a COSE_Sign1 voucher",
+  claims_decode: "its claims are not valid CBOR",
+  claims_shape: "its claims are not a voucher's claims",
+  sealerId: "it vouches for a different sealer than the coordinator advertises",
+  epoch: "it vouches for a different epoch than the coordinator advertises",
+  coordinator_epoch:
+    "the coordinator advertises an epoch that is not a non-negative integer",
+  publicKey: "it vouches for a different key than the coordinator advertises",
+  not_after_missing:
+    "it has no expiry (claim 4), so it predates expiring vouchers; ask the operator to refresh the sealer's registration",
+  expired:
+    "it has expired; ask the operator to refresh the sealer's registration",
+};
+
+/** A coordinator epoch (JSON number or decimal string) as a safe integer. */
+function epochNumber(epoch: number | string): number | null {
+  const n =
+    typeof epoch === "string" && /^\d+$/.test(epoch) ? Number(epoch) : epoch;
+  return typeof n === "number" && Number.isSafeInteger(n) && n >= 0 ? n : null;
+}
+
+/** Throw the flow's refusal for a voucher that failed with `reason`. */
+function refuseVoucher(reason: string): never {
+  const why = VOUCHER_FAILURE_EXPLANATIONS[reason] ?? "it did not verify";
+  throw new DelegateFlowError(
+    `registrar voucher failed verification (${reason}): ${why} — refusing to bind`,
+  );
+}
 
 function b64ToBytes(b64: string): Uint8Array {
   return new Uint8Array(Buffer.from(b64, "base64"));
@@ -107,6 +149,8 @@ export type DelegateFlowParams = {
 
 export type DelegateFlowDeps = {
   fetchImpl?: typeof fetch;
+  /** The current time, Unix seconds (default: the system clock). */
+  now?: () => number;
 };
 
 /**
@@ -248,20 +292,21 @@ export async function runDelegateFlow(
       "known-sealer-key must be base64 x||y (64 bytes)",
     );
   }
+  const epoch = epochNumber(standing.epoch);
+  if (epoch === null) refuseVoucher("coordinator_epoch");
+  const now = deps.now?.() ?? Math.floor(Date.now() / 1000);
   const voucherResult = await verifyDelegateKeyVoucher(
     b64ToBytes(standing.voucher),
     pinned,
     {
       sealerId: standing.sealerId,
-      epoch: standing.epoch,
+      epoch,
       publicKey: b64ToBytes(standing.delegatedPublicKey),
     },
+    now - VOUCHER_CLOCK_SKEW_SECONDS,
+    { requireNotAfter: true },
   );
-  if (!voucherResult.ok) {
-    throw new DelegateFlowError(
-      `registrar voucher failed verification (${voucherResult.reason}) — refusing to bind`,
-    );
-  }
+  if (!voucherResult.ok) refuseVoucher(voucherResult.reason);
 
   // 4. Build the delegation certificate + on-chain proof over mmr 0..end.
   const mmrStart = MMR_START;
