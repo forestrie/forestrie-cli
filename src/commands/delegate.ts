@@ -36,7 +36,7 @@ export default defineForestrieCommand({
     "horizon-mmr-end": {
       type: "string",
       description:
-        "Exclusive MMR end of the horizon lease (default 9007199254740991; mmrStart is fixed 0)",
+        "Exclusive MMR end of the horizon lease (default 9007199254740991, at most 18446744073709551615; mmrStart is fixed 0)",
       valueHint: "number",
     },
     "ttl-seconds": {

@@ -1,4 +1,5 @@
 import type { Out } from "@forestrie/cli-kit/reporting";
+import { formatDecimalUint64 } from "@forestrie/delegation-cose";
 import { readTextFile, writeOutputFile } from "../lib/fsio.js";
 import type { DelegateOptions } from "../options/delegate.js";
 import {
@@ -23,8 +24,10 @@ export type DelegateReport = {
   logId: string;
   sealerId: string;
   epoch: number | string;
-  mmrStart: number;
-  mmrEnd: number;
+  /** Range start, canonical decimal uint64 string (FOR-613). */
+  mmrStart: string;
+  /** Range end, canonical decimal uint64 string (FOR-613). */
+  mmrEnd: string;
   expiresAt: number;
   /** Present when `--out-b64` was given. */
   outB64?: string;
@@ -76,8 +79,8 @@ async function reportResult(
       logId: options.logId,
       sealerId: result.sealerId,
       epoch: result.epoch,
-      mmrStart: result.mmrStart,
-      mmrEnd: result.mmrEnd,
+      mmrStart: formatDecimalUint64(result.mmrStart),
+      mmrEnd: formatDecimalUint64(result.mmrEnd),
       expiresAt: result.expiresAt,
     };
     if (options.outB64 !== undefined) report.outB64 = options.outB64;
@@ -86,7 +89,11 @@ async function reportResult(
   }
   out.print("standing: sealerId %s epoch %s", result.sealerId, String(result.epoch));
   out.print("voucher: ok — verifies against the known sealer-voucher key");
-  out.print("horizon: mmr %d..%d", result.mmrStart, result.mmrEnd);
+  out.print(
+    "horizon: mmr %s..%s",
+    formatDecimalUint64(result.mmrStart),
+    formatDecimalUint64(result.mmrEnd),
+  );
   out.print("submit: ok");
   if (options.outB64 !== undefined) {
     out.print("wrote certificate (base64) to %s", options.outB64);

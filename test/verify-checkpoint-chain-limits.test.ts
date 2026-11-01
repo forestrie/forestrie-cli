@@ -77,8 +77,8 @@ describe("--checkpoint-chain enforces delegation limits (ES256)", () => {
   async function chainDir(
     name: string,
     constraints?: {
-      mmrStart: number;
-      mmrEnd: number;
+      mmrStart: unknown;
+      mmrEnd: unknown;
       issuedAt: number;
       expiresAt: number;
     },
@@ -127,7 +127,7 @@ describe("--checkpoint-chain enforces delegation limits (ES256)", () => {
       json: true,
     });
 
-  const window = (over: Partial<{ mmrStart: number; mmrEnd: number; expiresAt: number }> = {}) => ({
+  const window = (over: Partial<{ mmrStart: unknown; mmrEnd: unknown; expiresAt: number }> = {}) => ({
     mmrStart: 0,
     mmrEnd: 100,
     issuedAt: leafTime - 3600,
@@ -158,6 +158,16 @@ describe("--checkpoint-chain enforces delegation limits (ES256)", () => {
     const r = await verifyChain(await chainDir("start", window({ mmrStart: 3 })));
     expect(r.exitCode).toBe(1);
     expect(rep(r.stdout).anchor?.reason).toBe("delegation_out_of_range");
+  });
+
+  test("a present-but-malformed range label fails closed (FOR-613)", async () => {
+    // Label 4 present but not a uint64: never read as absent, and not an
+    // anchor-fallback reason (isAnchorFallbackReason) — it fails.
+    const r = await verifyChain(await chainDir("malformed", window({ mmrEnd: "100" })));
+    expect(r.exitCode).toBe(1);
+    const report = rep(r.stdout);
+    expect(report.anchor?.anchored).toBe(false);
+    expect(report.anchor?.reason).toBe("delegation_range_malformed");
   });
 
   test("a certificate expired at the leaf time is delegation_expired after the match", async () => {

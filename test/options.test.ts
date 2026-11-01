@@ -213,10 +213,40 @@ describe("parseDelegateOptions", () => {
     "known-sealer-key": "AAAA",
   };
 
-  test("horizon-mmr-end defaults to Number.MAX_SAFE_INTEGER; mmr start is fixed 0", () => {
+  test("horizon-mmr-end defaults to 2^53-1 as a bigint; mmr start is fixed 0", () => {
     const options = parseDelegateOptions({ ...base });
-    expect(options.horizonMmrEnd).toBe(Number.MAX_SAFE_INTEGER);
+    expect(options.horizonMmrEnd).toBe(9007199254740991n);
     expect(options.ttlSeconds).toBeUndefined();
+  });
+
+  test("horizon-mmr-end parses exactly up to 2^64-1 (FOR-613)", () => {
+    expect(
+      parseDelegateOptions({ ...base, "horizon-mmr-end": "9007199254740993" })
+        .horizonMmrEnd,
+    ).toBe(9007199254740993n);
+    expect(
+      parseDelegateOptions({
+        ...base,
+        "horizon-mmr-end": "18446744073709551615",
+      }).horizonMmrEnd,
+    ).toBe(18446744073709551615n);
+  });
+
+  test("horizon-mmr-end rejects zero, non-integers and values above 2^64-1", () => {
+    for (const raw of [
+      "0",
+      "-1",
+      "1.5",
+      "abc",
+      "1e3",
+      "0x10",
+      " 5",
+      "18446744073709551616",
+    ]) {
+      expect(() =>
+        parseDelegateOptions({ ...base, "horizon-mmr-end": raw }),
+      ).toThrow(/--horizon-mmr-end must be a positive integer/);
+    }
   });
 
   test("parses numeric horizon and ttl overrides", () => {
@@ -225,7 +255,7 @@ describe("parseDelegateOptions", () => {
       "horizon-mmr-end": "500",
       "ttl-seconds": "120",
     });
-    expect(options.horizonMmrEnd).toBe(500);
+    expect(options.horizonMmrEnd).toBe(500n);
     expect(options.ttlSeconds).toBe(120);
   });
 

@@ -15,6 +15,7 @@ import {
   COSE_KTY_EC2,
   COSE_X,
   COSE_Y,
+  parseDelegationCertificate,
 } from "@forestrie/delegation-cose";
 import {
   DelegateFlowError,
@@ -134,8 +135,26 @@ const STANDING: StandingDelegationEntry = {
 
 type Captured = { url: string; init?: RequestInit | undefined };
 
+/**
+ * A lease entry exactly as the coordinator's `GET /pending-delegation`
+ * returns it: range bounds are canonical decimal strings (FOR-613).
+ */
+const LEASE_ENTRY = {
+  id: "lease-1",
+  authLogIdHex32: "00".repeat(32),
+  logIdHex32: "00".repeat(32),
+  mmrStart: "9007199254740993",
+  mmrEnd: "18446744073709551615",
+  delegatedPublicKeyHash: "00".repeat(32),
+  delegatedPublicKey: "",
+  requestedAt: 1_700_000_000_000,
+};
+
+/** Coordinator entries are untrusted JSON: tests may send any shape. */
+type WireEntry = StandingDelegationEntry | Record<string, unknown>;
+
 function mockCoordinator(
-  entries: StandingDelegationEntry[],
+  entries: WireEntry[],
   captured: Captured[],
 ): typeof fetch {
   return (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -159,8 +178,28 @@ const baseParams = {
   logId: LOG_ID,
   rootPem: ROOT_PEM,
   knownSealerKey: PINNED_KEY_B64,
-  horizonMmrEnd: 1000,
+  horizonMmrEnd: 1000n,
 };
+
+/** The certificate POST body the flow sent, decoded. */
+function postedBody(captured: Captured[]): Record<string, unknown> {
+  const post = captured.find((c) =>
+    c.url.endsWith("/api/delegations/certificate"),
+  )!;
+  return JSON.parse(String(post.init?.body)) as Record<string, unknown>;
+}
+
+async function flowError(
+  entries: WireEntry[],
+  captured: Captured[],
+): Promise<unknown> {
+  return runDelegateFlow(baseParams, {
+    fetchImpl: mockCoordinator(entries, captured),
+  }).then(
+    () => null,
+    (e: unknown) => e,
+  );
+}
 
 // --- delegation flow -----------------------------------------------------
 
@@ -172,8 +211,8 @@ describe("runDelegateFlow", () => {
     });
     expect(result.sealerId).toBe(SEALER_ID);
     expect(result.epoch).toBe(EPOCH);
-    expect(result.mmrStart).toBe(0);
-    expect(result.mmrEnd).toBe(1000);
+    expect(result.mmrStart).toBe(0n);
+    expect(result.mmrEnd).toBe(1000n);
     expect(result.delegatedPublicKey).toBe(DELEGATED_KEY_B64);
     expect(typeof result.expiresAt).toBe("number");
 
@@ -185,8 +224,9 @@ describe("runDelegateFlow", () => {
     );
     const body = JSON.parse(String(post.init?.body)) as Record<string, unknown>;
     expect(body["logId"]).toBe(LOG_ID);
-    expect(body["mmrStart"]).toBe(0);
-    expect(body["mmrEnd"]).toBe(1000);
+    // Range bounds travel as canonical decimal strings (FOR-613).
+    expect(body["mmrStart"]).toBe("0");
+    expect(body["mmrEnd"]).toBe("1000");
     expect(body["delegatedPublicKey"]).toBe(DELEGATED_KEY_B64);
     expect(typeof body["certificate"]).toBe("string");
     expect(typeof body["issuedAt"]).toBe("number");
@@ -196,6 +236,62 @@ describe("runDelegateFlow", () => {
     expect(Buffer.from(String(body["onchainSignature"]), "base64").length).toBe(
       64,
     );
+  });
+
+  test("a horizon above 2^53 round-trips exactly into the certificate", async () => {
+    for (const horizonMmrEnd of [9007199254740993n, 18446744073709551615n]) {
+      const captured: Captured[] = [];
+      const result = await runDelegateFlow(
+        { ...baseParams, horizonMmrEnd },
+        { fetchImpl: mockCoordinator([STANDING], captured) },
+      );
+      expect(result.mmrEnd).toBe(horizonMmrEnd);
+      const body = postedBody(captured);
+      expect(body["mmrStart"]).toBe("0");
+      expect(body["mmrEnd"]).toBe(horizonMmrEnd.toString(10));
+      const posted = new Uint8Array(
+        Buffer.from(String(body["certificate"]), "base64"),
+      );
+      const info = parseDelegationCertificate(posted);
+      expect(info.mmrStart).toBe(0n);
+      expect(info.mmrEnd).toBe(horizonMmrEnd);
+    }
+  });
+
+  test("accepts lease entries whose range is a decimal string", async () => {
+    const captured: Captured[] = [];
+    const result = await runDelegateFlow(baseParams, {
+      fetchImpl: mockCoordinator([LEASE_ENTRY, STANDING], captured),
+    });
+    expect(result.sealerId).toBe(SEALER_ID);
+  });
+
+  test("rejects a JSON-number range in a coordinator entry (no POST)", async () => {
+    for (const bad of [
+      { ...LEASE_ENTRY, mmrStart: 0 },
+      { ...LEASE_ENTRY, mmrEnd: 1000 },
+    ]) {
+      const captured: Captured[] = [];
+      const err = await flowError([bad, STANDING], captured);
+      expect(err).toBeInstanceOf(DelegateFlowError);
+      expect((err as Error).message).toMatch(
+        /pending-delegation entry 0 mmr(Start|End) must be a decimal string \(got number\)/,
+      );
+      expect(
+        captured.some((c) => c.url.endsWith("/api/delegations/certificate")),
+      ).toBe(false);
+    }
+  });
+
+  test("rejects a malformed decimal range in a coordinator entry", async () => {
+    for (const mmrEnd of ["01", "-1", "1.5", " 7", "18446744073709551616"]) {
+      const captured: Captured[] = [];
+      const err = await flowError([{ ...LEASE_ENTRY, mmrEnd }, STANDING], captured);
+      expect(err).toBeInstanceOf(DelegateFlowError);
+      expect((err as Error).message).toContain(
+        "pending-delegation entry 0 mmrEnd",
+      );
+    }
   });
 
   test("a malformed root PEM fails closed as key_read_failed (no unhandled throw)", async () => {
@@ -398,7 +494,7 @@ describe("runDelegate (main)", () => {
     logId: LOG_ID,
     signWith: ROOT_PEM_PATH,
     knownSealerKey: PINNED_KEY_B64,
-    horizonMmrEnd: 1000,
+    horizonMmrEnd: 1000n,
     ttlSeconds: undefined,
     outB64: undefined,
   };
@@ -420,10 +516,41 @@ describe("runDelegate (main)", () => {
     expect(report["command"]).toBe("delegate");
     expect(report["status"]).toBe("submitted");
     expect(report["sealerId"]).toBe(SEALER_ID);
-    expect(report["mmrEnd"]).toBe(1000);
+    // Range bounds are decimal strings in --json output (FOR-613).
+    expect(report["mmrStart"]).toBe("0");
+    expect(report["mmrEnd"]).toBe("1000");
     expect(report["outB64"]).toBe(outPath);
     const written = await Bun.file(outPath).text();
     expect(written.length).toBeGreaterThan(0);
+  });
+
+  test("--json reports a horizon above 2^53 exactly", async () => {
+    const out = createCaptureOut();
+    process.exitCode = 0;
+    await runDelegate(
+      out,
+      { ...baseOptions, horizonMmrEnd: 18446744073709551615n },
+      { fetchImpl: mockCoordinator([STANDING], []) },
+    );
+    expect(process.exitCode).toBe(0);
+    const report = JSON.parse(
+      out.lines.filter((l) => l.stream === "stdout").map((l) => l.text).join("\n"),
+    ) as Record<string, unknown>;
+    expect(report["mmrEnd"]).toBe("18446744073709551615");
+  });
+
+  test("human output prints the horizon range as plain integers", async () => {
+    const out = createCaptureOut();
+    process.exitCode = 0;
+    await runDelegate(
+      out,
+      { ...baseOptions, json: false, horizonMmrEnd: 9007199254740993n },
+      { fetchImpl: mockCoordinator([STANDING], []) },
+    );
+    expect(process.exitCode).toBe(0);
+    const text = out.lines.map((l) => l.text).join("\n");
+    expect(text).toContain("horizon: mmr 0..9007199254740993");
+    expect(text).not.toMatch(/\d+n\b/);
   });
 
   test("fail-closed voucher mismatch exits 1 with delegation_failed", async () => {
