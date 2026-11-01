@@ -356,10 +356,12 @@ export async function buildCheckpoint(opts: {
 export async function buildDelegationCert(
   certSigner: CryptoKeyPair,
   delegatedPublic: CryptoKey,
-  /** Payload labels 3/4/8/9: coverage window and validity (Unix seconds). */
+  /** Payload labels 3/4/8/9: coverage window and validity (Unix seconds).
+   * The range is `unknown` so tests can encode a malformed (non-uint64)
+   * label. */
   constraints?: {
-    mmrStart: number;
-    mmrEnd: number;
+    mmrStart: unknown;
+    mmrEnd: unknown;
     issuedAt: number;
     expiresAt: number;
   },
@@ -745,8 +747,8 @@ export async function buildKs256Fixture(opts?: {
   const tbs = buildDelegationToBeSignedKs256(
     {
       logIdHex32: FIXTURE_LOG_ID.replaceAll("-", ""),
-      mmrStart: 0,
-      mmrEnd: 65535,
+      mmrStart: 0n,
+      mmrEnd: 65535n,
       delegatedPublicKeyCbor,
       issuedAt: leafTime - 3600,
       expiresAt: opts?.expired ? leafTime - 60 : leafTime + 3600,
@@ -898,8 +900,8 @@ export async function buildKs256ChainFixture(opts?: {
     const tbs = buildDelegationToBeSignedKs256(
       {
         logIdHex32: FIXTURE_LOG_ID.replaceAll("-", ""),
-        mmrStart: 0,
-        mmrEnd: 65535,
+        mmrStart: 0n,
+        mmrEnd: 65535n,
         delegatedPublicKeyCbor: cborBytes(
           new Map<number, unknown>([
             [1, 2],

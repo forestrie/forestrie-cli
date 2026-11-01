@@ -1,4 +1,5 @@
 import type { LooseParsedArgs } from "@forestrie/cli-kit";
+import { UINT64_MAX } from "@forestrie/delegation-cose";
 import {
   optionalStringOption,
   parseForestrieCommonOptions,
@@ -6,8 +7,11 @@ import {
   type ForestrieCommonOptions,
 } from "./common.js";
 
-/** Default horizon MMR end — effectively unbounded (Number.MAX_SAFE_INTEGER). */
-export const DEFAULT_HORIZON_MMR_END = Number.MAX_SAFE_INTEGER;
+/**
+ * Default horizon MMR end — effectively unbounded. The value stays 2^53-1
+ * (Number.MAX_SAFE_INTEGER, as before FOR-613); thinker mirrors it.
+ */
+export const DEFAULT_HORIZON_MMR_END = BigInt(Number.MAX_SAFE_INTEGER);
 
 /**
  * `forestrie delegate` — FOR-390 / ADR-0052.
@@ -27,8 +31,8 @@ export type DelegateOptions = ForestrieCommonOptions & {
   /** The known key that vouches for the operator's sealer — the registrar's
    * voucher-signing key, base64 `x||y` (`KNOWN_SEALER_KEY`). */
   knownSealerKey: string;
-  /** Exclusive MMR end of the horizon lease (mmrStart is fixed 0). */
-  horizonMmrEnd: number;
+  /** Exclusive MMR end of the horizon lease (mmrStart is fixed 0); uint64. */
+  horizonMmrEnd: bigint;
   /** Lease TTL seconds; defaults to the standing entry's suggestedTtlSeconds. */
   ttlSeconds: number | undefined;
   /** When set, write the submitted certificate base64 to this path. */
@@ -50,20 +54,26 @@ function numberOption(
   return value;
 }
 
-export function parseDelegateOptions(args: LooseParsedArgs): DelegateOptions {
-  const horizonMmrEnd = numberOption(
-    args,
-    "horizon-mmr-end",
-    DEFAULT_HORIZON_MMR_END,
-  ) as number;
-  // The horizon binds a durable on-chain delegation scope [0, mmrEnd) — reject
-  // non-integer / out-of-range values before they flow into cert + on-chain
-  // encoding (ADR-0050 V4). MMR indices are non-negative safe integers.
-  if (!Number.isSafeInteger(horizonMmrEnd) || horizonMmrEnd <= 0) {
+/**
+ * Read `--horizon-mmr-end` as a uint64. The horizon binds a durable on-chain
+ * delegation scope [0, mmrEnd), so reject non-integer / out-of-range values
+ * before they flow into cert + on-chain encoding (ADR-0050 V4). Parsed with
+ * `BigInt` from plain digits so values above 2^53 stay exact (FOR-613).
+ */
+function horizonMmrEndOption(args: LooseParsedArgs): bigint {
+  const raw = optionalStringOption(args, "horizon-mmr-end");
+  if (raw === undefined) return DEFAULT_HORIZON_MMR_END;
+  const value = /^[0-9]+$/.test(raw) ? BigInt(raw) : -1n;
+  if (value <= 0n || value > UINT64_MAX) {
     throw new Error(
-      "--horizon-mmr-end must be a positive integer no larger than 2^53-1",
+      "--horizon-mmr-end must be a positive integer no larger than 2^64-1",
     );
   }
+  return value;
+}
+
+export function parseDelegateOptions(args: LooseParsedArgs): DelegateOptions {
+  const horizonMmrEnd = horizonMmrEndOption(args);
   const ttlSeconds = numberOption(args, "ttl-seconds", undefined);
   if (
     ttlSeconds !== undefined &&

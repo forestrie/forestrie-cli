@@ -7,6 +7,7 @@ import {
   type DelegateFlowDeps,
   type DelegateFlowResult,
 } from "../lib/delegate-flow.js";
+import { formatDecimalUint64 } from "../lib/decimal-uint64.js";
 
 /**
  * FOR-390 / ADR-0052: authorize a custodian-vouched sealer to publish
@@ -23,8 +24,10 @@ export type DelegateReport = {
   logId: string;
   sealerId: string;
   epoch: number | string;
-  mmrStart: number;
-  mmrEnd: number;
+  /** Range start, canonical decimal uint64 string (plan-2611-01 D1). */
+  mmrStart: string;
+  /** Range end, canonical decimal uint64 string (plan-2611-01 D1). */
+  mmrEnd: string;
   expiresAt: number;
   /** Present when `--out-b64` was given. */
   outB64?: string;
@@ -76,8 +79,8 @@ async function reportResult(
       logId: options.logId,
       sealerId: result.sealerId,
       epoch: result.epoch,
-      mmrStart: result.mmrStart,
-      mmrEnd: result.mmrEnd,
+      mmrStart: formatDecimalUint64(result.mmrStart),
+      mmrEnd: formatDecimalUint64(result.mmrEnd),
       expiresAt: result.expiresAt,
     };
     if (options.outB64 !== undefined) report.outB64 = options.outB64;
@@ -86,7 +89,11 @@ async function reportResult(
   }
   out.print("standing: sealerId %s epoch %s", result.sealerId, String(result.epoch));
   out.print("voucher: ok — verifies against the known sealer-voucher key");
-  out.print("horizon: mmr %d..%d", result.mmrStart, result.mmrEnd);
+  out.print(
+    "horizon: mmr %s..%s",
+    formatDecimalUint64(result.mmrStart),
+    formatDecimalUint64(result.mmrEnd),
+  );
   out.print("submit: ok");
   if (options.outB64 !== undefined) {
     out.print("wrote certificate (base64) to %s", options.outB64);
