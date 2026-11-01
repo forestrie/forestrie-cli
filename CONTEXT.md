@@ -68,7 +68,7 @@ kind. See `grant-flags.ts`.
 - `create-log --auth-log` / root bootstrap: byte3 `0x03`, byte7 `0x01`
   (`GF_AUTH_LOG`) — `authLogBootstrapShapedFlags()`.
 - `register-grant` (writer): byte3 `0x02` (`GF_EXTEND` only), byte7 `0x02` —
-  `dataLogExtendFlags()` **(to add — ADR-0052/plan-2607-21)**.
+  `dataLogExtendFlags()` **(to add — ADR-0052)**.
 - Endorsement (not a CLI verb): byte3 `0x06` (`GF_EXTEND|GF_DERIVED`), byte7
   `0x01` — `derivedEndorsementGrantFlags()`.
 

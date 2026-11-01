@@ -19,7 +19,7 @@ deploy, sign, register, and verify against a forestrie log:
 | `fetch-accumulator` | Cache the on-chain accumulator as a `--known-accumulator` snapshot |
 | `fetch-ks256-attestation` | Cache an ERC-1271 attestation for a KS256 contract root as a `--ks256-attestation` file |
 
-**Status:** subcommands not yet implemented declare their real argument
+Subcommands not yet implemented declare their real argument
 surface and parse it, then exit non-zero with a structured `not_implemented`
 error. `--json` emits that report as JSON on stdout. Implementations land
 per-subcommand.
@@ -331,7 +331,7 @@ Add `--univocity <address> --log-id <id> --rpc-url $RPC_URL` to check the
 receipt's peak against the on-chain accumulator instead of the checkpoint
 signature — no operator trust required.
 
-#### Trust anchors (FOR-297)
+#### Trust anchors
 
 `verify` takes four named trust anchors — pass whichever you hold:
 
@@ -521,7 +521,7 @@ That is `forestrie verify` (and `@forestrie/receipt-verify` in-process).
 
 ## Built on (published packages)
 
-The binary is buildable from **published packages only** (plan-2607-12) —
+The binary is buildable from **published packages only** —
 all public on npmjs under the `@forestrie` scope, MIT licensed per-package,
 installable without auth:
 

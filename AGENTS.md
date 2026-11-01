@@ -24,8 +24,8 @@ split**, enforced by layout:
   `out.print`/`warn`/`log` = stderr by verbosity). No raw `console.*` in
   `src/main/`.
 - Dependencies are **published `@forestrie/*` packages only** — no
-  workspace/repo-internal deps, no copied package code (plan-2607-12).
-- Implementing a subcommand (FOR-340..347): replace its `src/main/<cmd>.ts`
+  workspace/repo-internal deps, no copied package code.
+- Implementing a subcommand: replace its `src/main/<cmd>.ts`
   stub, extend its `src/options/<cmd>.ts` as needed, keep the
   `not_implemented` JSON contract out of the way, and land it as its own PR.
 - One command per file; keep each PR to one subcommand.

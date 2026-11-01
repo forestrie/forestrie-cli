@@ -2,4 +2,3 @@ schema_ref = "v1.0.0"
 namespace = "forestrie-cli"
 root = "."
 types = ["adr", "arc", "named-doc", "rules"]
-baseline = ".dox-baseline.json"
