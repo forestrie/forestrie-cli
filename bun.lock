@@ -7,12 +7,12 @@
       "dependencies": {
         "@forestrie/chain-rpc": "^0.3.0",
         "@forestrie/cli-kit": "^0.1.1",
-        "@forestrie/delegation-cose": "0.4.0",
+        "@forestrie/delegation-cose": "0.5.0",
         "@forestrie/deploy-core": "^0.7.1",
         "@forestrie/encoding": "^0.10.0",
         "@forestrie/grant-builder": "^0.5.0",
         "@forestrie/merklelog": "^0.5.0",
-        "@forestrie/receipt-verify": "3.2.0",
+        "@forestrie/receipt-verify": "3.3.0",
         "@forestrie/scrapi-client": "^0.2.2",
         "citty": "^0.2.2",
         "viem": "^2.31.0",
@@ -30,7 +30,7 @@
 
     "@forestrie/cli-kit": ["@forestrie/cli-kit@0.1.1", "", { "dependencies": { "citty": "^0.2.2" } }, "sha512-jjUV90cFKxWjJt/jMZHX8m8cgD8x05NxpOUI0VzmgB4R1E+87msr/ZwFeBGv6YTac/hdgJzQnsUt+skVrJ195Q=="],
 
-    "@forestrie/delegation-cose": ["@forestrie/delegation-cose@0.4.0", "", { "dependencies": { "@forestrie/encoding": "0.9.1", "@noble/curves": "^1.9.7", "@noble/hashes": "^1.7.1" } }, "sha512-Gq3NFzNzJ/tFxHnakSBM5tfikXpAPiOTiN0rWNOzZtsl1UZUvcwHV+eM6NFdC+xa1uCVDaDcC/fQe3Aj6GiL4w=="],
+    "@forestrie/delegation-cose": ["@forestrie/delegation-cose@0.5.0", "", { "dependencies": { "@forestrie/encoding": "0.10.0", "@noble/curves": "^1.9.7", "@noble/hashes": "^1.7.1" } }, "sha512-YPG2A47w4rgbvyiNmvfNXYH9NbD7eWEta0rpl3jS6+CIQs46Mqrc7CSA8SLhhx1GnV37H+uQvsYFeDSdimTNMQ=="],
 
     "@forestrie/deploy-core": ["@forestrie/deploy-core@0.7.1", "", { "dependencies": { "viem": "^2.31.0" } }, "sha512-a6PAaij1iBe9O+67S0f9E3HZ1lXNBJWngEyr/twYPMgsGlaTu9S7J9cwOCIC5Nm7y1LVnFkW9Uja+T3De+A7MQ=="],
 
@@ -40,7 +40,7 @@
 
     "@forestrie/merklelog": ["@forestrie/merklelog@0.5.0", "", {}, "sha512-oV5geJutday8LDPRUuVQYsE+C8VE4O5anhx0s1QI8cOmJDlZzdTaQTa7gEBQ6zu0EIU1gK04sZrGQd58w8Yw7g=="],
 
-    "@forestrie/receipt-verify": ["@forestrie/receipt-verify@3.2.0", "", { "dependencies": { "@forestrie/chain-rpc": "0.3.0", "@forestrie/delegation-cose": "0.4.0", "@forestrie/encoding": "0.9.1", "@forestrie/merklelog": "0.5.0", "@noble/hashes": "^1.7.1" } }, "sha512-Om31tOZ+zchfPGENjX08O0ZSx9DOcCZjJvQR/q8pBsmUfavvzUTDVbZwEYoNWtO3Op5JzE5pU/VoJ5Go9roNdA=="],
+    "@forestrie/receipt-verify": ["@forestrie/receipt-verify@3.3.0", "", { "dependencies": { "@forestrie/chain-rpc": "0.3.0", "@forestrie/delegation-cose": "0.5.0", "@forestrie/encoding": "0.10.0", "@forestrie/merklelog": "0.6.0", "@noble/hashes": "^1.7.1" } }, "sha512-hj4e/8CfmfKGBbubcIRmIVIcz78HemiEgtpRdXT2+VDBQKqgrV1qwL4/OWRH7Hl8qx8qqzPFzZ3+zbIs43lUGg=="],
 
     "@forestrie/scrapi-client": ["@forestrie/scrapi-client@0.2.2", "", { "dependencies": { "@forestrie/encoding": "0.7.0" } }, "sha512-0SdvXWiC94P+vsOFN101WpXrY1KA8BSBy7A45dTNK1i/U+Gz0mYCJRbfduc5W/UeD32P59mKLeBX61iB5XEOgg=="],
 
@@ -80,11 +80,9 @@
 
     "ws": ["ws@8.21.0", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g=="],
 
-    "@forestrie/delegation-cose/@forestrie/encoding": ["@forestrie/encoding@0.9.1", "", { "dependencies": { "@noble/curves": "^1.8.1" } }, "sha512-hvZQDSM2xDTiSMwznyeK15gf9+Sqt5I5V8WojBwchku1KWcznLb4uN2rk7CXv9W3rXzAYfY7+xl4RGXfSvWHPQ=="],
-
     "@forestrie/grant-builder/@forestrie/encoding": ["@forestrie/encoding@0.8.0", "", { "dependencies": { "@noble/curves": "^1.8.1" } }, "sha512-2UquoDJj0CcCMA4dN2CQabMqWbU3/hyTnQqEKGvrG1jZJqOiJ78owq9LkcmLLWtQQ68q/oC72dxnp0EhwSSfew=="],
 
-    "@forestrie/receipt-verify/@forestrie/encoding": ["@forestrie/encoding@0.9.1", "", { "dependencies": { "@noble/curves": "^1.8.1" } }, "sha512-hvZQDSM2xDTiSMwznyeK15gf9+Sqt5I5V8WojBwchku1KWcznLb4uN2rk7CXv9W3rXzAYfY7+xl4RGXfSvWHPQ=="],
+    "@forestrie/receipt-verify/@forestrie/merklelog": ["@forestrie/merklelog@0.6.0", "", {}, "sha512-evgeqgiCEFNFN4rre9RQPV9gPJ9tPIOsVpVoUKlsMPStHntTp5BYD+18nRU+Vntva5nYvBq2zgEdK85/W7K0YA=="],
 
     "@forestrie/scrapi-client/@forestrie/encoding": ["@forestrie/encoding@0.7.0", "", { "dependencies": { "@noble/curves": "^1.8.1" } }, "sha512-3Q8s678bQa8J0RBv92jAjwQE0OTqV9vP8YxASoCB9LQt7VKQ1pxl6h0SvUlggY3RMEvBBLNBcXduh7Szx5r2DA=="],
 

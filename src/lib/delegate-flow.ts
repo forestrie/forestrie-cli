@@ -8,7 +8,7 @@
  *
  *   1. Import the ES256 root PEM (K(L)) as a WebCrypto CryptoKeyPair.
  *   2. GET the coordinator's pending-delegation entries (range bounds are
- *      canonical decimal strings, plan-2611-01 D1); find the STANDING
+ *      canonical decimal strings, FOR-613); find the STANDING
  *      delegate-key entry (has `suggestedTtlSeconds`, no `mmrStart`).
  *   3. Verify the registrar voucher against the caller-known registrar key
  *      (mandatory — fail closed), including its expiry (claim 4).
@@ -24,8 +24,11 @@
 import { createPrivateKey, createPublicKey } from "node:crypto";
 import {
   buildDelegationCertificateEs256,
+  DecimalUint64Error,
   decodeDelegatedCoseKeyFromBytes,
+  formatDecimalUint64,
   parseDelegatedCoseKeyFromPayload,
+  parseDecimalUint64,
   parseDelegationCertificate,
   signOnchainDelegationEs256,
   type DelegationInput,
@@ -35,7 +38,6 @@ import {
   uuidToBytes,
   verifyDelegateKeyVoucher,
 } from "@forestrie/encoding";
-import { formatDecimalUint64, parseDecimalUint64 } from "./decimal-uint64.js";
 
 import { responseProblemDetail } from "./http-problem.js";
 
@@ -96,7 +98,7 @@ function bytesToB64(bytes: Uint8Array): string {
  * A coordinator pending-delegation entry. The STANDING delegate-key entry
  * (registered by C1/C3) carries `suggestedTtlSeconds` and no `mmrStart`; lease
  * entries carry `mmrStart` / `mmrEnd` as canonical decimal uint64 strings
- * (plan-2611-01 D1). {@link runDelegateFlow} rejects any other range shape.
+ * (FOR-613). {@link runDelegateFlow} rejects any other range shape.
  */
 export type StandingDelegationEntry = {
   /** base64 CBOR EC2 P-256 COSE_Key for the delegated checkpoint signer. */
@@ -202,9 +204,9 @@ async function importEs256PemKeyPair(pem: string): Promise<CryptoKeyPair> {
 
 /**
  * Validate the range bounds of every coordinator entry: a present `mmrStart`
- * or `mmrEnd` must be a canonical decimal uint64 string (D1, hard cutover).
- * A JSON number or malformed string fails the flow rather than being read as
- * absent — absence is what marks the standing entry.
+ * or `mmrEnd` must be a canonical decimal uint64 string (FOR-613, hard
+ * cutover). A JSON number or malformed string fails the flow rather than
+ * being read as absent — absence is what marks the standing entry.
  */
 function checkEntryRanges(entries: readonly unknown[]): void {
   entries.forEach((entry, i) => {
@@ -217,9 +219,15 @@ function checkEntryRanges(entries: readonly unknown[]): void {
     for (const field of ["mmrStart", "mmrEnd"] as const) {
       if (record[field] === undefined) continue;
       try {
-        parseDecimalUint64(record[field], `pending-delegation entry ${i} ${field}`);
+        parseDecimalUint64(
+          record[field],
+          `pending-delegation entry ${i} ${field}`,
+        );
       } catch (err) {
-        throw new DelegateFlowError((err as Error).message);
+        if (err instanceof DecimalUint64Error) {
+          throw new DelegateFlowError(err.message);
+        }
+        throw err;
       }
     }
   });

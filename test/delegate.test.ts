@@ -137,7 +137,7 @@ type Captured = { url: string; init?: RequestInit | undefined };
 
 /**
  * A lease entry exactly as the coordinator's `GET /pending-delegation`
- * returns it: range bounds are canonical decimal strings (plan-2611-01 D1).
+ * returns it: range bounds are canonical decimal strings (FOR-613).
  */
 const LEASE_ENTRY = {
   id: "lease-1",
@@ -224,7 +224,7 @@ describe("runDelegateFlow", () => {
     );
     const body = JSON.parse(String(post.init?.body)) as Record<string, unknown>;
     expect(body["logId"]).toBe(LOG_ID);
-    // Range bounds travel as canonical decimal strings (plan-2611-01 D1).
+    // Range bounds travel as canonical decimal strings (FOR-613).
     expect(body["mmrStart"]).toBe("0");
     expect(body["mmrEnd"]).toBe("1000");
     expect(body["delegatedPublicKey"]).toBe(DELEGATED_KEY_B64);
@@ -516,7 +516,7 @@ describe("runDelegate (main)", () => {
     expect(report["command"]).toBe("delegate");
     expect(report["status"]).toBe("submitted");
     expect(report["sealerId"]).toBe(SEALER_ID);
-    // Range bounds are decimal strings in --json output (plan-2611-01 D1).
+    // Range bounds are decimal strings in --json output (FOR-613).
     expect(report["mmrStart"]).toBe("0");
     expect(report["mmrEnd"]).toBe("1000");
     expect(report["outB64"]).toBe(outPath);

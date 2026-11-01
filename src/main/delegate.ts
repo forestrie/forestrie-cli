@@ -1,4 +1,5 @@
 import type { Out } from "@forestrie/cli-kit/reporting";
+import { formatDecimalUint64 } from "@forestrie/delegation-cose";
 import { readTextFile, writeOutputFile } from "../lib/fsio.js";
 import type { DelegateOptions } from "../options/delegate.js";
 import {
@@ -7,7 +8,6 @@ import {
   type DelegateFlowDeps,
   type DelegateFlowResult,
 } from "../lib/delegate-flow.js";
-import { formatDecimalUint64 } from "../lib/decimal-uint64.js";
 
 /**
  * FOR-390 / ADR-0052: authorize a custodian-vouched sealer to publish
@@ -24,9 +24,9 @@ export type DelegateReport = {
   logId: string;
   sealerId: string;
   epoch: number | string;
-  /** Range start, canonical decimal uint64 string (plan-2611-01 D1). */
+  /** Range start, canonical decimal uint64 string (FOR-613). */
   mmrStart: string;
-  /** Range end, canonical decimal uint64 string (plan-2611-01 D1). */
+  /** Range end, canonical decimal uint64 string (FOR-613). */
   mmrEnd: string;
   expiresAt: number;
   /** Present when `--out-b64` was given. */
