@@ -634,11 +634,11 @@ describe("runRegisterGrantFlow", () => {
   });
 
   /** canopy's 503 for a refusal it expects to clear: before sequencing. */
-  function unavailable(retryAfter?: string): Response {
+  function unavailable(retryAfter?: string, type = "about:blank"): Response {
     return new Response(
       // As canopy-api encodes it: deterministic CBOR.
       encodeCborDeterministic({
-        type: "about:blank",
+        type,
         title: "Service Unavailable",
         status: 503,
         detail: "Log authority is unavailable: rpc down",
@@ -676,6 +676,23 @@ describe("runRegisterGrantFlow", () => {
       waitMs: 5_000,
       detail: "Log authority is unavailable: rpc down",
     });
+  });
+
+  test("a conflict is final whatever its status: a 503 authority-conflict is not retried", async () => {
+    let posts = 0;
+    const err = await runRegisterGrantFlow(flowParams, {
+      fetchImpl: fakeFetch(({ method }) => {
+        if (method !== "POST") return undefined;
+        posts++;
+        return unavailable("5", "authority-conflict");
+      }),
+      ...fakeClock(),
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(posts).toBe(1);
+    expect((err as RegisterFlowError).stage).toBe("register");
   });
 
   test("503 without Retry-After is not retried", async () => {

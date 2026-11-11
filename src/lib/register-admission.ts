@@ -27,6 +27,9 @@ import { RegisterFlowError } from "./register-flow-error.js";
 /** canopy's problem type for a claimed log the chain has not anchored. */
 export const PROBLEM_AUTHORITY_PENDING = "authority-pending";
 
+/** canopy's problem type for a log the chain recorded otherwise: final. */
+export const PROBLEM_AUTHORITY_CONFLICT = "authority-conflict";
+
 /** What a pending refusal says the caller is waiting for. */
 export type AuthorityPending = {
   /** The log whose authority is pending. */
@@ -138,6 +141,8 @@ function retryableRefusal(
       progress: (attempt: number, waitMs: number) => AdmissionRetryProgress;
     }
   | undefined {
+  // A conflict is final whatever status carries it.
+  if (problem?.type === PROBLEM_AUTHORITY_CONFLICT) return undefined;
   if (raw.status === 409 && problem?.type === PROBLEM_AUTHORITY_PENDING) {
     const pending = authorityPending(raw, problem);
     return {
