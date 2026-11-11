@@ -215,6 +215,27 @@ describe("waitAnchored (child log)", () => {
     expect(result.timedOut).toBe(true);
   });
 
+  test("a round that never finishes ends one grace period past --timeout", async () => {
+    const never = () => new Promise<never>(() => {});
+    const started = Date.now();
+    const result = await waitAnchored(
+      await childAnchorTarget(fx.completedGrantB64),
+      {
+        ...fakeChain({ states: [] }),
+        logConfig: never,
+        logState: never,
+        publishedSteps: never,
+      },
+      // The real clock: this is about wall-clock time.
+      { timeoutMs: 30, intervalMs: 10, roundGraceMs: 30 },
+    );
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(result).toMatchObject({ rounds: 1, timedOut: true });
+    expect(result.answer.status).toBe("pending");
+    expect(result.answer.reason).toBe("chain_unavailable");
+    expect(result.answer.detail).toContain("the round did not finish");
+  });
+
   test("a failed refresh leaves the round to the receipts already held", async () => {
     const clock = fakeClock();
     const chain = fakeChain({ states: [{ accumulator: [fx.peak], size: 3n }] });

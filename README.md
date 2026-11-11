@@ -232,8 +232,9 @@ reaches, byte for byte, in the owner's current on-chain accumulator, then
 in the accumulator of each checkpoint the owner has published. It reads
 the contract's views and the owner's `publishCheckpoint` calldata, and
 trusts no key. Each round reads the chain again (`--interval`, default
-10 s) until `--timeout` (default 600 s); each request in a round gives up
-after 15 s, so a server that never answers cannot stall the wait.
+10 s) until `--timeout` (default 600 s). Each request gives up after
+15 s, and a round runs at most 15 s past `--timeout`, so a server that
+never answers cannot stall the wait.
 
 The receipt in the grant proves against the seal current when the grant
 was sequenced, and a re-seal replaces that seal, so it may never reach

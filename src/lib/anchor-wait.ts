@@ -39,6 +39,7 @@ import {
   grantCommitmentHashFromGrant,
 } from "@forestrie/receipt-verify";
 import { bytesEqual } from "./bytes.js";
+import { REQUEST_TIMEOUT_MS } from "./timed-fetch.js";
 import {
   classifyUnanchoredPeak,
   receiptLeafIndex,
@@ -228,6 +229,11 @@ export async function waitAnchored(
     sleep?: (ms: number) => Promise<void>;
     onRound?: (answer: AnchorAnswer, round: number) => void;
     refreshReceipt?: () => Promise<Uint8Array>;
+    /**
+     * How far past the deadline a round may run, real milliseconds
+     * (default {@link REQUEST_TIMEOUT_MS}, one request cap).
+     */
+    roundGraceMs?: number;
   },
 ): Promise<AnchorWaitResult> {
   const now = opts.now ?? Date.now;
@@ -236,7 +242,8 @@ export async function waitAnchored(
     ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const deadline = now() + opts.timeoutMs;
   const refreshed: Uint8Array[] = [];
-  for (let round = 1; ; round++) {
+  const graceMs = opts.roundGraceMs ?? REQUEST_TIMEOUT_MS;
+  const runRound = async (): Promise<AnchorAnswer> => {
     let note: string | undefined;
     if (target.kind === "child" && opts.refreshReceipt !== undefined) {
       note = await refreshPeak(target, opts.refreshReceipt, refreshed);
@@ -259,6 +266,20 @@ export async function waitAnchored(
     if (answer.status === "pending" && note !== undefined) {
       answer = { ...answer, detail: `${answer.detail}; ${note}` };
     }
+    return answer;
+  };
+  for (let round = 1; ; round++) {
+    // Each request is capped, but a round makes several in sequence; the
+    // round as a whole may run at most one grace period past the deadline.
+    const answer = await withinMs<AnchorAnswer>(
+      runRound(),
+      Math.max(deadline - now(), 0) + graceMs,
+      {
+        status: "pending",
+        reason: "chain_unavailable",
+        detail: "the round did not finish before the deadline",
+      },
+    );
     opts.onRound?.(answer, round);
     if (answer.status !== "pending") {
       return { answer, rounds: round, timedOut: false };
@@ -267,6 +288,21 @@ export async function waitAnchored(
       return { answer, rounds: round, timedOut: true };
     }
     await sleep(opts.intervalMs);
+  }
+}
+
+/** `work`, or `fallback` if it has not settled within `ms` real milliseconds. */
+async function withinMs<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
