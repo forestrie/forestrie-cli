@@ -19,9 +19,14 @@ import {
   RegisterGrantBuildError,
   buildCreateLogGrant,
 } from "../src/lib/create-log-build.js";
+import { decodeForestrieGrantCose } from "@forestrie/receipt-verify";
+import type { AnchorChain } from "../src/lib/anchor-wait.js";
+import type { OnChainLogState } from "../src/lib/verify-anchored.js";
 import { es256PublicKeyXyFromPem } from "../src/lib/register-grant-build.js";
 import { runCreateLog } from "../src/main/create-log.js";
 import type { CreateLogOptions } from "../src/options/create-log.js";
+import { receiptForLeaf } from "./anchor-wait-fixture.js";
+import { buildGenesisCbor } from "./verify-fixture.js";
 
 // --- fixed key material --------------------------------------------------
 
@@ -392,5 +397,222 @@ describe("runCreateLog (main)", () => {
     ) as Record<string, unknown>;
     expect(report["error"]).toBe("grant_build_failed");
     expect(String(report["message"])).toContain("--new-log");
+  });
+});
+
+describe("runCreateLog --wait-anchored", () => {
+  const options: CreateLogOptions = {
+    json: true,
+    verbosity: 0,
+    baseUrl: BASE,
+    ownerLog: OWNER_LOG,
+    newLog: NEW_LOG,
+    authLog: false,
+    childPaymentRequired: false,
+    selfReferential: false,
+    signerPem: SIGNER_PEM_PATH,
+    signWith: OWNER_PEM_PATH,
+    prepare: false,
+    parentGrantB64: PARENT_B64,
+    outB64: undefined,
+    bootstrapLog: BOOT_LOG,
+    timeoutMs: 5_000,
+    pollIntervalMs: 100,
+    anchorWait: {
+      genesis: undefined,
+      univocity: "0x" + "ab".repeat(20),
+      rpcUrl: "https://rpc.example",
+      timeoutMs: 30_000,
+      intervalMs: 10_000,
+    },
+  };
+
+  /**
+   * canopy, sequencing whatever create grant it is sent as leaf 1 of the
+   * owner's MMR: the receipt it serves really includes that grant, and
+   * `peaks` resolves to the owner's peak once it has.
+   */
+  function sequencingCanopy(opts: { resealedAt7?: boolean } = {}) {
+    let resolvePeak: (p: Uint8Array) => void;
+    const peak = new Promise<Uint8Array>((r) => (resolvePeak = r));
+    let receipt: Promise<Uint8Array> | undefined;
+    let receipt7: Uint8Array | undefined;
+    let peak7: Uint8Array | undefined;
+    let posts = 0;
+    let receiptGets = 0;
+    const fetchImpl = (async (
+      input: Parameters<typeof fetch>[0],
+      init?: RequestInit,
+    ) => {
+      const url = new URL(String(input));
+      if (init?.method === "POST" && url.pathname === `/register/${BOOT_LOG}/grants`) {
+        posts++;
+        const auth = new Headers(init.headers).get("Authorization") ?? "";
+        const { grant } = decodeForestrieGrantCose(
+          base64ToBytes(auth.replace(/^Forestrie-Grant /, "")),
+        );
+        receipt = receiptForLeaf(
+          grant,
+          Buffer.from(ENTRY_ID.slice(0, 16), "hex"),
+        ).then((leaf) => {
+          receipt7 = leaf.receiptCbor7;
+          peak7 = leaf.peak7;
+          resolvePeak(leaf.peak);
+          return leaf.receiptCbor;
+        });
+        return see(STATUS_PATH);
+      }
+      if (url.pathname === STATUS_PATH) return see(RECEIPT_PATH);
+      if (url.pathname === RECEIPT_PATH && receipt !== undefined) {
+        const first = await receipt;
+        // The first GET is the register flow's; later ones are refreshes.
+        const body = opts.resealedAt7 && receiptGets++ > 0 ? receipt7! : first;
+        return new Response(body, { status: 200 });
+      }
+      throw new Error(`fake canopy: unexpected ${init?.method ?? "GET"} ${url}`);
+    }) as typeof fetch;
+    return { fetchImpl, peak, peak7: () => peak7!, posts: () => posts };
+  }
+
+  /** The owner's on-chain state, round by round (the last repeats). */
+  function ownerChain(
+    states: (peak: Uint8Array) => OnChainLogState[],
+    peak: Promise<Uint8Array>,
+    chainId = 84532n,
+  ): AnchorChain {
+    let reads = 0;
+    return {
+      async logState() {
+        const all = states(await peak);
+        return all[Math.min(reads++, all.length - 1)]!;
+      },
+      async publishedSteps() {
+        return [];
+      },
+      async hasCode() {
+        return true;
+      },
+      async bootstrapConfig() {
+        throw new Error("not a root");
+      },
+      async rootLogId() {
+        throw new Error("not a root");
+      },
+      async chainId() {
+        return chainId;
+      },
+    };
+  }
+
+  const reportOf = (out: ReturnType<typeof createCaptureOut>) =>
+    JSON.parse(
+      out.lines.filter((l) => l.stream === "stdout").map((l) => l.text).join("\n"),
+    ) as Record<string, unknown>;
+
+  test("returns once a published checkpoint of the owner covers the new log", async () => {
+    const canopy = sequencingCanopy();
+    const out = createCaptureOut();
+    process.exitCode = 0;
+    await runCreateLog(out, options, {
+      fetchImpl: canopy.fetchImpl,
+      anchorChain: ownerChain(
+        (peak) => [
+          { accumulator: [new Uint8Array(32)], size: 1n },
+          { accumulator: [peak], size: 3n },
+        ],
+        canopy.peak,
+      ),
+      ...fakeClock(),
+    });
+    expect(process.exitCode).toBe(0);
+    const report = reportOf(out);
+    expect(report["status"]).toBe("receipt");
+    expect(typeof report["grantB64"]).toBe("string");
+    expect(report["anchor"]).toEqual({
+      status: "anchored",
+      reason: "peak_in_current_state",
+      detail: expect.any(String),
+      logId: NEW_LOG,
+      ownerLogId: OWNER_LOG,
+      rounds: 2,
+      timedOut: false,
+    });
+  });
+
+  test("re-fetches the new log's receipt when the seal it came from never reached the chain", async () => {
+    // canopy re-sealed the owner at size 7 before its publisher ran: the
+    // receipt create-log got proves against size 3, which the chain skipped.
+    const canopy = sequencingCanopy({ resealedAt7: true });
+    const out = createCaptureOut();
+    process.exitCode = 0;
+    await runCreateLog(out, options, {
+      fetchImpl: canopy.fetchImpl,
+      anchorChain: ownerChain(
+        (_peak) => [{ accumulator: [canopy.peak7()], size: 7n }],
+        canopy.peak,
+      ),
+      ...fakeClock(),
+    });
+    expect(process.exitCode).toBe(0);
+    expect(reportOf(out)["anchor"]).toMatchObject({
+      status: "anchored",
+      reason: "peak_in_current_state",
+      rounds: 1,
+    });
+  });
+
+  test("exits non-zero on timeout, still emitting the completed grant", async () => {
+    const canopy = sequencingCanopy();
+    const out = createCaptureOut();
+    process.exitCode = 0;
+    await runCreateLog(
+      out,
+      { ...options, json: false },
+      {
+        fetchImpl: canopy.fetchImpl,
+        anchorChain: ownerChain(
+          () => [{ accumulator: [new Uint8Array(32)], size: 1n }],
+          canopy.peak,
+        ),
+        ...fakeClock(),
+      },
+    );
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+    const stdout = out.lines.filter((l) => l.stream === "stdout").map((l) => l.text);
+    // The completed grant is still the stdout product: the log exists.
+    expect(stdout).toHaveLength(1);
+    expect(decodeCoseSign1(base64ToBytes(stdout[0]!))).toBeDefined();
+    const stderr = out.lines.filter((l) => l.stream === "stderr").map((l) => l.text);
+    expect(stderr).toContain(
+      `forestrie create-log: log ${NEW_LOG} is not anchored after 30s (4 rounds)`,
+    );
+  });
+
+  test("a genesis bound to another chain is refused before the grant is registered", async () => {
+    const tmpGenesis = path.join(tmp, "genesis.cbor");
+    writeFileSync(tmpGenesis, buildGenesisCbor(new Uint8Array(64).fill(0x42)));
+    const canopy = sequencingCanopy();
+    const out = createCaptureOut();
+    process.exitCode = 0;
+    await runCreateLog(
+      out,
+      {
+        ...options,
+        anchorWait: { ...options.anchorWait!, genesis: tmpGenesis, univocity: undefined },
+      },
+      {
+        fetchImpl: canopy.fetchImpl,
+        anchorChain: ownerChain(() => [], canopy.peak, 1n),
+        ...fakeClock(),
+      },
+    );
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+    expect(canopy.posts()).toBe(0);
+    expect(reportOf(out)).toMatchObject({
+      error: "anchor_setup_failed",
+      command: "create-log",
+    });
   });
 });

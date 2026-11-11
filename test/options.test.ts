@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { parseCreateReceiptOptions } from "../src/options/create-receipt.js";
 import { parseDeployOptions } from "../src/options/deploy.js";
 import { parseCreateLogOptions } from "../src/options/create-log.js";
@@ -202,6 +202,75 @@ describe("parseCreateLogOptions", () => {
     expect(options.selfReferential).toBe(true);
     expect(options.signerPem).toBeUndefined();
     expect(options.parentGrantB64).toBeUndefined();
+  });
+
+  describe("--wait-anchored", () => {
+    const child = { ...base, "parent-grant-b64": "AAAA", "wait-anchored": true };
+    const saved = process.env["RPC_URL"];
+    beforeEach(() => {
+      delete process.env["RPC_URL"];
+    });
+    afterEach(() => {
+      if (saved === undefined) delete process.env["RPC_URL"];
+      else process.env["RPC_URL"] = saved;
+    });
+
+    test("is off unless asked, and the anchor flags alone do nothing", () => {
+      const options = parseCreateLogOptions({
+        ...base,
+        "parent-grant-b64": "AAAA",
+        "rpc-url": "https://rpc",
+      });
+      expect(options.anchorWait).toBeUndefined();
+    });
+
+    test("takes the contract and RPC URL, with the anchoring budget", () => {
+      const options = parseCreateLogOptions({
+        ...child,
+        univocity: "0xabc",
+        "rpc-url": "https://rpc",
+        "anchor-timeout": "120",
+      });
+      expect(options.anchorWait).toEqual({
+        genesis: undefined,
+        univocity: "0xabc",
+        rpcUrl: "https://rpc",
+        timeoutMs: 120_000,
+        intervalMs: 10_000,
+      });
+    });
+
+    test("needs an RPC URL and a contract (or the genesis naming one)", () => {
+      expect(() =>
+        parseCreateLogOptions({ ...child, univocity: "0xabc" }),
+      ).toThrow(/--rpc-url/);
+      expect(() =>
+        parseCreateLogOptions({ ...child, "rpc-url": "https://rpc" }),
+      ).toThrow(/--univocity or --genesis/);
+    });
+
+    test("a forest root waits on its genesis", () => {
+      expect(() =>
+        parseCreateLogOptions({
+          ...base,
+          "self-referential": true,
+          "wait-anchored": true,
+          univocity: "0xabc",
+          "rpc-url": "https://rpc",
+        }),
+      ).toThrow(/--self-referential --wait-anchored needs --genesis/);
+    });
+
+    test("--prepare sequences nothing, so there is nothing to wait for", () => {
+      expect(() =>
+        parseCreateLogOptions({
+          ...child,
+          prepare: true,
+          univocity: "0xabc",
+          "rpc-url": "https://rpc",
+        }),
+      ).toThrow(/--prepare/);
+    });
   });
 });
 

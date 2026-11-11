@@ -40,6 +40,16 @@ or verify COSE artefacts.
   (`GF_EXTEND`, no `GF_CREATE`) names a party who may only append statements —
   never create or re-root. Different noun (owner vs. writer) ⇒ different verb
   (`create-log` vs. `register-grant`).
+- **Anchored / pending / conflicted** — a log's root key authorises writes
+  only once the chain has fixed it. A child log is **anchored** once a
+  checkpoint its owner published on chain includes its create grant. A forest
+  root is anchored once its contract is deployed, holds the genesis bootstrap
+  key, and is rooted at no other log (`rootLogId()` unset or this root). Until
+  then the log is **pending**: canopy answers 409 `authority-pending`, and
+  `register` / `register-grant` retry. A root whose contract holds another key
+  or another root log is **conflicted**, and that is final (409
+  `authority-conflict`). `forestrie log wait-anchored` proves which, from public
+  chain data; canopy has no endpoint for it.
 - **Delegation-in-advance (standing key)** — the custodian derives a standing
   sealer key and vouches for it (COSE voucher signed by the registrar voucher
   key). The coordinator advertises it at
