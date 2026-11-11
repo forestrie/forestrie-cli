@@ -345,6 +345,41 @@ describe("runRegisterFlow", () => {
   }, 5_000);
 });
 
+describe("runRegisterFlow — admission at the deadline", () => {
+  test("a statement admitted by the last attempt still gets its receipt", async () => {
+    // Each request takes 1 ms, so the second 30 s wait no longer fits the
+    // 60 s budget: it is cut short, the last attempt lands on the
+    // deadline, and admission restarts the budget for the receipt.
+    let t = 0;
+    const waits: number[] = [];
+    let posts = 0;
+    const result = await runRegisterFlow(
+      { ...flowParams, timeoutMs: 60_000 },
+      {
+        fetchImpl: fakeFetch(({ method, url }) => {
+          t += 1;
+          if (method === "POST") {
+            return ++posts < 3 ? authorityPending() : see(STATUS_PATH);
+          }
+          if (url.pathname === STATUS_PATH) return see(RECEIPT_PATH);
+          if (url.pathname === RECEIPT_PATH) {
+            return new Response(RECEIPT, { status: 200 });
+          }
+          return undefined;
+        }),
+        now: () => t,
+        sleep: async (ms: number) => {
+          waits.push(ms);
+          t += ms;
+        },
+      },
+    );
+    expect(posts).toBe(3);
+    expect(waits).toEqual([30_000, 29_998]);
+    expect(result.receipt).toEqual(RECEIPT);
+  });
+});
+
 describe("runRegisterFlow — hung server (real fetch, real clock)", () => {
   test("F4: --timeout bounds wall-clock even when the server never answers", async () => {
     // Deliberately hanging server: accepts the connection, never responds.

@@ -79,8 +79,14 @@ export async function postUntilAdmitted(opts: {
       return registerStatusUrl(raw, problem, opts.baseUrl);
     }
     const pending = authorityPending(raw, problem);
-    const waitMs = Math.max(opts.pollIntervalMs, pending.retryAfterMs ?? 0);
-    if (opts.now() + waitMs > opts.deadline) {
+    // Pace by Retry-After, but never past the deadline: the last wait is
+    // cut short so that a final attempt lands on it.
+    const remaining = opts.deadline - opts.now();
+    const waitMs = Math.min(
+      Math.max(opts.pollIntervalMs, pending.retryAfterMs ?? 0),
+      remaining,
+    );
+    if (remaining <= 0) {
       const detail = describeAuthorityPending(pending);
       throw new RegisterFlowError(
         `timed out after ${opts.timeoutMs}ms: ${detail}`,

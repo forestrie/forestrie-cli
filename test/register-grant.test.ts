@@ -543,8 +543,77 @@ describe("runRegisterGrantFlow", () => {
       `log ${OWNER_LOG} is not anchored on chain yet (state committed, blocked by ${BOOT_LOG})`,
     );
     expect(flowErr.problem?.type).toBe("authority-pending");
-    // One 30 s wait fits the 45 s budget; the second would pass it.
-    expect(clock.waits).toEqual([30_000]);
+    // A 30 s wait, then the 15 s left, then a last attempt at the deadline.
+    expect(clock.waits).toEqual([30_000, 15_000]);
+  });
+
+  /**
+   * A clock on which each request takes 1 ms, as real ones take some time:
+   * a wait that exactly fills the budget no longer fits after a request.
+   */
+  function driftingClock() {
+    let t = 0;
+    const waits: number[] = [];
+    return {
+      now: () => t,
+      sleep: async (ms: number) => {
+        waits.push(ms);
+        t += ms;
+      },
+      tick: () => {
+        t += 1;
+      },
+      waits,
+    };
+  }
+
+  test("a pending log gets a last attempt at the deadline, not half the budget", async () => {
+    const clock = driftingClock();
+    let posts = 0;
+    const err = await runRegisterGrantFlow(
+      { ...flowParams, timeoutMs: 60_000 },
+      {
+        fetchImpl: fakeFetch(({ method }) => {
+          if (method !== "POST") return undefined;
+          clock.tick();
+          posts++;
+          return authorityPending();
+        }),
+        now: clock.now,
+        sleep: clock.sleep,
+      },
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect((err as RegisterFlowError).stage).toBe("timeout");
+    expect(posts).toBe(3);
+    expect(clock.waits).toEqual([30_000, 29_998]);
+  });
+
+  test("a grant admitted at the deadline still gets its receipt: admission restarts the budget", async () => {
+    const clock = driftingClock();
+    let posts = 0;
+    const result = await runRegisterGrantFlow(
+      { ...flowParams, timeoutMs: 60_000 },
+      {
+        fetchImpl: fakeFetch(({ method, url }) => {
+          clock.tick();
+          if (method === "POST") {
+            return ++posts < 3 ? authorityPending() : see(STATUS_PATH);
+          }
+          if (url.pathname === STATUS_PATH) return see(RECEIPT_PATH);
+          if (url.pathname === RECEIPT_PATH) {
+            return new Response(RECEIPT, { status: 200 });
+          }
+          return undefined;
+        }),
+        now: clock.now,
+        sleep: clock.sleep,
+      },
+    );
+    expect(posts).toBe(3);
+    expect(result.receipt).toEqual(RECEIPT);
   });
 
   test("409 authority-conflict is final: not retried, its CBOR problem decoded", async () => {
