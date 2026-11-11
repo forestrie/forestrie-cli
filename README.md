@@ -248,9 +248,14 @@ chain's record decides instead: the owner and root key it recorded must
 be the grant's. It exits 0 once anchored. It exits non-zero at once when
 the log can never anchor: a child the contract recorded under another
 owner or key, or a forest root whose contract holds another bootstrap
-key or is rooted at another log, is conflicted. A conflicted ancestor of
-the owner is not detected here; canopy refuses writes under one. It also exits non-zero on
-timeout, printing the last answer. With `--genesis` the contract
+key or is rooted at another log, is conflicted. It also exits non-zero
+on timeout, printing the last answer.
+
+It checks the log's own record only. Whether the owner log, or any log
+above it, is itself conflicted needs that log's own create grant, which
+the child's grant does not carry, so `anchored` does not rule it out.
+canopy refuses writes under such a log with 409 `authority-conflict`,
+naming it in `blockedBy`. With `--genesis` the contract
 defaults to the genesis's, and both it and the RPC's chain must be the
 genesis forest's. `--json` reports `status`, `reason`, `detail`,
 `logId`, `ownerLogId`, `rounds` and `timedOut`.

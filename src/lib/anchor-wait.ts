@@ -12,8 +12,9 @@
  * chain's record decides instead, as univocity's authority answer does
  * (forestrie/arbor `services/univocity/src/authority.go`): the owner and
  * root key it recorded are the grant's, or the child is conflicted for good
- * (protocol ADR-0070 decision 6). A conflicted ancestor of the owner is not
- * visible here: that needs the ancestor's own claim.
+ * (protocol ADR-0070 decision 6). Only the log's own record is checked: a
+ * conflicted owner, or any log above it, is not visible here, since that
+ * needs the owner's own claim, which the child's grant does not carry.
  *
  * The receipt is only the path. The one in the grant proves against the
  * seal current when the grant was sequenced, and a re-seal replaces that

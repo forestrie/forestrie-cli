@@ -49,8 +49,10 @@ or verify COSE artefacts.
   `register` / `register-grant` retry. A log whose on-chain record differs from
   its claim is **conflicted**, and that is final (409 `authority-conflict`): a
   child the contract initialized under another owner or key, or a root whose
-  contract holds another key or another root log. `forestrie log wait-anchored` proves which, from public
-  chain data; canopy has no endpoint for it.
+  contract holds another key or another root log. A log under a conflicted
+  ancestor is conflicted too. `forestrie log wait-anchored` proves which from
+  public chain data, for the log's own record only (an ancestor's conflict
+  needs that ancestor's claim); canopy has no endpoint for it.
 - **Delegation-in-advance (standing key)** — the custodian derives a standing
   sealer key and vouches for it (COSE voucher signed by the registrar voucher
   key). The coordinator advertises it at
