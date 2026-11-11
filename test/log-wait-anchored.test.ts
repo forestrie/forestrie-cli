@@ -232,7 +232,8 @@ describe("waitAnchored (child log)", () => {
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(result).toMatchObject({ rounds: 1, timedOut: true });
     expect(result.answer.status).toBe("pending");
-    expect(result.answer.reason).toBe("chain_unavailable");
+    // Named for what ran late, which may be canopy's receipt, not the chain.
+    expect(result.answer.reason).toBe("round_unfinished");
     expect(result.answer.detail).toContain("the round did not finish");
   });
 

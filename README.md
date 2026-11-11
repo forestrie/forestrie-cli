@@ -236,8 +236,10 @@ in the accumulator of each checkpoint the owner has published. It reads
 the contract's views and the owner's `publishCheckpoint` calldata, and
 trusts no key. Each round reads the chain again (`--interval`, default
 10 s) until `--timeout` (default 600 s). Each request gives up after
-15 s, and a round runs at most 15 s past `--timeout`, so a server that
-never answers cannot stall the wait.
+15 s, and the answer comes at most 15 s past `--timeout` (reason
+`round_unfinished` if a round was cut off), so a server that never
+answers cannot stall the wait. Requests that round had in flight still
+run out their own caps before the process exits.
 
 The receipt in the grant proves against the seal current when the grant
 was sequenced, and a re-seal replaces that seal, so it may never reach

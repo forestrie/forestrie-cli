@@ -276,8 +276,9 @@ export async function waitAnchored(
       Math.max(deadline - now(), 0) + graceMs,
       {
         status: "pending",
-        reason: "chain_unavailable",
-        detail: "the round did not finish before the deadline",
+        reason: "round_unfinished",
+        detail:
+          "the round did not finish before the deadline (receipt refresh and chain reads)",
       },
     );
     opts.onRound?.(answer, round);
