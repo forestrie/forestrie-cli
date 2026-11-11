@@ -14,6 +14,7 @@
  */
 import {
   encodeGrantPayload,
+  grantDataToBytes,
   uuidToBytes,
   type Grant,
 } from "@forestrie/encoding";
@@ -39,6 +40,8 @@ export const CHILD_LOG = "7a6b5c4d-0000-4000-8000-000000000002";
 export type ChildAnchorFixture = {
   /** Completed create grant (receipt and idtimestamp attached), base64. */
   completedGrantB64: string;
+  /** The child's root key the grant names (64 bytes, ES256 x||y). */
+  grantData: Uint8Array;
   receiptCbor: Uint8Array;
   idtimestampBe8: Uint8Array;
   /** The grant commitment hash: the leaf's inner value. */
@@ -79,7 +82,12 @@ export async function buildChildAnchorFixture(
     leaf.receiptCbor,
     entryIdHexFor(idtimestampBe8, leaf.leafMmrIndex),
   );
-  return { completedGrantB64, idtimestampBe8, ...leaf };
+  return {
+    completedGrantB64,
+    grantData: grantDataToBytes(grant.grantData),
+    idtimestampBe8,
+    ...leaf,
+  };
 }
 
 /**

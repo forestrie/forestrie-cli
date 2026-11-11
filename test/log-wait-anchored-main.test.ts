@@ -41,6 +41,9 @@ function chain(opts: {
     async bootstrapConfig() {
       return { alg: -7n, key: ROOT_KEY };
     },
+    async logConfig() {
+      return undefined;
+    },
     async rootLogId() {
       return opts.rootLogId;
     },

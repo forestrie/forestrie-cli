@@ -242,9 +242,13 @@ anchored. The fetched receipt is only a path: a wrong one reaches a peak
 the chain never committed to, so canopy can delay the answer but not
 fake it.
 
-It exits 0 once anchored. It exits non-zero at once when the log can
-never anchor: a forest root whose contract holds another bootstrap key,
-or is rooted at another log, is conflicted. It also exits non-zero on
+Once the contract has initialized a child (its first checkpoint), the
+chain's record decides instead: the owner and root key it recorded must
+be the grant's. It exits 0 once anchored. It exits non-zero at once when
+the log can never anchor: a child the contract recorded under another
+owner or key, or a forest root whose contract holds another bootstrap
+key or is rooted at another log, is conflicted. A conflicted ancestor of
+the owner is not detected here; canopy refuses writes under one. It also exits non-zero on
 timeout, printing the last answer. With `--genesis` the contract
 defaults to the genesis's, and both it and the RPC's chain must be the
 genesis forest's. `--json` reports `status`, `reason`, `detail`,

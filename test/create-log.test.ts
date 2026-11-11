@@ -495,6 +495,9 @@ describe("runCreateLog --wait-anchored", () => {
       async bootstrapConfig() {
         throw new Error("not a root");
       },
+      async logConfig() {
+        return undefined;
+      },
       async rootLogId() {
         throw new Error("not a root");
       },

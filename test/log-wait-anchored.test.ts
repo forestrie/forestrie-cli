@@ -8,6 +8,7 @@ import {
 } from "../src/lib/anchor-wait.js";
 import type { OnChainLogState } from "../src/lib/verify-anchored.js";
 import {
+  CHILD_LOG,
   OWNER_LOG,
   buildChildAnchorFixture,
   type ChildAnchorFixture,
@@ -35,9 +36,15 @@ function fakeClock() {
 function fakeChain(opts: {
   states: OnChainLogState[];
   steps?: PublishedStep[];
+  /** What the contract records for the child, once it is initialized. */
+  childConfig?: { ownerLogId: string; rootKey: Uint8Array };
 }): AnchorChain & { logStateReads: number } {
   const chain = {
     logStateReads: 0,
+    async logConfig(logId: string) {
+      if (logId !== CHILD_LOG) throw new Error(`unexpected log ${logId}`);
+      return opts.childConfig;
+    },
     async logState(logId: string): Promise<OnChainLogState> {
       if (logId !== OWNER_LOG) throw new Error(`unexpected log ${logId}`);
       const state =
@@ -73,6 +80,66 @@ beforeAll(async () => {
 const WAIT = { timeoutMs: 60_000, intervalMs: 5_000 };
 
 describe("waitAnchored (child log)", () => {
+  test("a child the contract initialized with its claimed owner and key is anchored, without the owner's state", async () => {
+    const clock = fakeClock();
+    const chain = fakeChain({
+      states: [{ accumulator: [], size: 0n }],
+      childConfig: { ownerLogId: OWNER_LOG, rootKey: fx.grantData },
+    });
+    const result = await waitAnchored(
+      await childAnchorTarget(fx.completedGrantB64),
+      chain,
+      { ...WAIT, ...clock },
+    );
+    expect(result.answer).toMatchObject({
+      status: "anchored",
+      reason: "log_initialized_as_claimed",
+    });
+    expect(chain.logStateReads).toBe(0);
+  });
+
+  test("a child the contract initialized under another owner is conflicted at once, even with its grant anchored", async () => {
+    // Another owner log named this child in a create grant of its own and
+    // reached the chain first. This grant is still in its owner's
+    // published state, but the chain records the other claim for good.
+    const clock = fakeClock();
+    const chain = fakeChain({
+      states: [{ accumulator: [fx.peak], size: 3n }],
+      childConfig: {
+        ownerLogId: "0badbeef-0000-4000-8000-000000000009",
+        rootKey: fx.grantData,
+      },
+    });
+    const result = await waitAnchored(
+      await childAnchorTarget(fx.completedGrantB64),
+      chain,
+      { ...WAIT, ...clock },
+    );
+    expect(result.answer).toMatchObject({
+      status: "conflicted",
+      reason: "log_initialized_elsewhere",
+    });
+    expect(result.answer.detail).toContain("0badbeef-0000-4000-8000-000000000009");
+    expect(result.rounds).toBe(1);
+    expect(clock.waits).toEqual([]);
+  });
+
+  test("a child the contract initialized with another key is conflicted", async () => {
+    const chain = fakeChain({
+      states: [{ accumulator: [fx.peak], size: 3n }],
+      childConfig: { ownerLogId: OWNER_LOG, rootKey: new Uint8Array(64).fill(0x01) },
+    });
+    const result = await waitAnchored(
+      await childAnchorTarget(fx.completedGrantB64),
+      chain,
+      { ...WAIT, ...fakeClock() },
+    );
+    expect(result.answer).toMatchObject({
+      status: "conflicted",
+      reason: "log_initialized_elsewhere",
+    });
+  });
+
   test("a receipt refreshed each round proves a log whose receipt's seal never reached the chain", async () => {
     // The grant's receipt is from a size-3 seal that the owner's publisher
     // coalesced away: the chain went from nothing straight to size 7, where
@@ -265,6 +332,9 @@ function fakeRootChain(opts: {
     },
     async bootstrapConfig() {
       return opts.bootstrap ?? { alg: -7n, key: ROOT_KEY };
+    },
+    async logConfig() {
+      return undefined;
     },
     async rootLogId() {
       return opts.rootLogId;

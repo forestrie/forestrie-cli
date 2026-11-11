@@ -6,7 +6,7 @@ export default defineForestrieCommand({
   meta: {
     name: "wait-anchored",
     description:
-      "Wait until a log is anchored, proven from public chain data alone: a child log once a checkpoint its owner published on chain covers its create grant, a forest root once its contract holds the genesis key and is rooted at no other log. Exits 0 once anchored; non-zero at once for a conflicted log, and on timeout, printing the last answer. No operator answer is trusted: with --receipt-url, canopy supplies only a receipt path, checked against the chain",
+      "Wait until a log is anchored, proven from public chain data alone: a child log once a checkpoint its owner published on chain covers its create grant, a forest root once its contract holds the genesis key and is rooted at no other log. A child the contract has initialized must be recorded with the grant's owner and key, or it is conflicted. Exits 0 once anchored; non-zero at once for a conflicted log, and on timeout, printing the last answer. No operator answer is trusted: with --receipt-url, canopy supplies only a receipt path, checked against the chain",
   },
   args: {
     "create-grant": {

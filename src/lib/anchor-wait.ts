@@ -8,6 +8,13 @@
  * No key and no operator answer is involved (P2): the contract checked the
  * checkpoint when it was published.
  *
+ * Once the contract has initialized the child (its first checkpoint), the
+ * chain's record decides instead, as univocity's authority answer does
+ * (forestrie/arbor `services/univocity/src/authority.go`): the owner and
+ * root key it recorded are the grant's, or the child is conflicted for good
+ * (protocol ADR-0070 decision 6). A conflicted ancestor of the owner is not
+ * visible here: that needs the ancestor's own claim.
+ *
  * The receipt is only the path. The one in the grant proves against the
  * seal current when the grant was sequenced, and a re-seal replaces that
  * seal (protocol `spec/checkpoints-and-receipts.md` §1.2), so it may never
@@ -18,7 +25,11 @@
  * grant's own leaf, so a wrong receipt can only fail to match.
  */
 import { base64ToBytes } from "@forestrie/grant-builder";
-import { coseUnprotectedToMap, decodeCborDeterministic } from "@forestrie/encoding";
+import {
+  coseUnprotectedToMap,
+  decodeCborDeterministic,
+  grantDataToBytes,
+} from "@forestrie/encoding";
 import {
   FOREST_GENESIS_LABEL_BOOTSTRAP_KEY,
   FOREST_GENESIS_LABEL_GENESIS_ALG,
@@ -46,6 +57,8 @@ export type ChildAnchorTarget = {
   ownerLogId: string;
   /** The grant's MMR index in the owner log. */
   leafMmrIndex: bigint;
+  /** The root key the grant names for the child (64 or 20 bytes). */
+  grantData: Uint8Array;
   /** The leaf, `SHA-256(idtimestamp ‖ grant commitment)`, in parts. */
   idtimestampBe8: Uint8Array;
   inner: Uint8Array;
@@ -83,6 +96,13 @@ export interface AnchorChain {
   logState(logId: string): Promise<OnChainLogState>;
   /** Every accumulator the log's published checkpoints committed to. */
   publishedSteps(logId: string): Promise<PublishedStep[]>;
+  /**
+   * The owner and root key the contract recorded for a log at its first
+   * checkpoint, or undefined while it is not initialized.
+   */
+  logConfig(
+    logId: string,
+  ): Promise<{ ownerLogId: string; rootKey: Uint8Array } | undefined>;
   hasCode(): Promise<boolean>;
   bootstrapConfig(): Promise<{ alg: bigint; key: Uint8Array }>;
   /** The contract's root log, or undefined before its first checkpoint. */
@@ -155,6 +175,7 @@ export async function childAnchorTarget(
     logId: uuidOf(grant.logId),
     ownerLogId: uuidOf(grant.ownerLogId),
     leafMmrIndex: receiptLeafIndex(receipt),
+    grantData: new Uint8Array(grantDataToBytes(grant.grantData)),
     ...leaf,
     peak,
   };
@@ -344,6 +365,8 @@ async function checkChildAnchored(
   chain: AnchorChain,
   peaks: Uint8Array[],
 ): Promise<AnchorAnswer> {
+  const config = await chain.logConfig(target.logId);
+  if (config !== undefined) return initializedAnswer(target, config);
   const { leafMmrIndex } = target;
   const held = (acc: Uint8Array[]) =>
     acc.some((p) => peaks.some((peak) => bytesEqual(p, peak)));
@@ -376,6 +399,35 @@ async function checkChildAnchored(
     status: "pending",
     reason,
     detail: `owner ${target.ownerLogId} has published up to size ${state.size}; the create grant is leaf ${leafMmrIndex}`,
+  };
+}
+
+/**
+ * A child the contract has initialized: final either way. Keys are opaque
+ * and compared byte for byte at the two lengths a root key can have, 64
+ * (ES256 x||y) or 20 (KS256 address), as univocity compares them.
+ */
+function initializedAnswer(
+  target: ChildAnchorTarget,
+  config: { ownerLogId: string; rootKey: Uint8Array },
+): AnchorAnswer {
+  const keyOk =
+    (target.grantData.length === 64 || target.grantData.length === 20) &&
+    bytesEqual(config.rootKey, target.grantData);
+  if (config.ownerLogId === target.ownerLogId && keyOk) {
+    return {
+      status: "anchored",
+      reason: "log_initialized_as_claimed",
+      detail: `the contract records log ${target.logId} under owner ${target.ownerLogId} with the grant's key`,
+    };
+  }
+  return {
+    status: "conflicted",
+    reason: "log_initialized_elsewhere",
+    detail:
+      config.ownerLogId !== target.ownerLogId
+        ? `the contract records log ${target.logId} under owner ${config.ownerLogId}, not ${target.ownerLogId}; start a new log`
+        : `the contract records log ${target.logId} with another root key than the grant's; start a new log`,
   };
 }
 

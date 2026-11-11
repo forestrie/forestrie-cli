@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { encodeAbiParameters } from "viem";
+import { encodeAbiParameters, toFunctionSelector } from "viem";
 import { rpcAnchorChain } from "../src/lib/anchor-chain-rpc.js";
 import { encodeLogStateResult } from "./verify-fixture.js";
 
@@ -34,9 +34,12 @@ function rpcFetch(answers: {
   }) as typeof fetch;
 }
 
-const ROOT_LOG_ID = "0x72b76e4d";
-const BOOTSTRAP_CONFIG = "0x198865fe";
-const LOG_STATE = "0xeecac1b7";
+// Selectors computed from the ABI signatures, not copied from the code.
+const ROOT_LOG_ID = toFunctionSelector("rootLogId()");
+const BOOTSTRAP_CONFIG = toFunctionSelector("bootstrapConfig()");
+const LOG_STATE = toFunctionSelector("logState(bytes32)");
+const IS_LOG_INITIALIZED = toFunctionSelector("isLogInitialized(bytes32)");
+const LOG_CONFIG = toFunctionSelector("logConfig(bytes32)");
 
 describe("rpcAnchorChain", () => {
   test("reads the bootstrap config as (alg, opaque key)", async () => {
@@ -81,6 +84,45 @@ describe("rpcAnchorChain", () => {
       }).hasCode();
     expect(await at("0x")).toBe(false);
     expect(await at("0x6080")).toBe(true);
+  });
+
+  test("logConfig: undefined until initialized, then the recorded owner and key", async () => {
+    const child = "7a6b5c4d-0000-4000-8000-000000000002";
+    const owner = "7a6b5c4d-0000-4000-8000-000000000001";
+    const key = new Uint8Array(64).fill(0x5c);
+    const read = (initialized: boolean) =>
+      rpcAnchorChain({
+        univocity: UNIVOCITY,
+        rpcUrl: RPC,
+        fetchImpl: rpcFetch({
+          calls: {
+            [IS_LOG_INITIALIZED]: encodeAbiParameters([{ type: "bool" }], [initialized]),
+            [LOG_CONFIG]: encodeAbiParameters(
+              [
+                {
+                  type: "tuple",
+                  components: [
+                    { type: "uint8" },
+                    { type: "bytes32" },
+                    { type: "bytes" },
+                    { type: "uint256" },
+                  ],
+                },
+              ],
+              [
+                [
+                  2,
+                  `0x${"00".repeat(16)}${owner.replaceAll("-", "")}`,
+                  `0x${"5c".repeat(64)}`,
+                  1234n,
+                ],
+              ],
+            ),
+          },
+        }),
+      }).logConfig(child);
+    expect(await read(false)).toBeUndefined();
+    expect(await read(true)).toEqual({ ownerLogId: owner, rootKey: key });
   });
 
   test("logState reads the owner's accumulator through the injected fetch", async () => {

@@ -46,9 +46,10 @@ or verify COSE artefacts.
   root is anchored once its contract is deployed, holds the genesis bootstrap
   key, and is rooted at no other log (`rootLogId()` unset or this root). Until
   then the log is **pending**: canopy answers 409 `authority-pending`, and
-  `register` / `register-grant` retry. A root whose contract holds another key
-  or another root log is **conflicted**, and that is final (409
-  `authority-conflict`). `forestrie log wait-anchored` proves which, from public
+  `register` / `register-grant` retry. A log whose on-chain record differs from
+  its claim is **conflicted**, and that is final (409 `authority-conflict`): a
+  child the contract initialized under another owner or key, or a root whose
+  contract holds another key or another root log. `forestrie log wait-anchored` proves which, from public
   chain data; canopy has no endpoint for it.
 - **Delegation-in-advance (standing key)** — the custodian derives a standing
   sealer key and vouches for it (COSE voucher signed by the registrar voucher
