@@ -182,7 +182,10 @@ and say why on stderr:
 authority pending (attempt 1): log 8c2e4b…-… is not anchored on chain yet (state committed, blocked by 0f9a1c7e-…-…); retrying in 30s
 ```
 
-409 `authority-conflict` is final and is not retried.
+409 `authority-conflict` is final and is not retried. A 503 with
+`Retry-After` (canopy could not read the log's authority, or its queue is
+full) is refused before anything is sequenced, and is retried the same
+way.
 
 ### `register-grant`
 

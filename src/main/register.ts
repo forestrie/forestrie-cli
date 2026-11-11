@@ -1,5 +1,8 @@
 import type { Out } from "@forestrie/cli-kit/reporting";
-import { authorityPendingLine } from "../lib/register-admission.js";
+import {
+  authorityPendingLine,
+  serviceUnavailableLine,
+} from "../lib/register-admission.js";
 import {
   readBytesFile,
   readStdinBytes,
@@ -195,6 +198,9 @@ export async function runRegister(
         switch (progress.phase) {
           case "authority-pending":
             out.print("%s", authorityPendingLine(progress));
+            break;
+          case "service-unavailable":
+            out.print("%s", serviceUnavailableLine(progress));
             break;
           case "registered":
             out.print("registered; status: %s", progress.statusUrl);

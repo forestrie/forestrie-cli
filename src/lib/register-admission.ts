@@ -7,7 +7,9 @@
  * the log anchors when its owner next publishes a checkpoint. Retrying here
  * is the path for clients without chain access; `forestrie log
  * wait-anchored` proves the same fact from the chain instead. A 409
- * `authority-conflict` is final and is never retried.
+ * `authority-conflict` is final and is never retried. A 503 with
+ * `Retry-After` (authority unreadable, queue full) is canopy refusing before
+ * it sequences anything, so it is retried the same way.
  *
  * Shared by `register-flow.ts` (statements) and `register-grant-flow.ts`
  * (grants, and so `create-log`): both spend one `--timeout` budget across the
@@ -52,6 +54,25 @@ export function authorityPendingLine(progress: AuthorityPendingProgress): string
   return `authority pending (attempt ${progress.attempt}): ${describeAuthorityPending(progress)}; retrying in ${Math.ceil(progress.waitMs / 1000)}s`;
 }
 
+/** One progress event per 503 with `Retry-After` that will be retried. */
+export type ServiceUnavailableProgress = {
+  phase: "service-unavailable";
+  attempt: number;
+  waitMs: number;
+  /** canopy's problem detail, when it sent one. */
+  detail?: string | undefined;
+};
+
+/** The stderr line the CLI prints for a 503 it will retry. */
+export function serviceUnavailableLine(progress: ServiceUnavailableProgress): string {
+  return `canopy unavailable (attempt ${progress.attempt}): ${progress.detail ?? "503"}; retrying in ${Math.ceil(progress.waitMs / 1000)}s`;
+}
+
+/** A refusal the admission loop retries. */
+export type AdmissionRetryProgress =
+  | AuthorityPendingProgress
+  | ServiceUnavailableProgress;
+
 /**
  * POST until canopy admits the write, and return the registration status
  * URL from its 303.
@@ -70,32 +91,81 @@ export async function postUntilAdmitted(opts: {
   deadline: number;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
-  onProgress: (progress: AuthorityPendingProgress) => void;
+  onProgress: (progress: AdmissionRetryProgress) => void;
 }): Promise<string> {
   for (let attempt = 1; ; attempt++) {
     const raw = await opts.post();
     const problem = raw.status === 303 ? undefined : decodeCborProblem(raw);
-    if (raw.status !== 409 || problem?.type !== PROBLEM_AUTHORITY_PENDING) {
+    const refusal = retryableRefusal(raw, problem);
+    if (refusal === undefined) {
       return registerStatusUrl(raw, problem, opts.baseUrl);
     }
-    const pending = authorityPending(raw, problem);
     // Pace by Retry-After, but never past the deadline: the last wait is
     // cut short so that a final attempt lands on it.
     const remaining = opts.deadline - opts.now();
     const waitMs = Math.min(
-      Math.max(opts.pollIntervalMs, pending.retryAfterMs ?? 0),
+      Math.max(opts.pollIntervalMs, refusal.retryAfterMs ?? 0),
       remaining,
     );
     if (remaining <= 0) {
-      const detail = describeAuthorityPending(pending);
       throw new RegisterFlowError(
-        `timed out after ${opts.timeoutMs}ms: ${detail}`,
-        { stage: "timeout", httpStatus: 409, detail, problem },
+        `timed out after ${opts.timeoutMs}ms: ${refusal.detail}`,
+        {
+          stage: "timeout",
+          httpStatus: raw.status,
+          detail: refusal.detail,
+          ...(problem !== undefined ? { problem } : {}),
+        },
       );
     }
-    opts.onProgress({ phase: "authority-pending", attempt, waitMs, ...pending });
+    opts.onProgress(refusal.progress(attempt, waitMs));
     await opts.sleep(waitMs);
   }
+}
+
+/**
+ * The refusals worth another POST: 409 `authority-pending`, and a 503 that
+ * says when to come back. Anything else, 409 `authority-conflict` above
+ * all, is the caller's answer.
+ */
+function retryableRefusal(
+  raw: RawResponse,
+  problem: ProblemDetails | undefined,
+):
+  | {
+      retryAfterMs: number | undefined;
+      detail: string;
+      progress: (attempt: number, waitMs: number) => AdmissionRetryProgress;
+    }
+  | undefined {
+  if (raw.status === 409 && problem?.type === PROBLEM_AUTHORITY_PENDING) {
+    const pending = authorityPending(raw, problem);
+    return {
+      retryAfterMs: pending.retryAfterMs,
+      detail: describeAuthorityPending(pending),
+      progress: (attempt, waitMs) => ({
+        phase: "authority-pending",
+        attempt,
+        waitMs,
+        ...pending,
+      }),
+    };
+  }
+  const after = retryAfterMs(raw.headers["retry-after"]);
+  if (raw.status === 503 && after !== undefined) {
+    const detail = textField(problem?.detail);
+    return {
+      retryAfterMs: after,
+      detail: `canopy is unavailable: ${detail ?? "503"}`,
+      progress: (attempt, waitMs) => ({
+        phase: "service-unavailable",
+        attempt,
+        waitMs,
+        detail,
+      }),
+    };
+  }
+  return undefined;
 }
 
 /**

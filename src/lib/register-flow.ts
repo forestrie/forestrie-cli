@@ -16,6 +16,7 @@ import {
 import {
   postUntilAdmitted,
   type AuthorityPendingProgress,
+  type ServiceUnavailableProgress,
 } from "./register-admission.js";
 import { RegisterFlowError } from "./register-flow-error.js";
 import { REQUEST_TIMEOUT_MS } from "./timed-fetch.js";
@@ -26,6 +27,7 @@ export type { RegisterFlowStage } from "./register-flow-error.js";
 /** Progress callbacks so the CLI can narrate long polls on stderr. */
 export type RegisterProgress =
   | AuthorityPendingProgress
+  | ServiceUnavailableProgress
   | { phase: "registered"; statusUrl: string }
   | { phase: "status-pending"; statusUrl: string; attempt: number }
   | { phase: "receipt-located"; receiptUrl: string; entryIdHex: string }

@@ -14,7 +14,10 @@ import {
   type AnchorChain,
   type AnchorTarget,
 } from "../lib/anchor-wait.js";
-import { authorityPendingLine } from "../lib/register-admission.js";
+import {
+  authorityPendingLine,
+  serviceUnavailableLine,
+} from "../lib/register-admission.js";
 import { readBytesFile, readTextFile, writeOutputFile } from "../lib/fsio.js";
 import type { CreateLogOptions } from "../options/create-log.js";
 import {
@@ -340,6 +343,9 @@ export async function runCreateLog(
         switch (progress.phase) {
           case "authority-pending":
             out.print("%s", authorityPendingLine(progress));
+            break;
+          case "service-unavailable":
+            out.print("%s", serviceUnavailableLine(progress));
             break;
           case "registered":
             out.print("create grant registered; status: %s", progress.statusUrl);

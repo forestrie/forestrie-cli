@@ -633,6 +633,69 @@ describe("runRegisterGrantFlow", () => {
     expect(result.receipt).toEqual(RECEIPT);
   });
 
+  /** canopy's 503 for a refusal it expects to clear: before sequencing. */
+  function unavailable(retryAfter?: string): Response {
+    return new Response(
+      // As canopy-api encodes it: deterministic CBOR.
+      encodeCborDeterministic({
+        type: "about:blank",
+        title: "Service Unavailable",
+        status: 503,
+        detail: "Log authority is unavailable: rpc down",
+      }),
+      {
+        status: 503,
+        headers: {
+          "Content-Type": "application/cbor",
+          ...(retryAfter !== undefined ? { "Retry-After": retryAfter } : {}),
+        },
+      },
+    );
+  }
+
+  test("503 with Retry-After is retried within the budget, then admitted", async () => {
+    const clock = fakeClock();
+    const progress: RegisterGrantProgress[] = [];
+    let posts = 0;
+    const result = await runRegisterGrantFlow(flowParams, {
+      fetchImpl: fakeFetch(({ method, url }) => {
+        if (method === "POST") return ++posts < 2 ? unavailable("5") : see(STATUS_PATH);
+        if (url.pathname === STATUS_PATH) return see(RECEIPT_PATH);
+        if (url.pathname === RECEIPT_PATH) return new Response(RECEIPT, { status: 200 });
+        return undefined;
+      }),
+      onProgress: (p) => progress.push(p),
+      ...clock,
+    });
+    expect(result.receipt).toEqual(RECEIPT);
+    expect(posts).toBe(2);
+    expect(clock.waits).toEqual([5_000]);
+    expect(progress[0]).toMatchObject({
+      phase: "service-unavailable",
+      attempt: 1,
+      waitMs: 5_000,
+      detail: "Log authority is unavailable: rpc down",
+    });
+  });
+
+  test("503 without Retry-After is not retried", async () => {
+    let posts = 0;
+    const err = await runRegisterGrantFlow(flowParams, {
+      fetchImpl: fakeFetch(({ method }) => {
+        if (method !== "POST") return undefined;
+        posts++;
+        return unavailable();
+      }),
+      ...fakeClock(),
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(posts).toBe(1);
+    expect((err as RegisterFlowError).stage).toBe("register");
+    expect((err as RegisterFlowError).httpStatus).toBe(503);
+  });
+
   test("409 authority-conflict is final: not retried, its CBOR problem decoded", async () => {
     let posts = 0;
     const err = await runRegisterGrantFlow(flowParams, {
