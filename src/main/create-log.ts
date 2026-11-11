@@ -388,7 +388,24 @@ export async function runCreateLog(
       result.entryIdHex,
     );
     if (options.outB64 !== undefined) {
-      await writeOutputFile(options.outB64, completedB64);
+      try {
+        await writeOutputFile(options.outB64, completedB64);
+      } catch (err) {
+        // The grant is sequenced and write-once: emit it on stdout as if
+        // there were no --out-b64, fail, and do not start a wait.
+        out.warn(
+          `forestrie create-log: could not write --out-b64 ${options.outB64}: ${err instanceof Error ? err.message : String(err)}; the completed grant is on stdout`,
+        );
+        reportCompletedGrant(
+          out,
+          { ...options, outB64: undefined },
+          built,
+          result,
+          completedB64,
+        );
+        process.exitCode = 1;
+        return;
+      }
     }
     if (anchorWait === undefined) {
       reportCompletedGrant(out, options, built, result, completedB64);

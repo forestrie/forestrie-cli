@@ -596,6 +596,39 @@ describe("runCreateLog --wait-anchored", () => {
     );
   });
 
+  test("an unwritable --out-b64 still emits the completed grant, and skips the wait", async () => {
+    const canopy = sequencingCanopy();
+    const out = createCaptureOut();
+    process.exitCode = 0;
+    let chainReads = 0;
+    const chain = ownerChain(() => [], canopy.peak);
+    await runCreateLog(
+      out,
+      // A directory: the write fails after the grant is sequenced.
+      { ...options, outB64: tmp },
+      {
+        fetchImpl: canopy.fetchImpl,
+        anchorChain: {
+          ...chain,
+          async logState(id) {
+            chainReads++;
+            return chain.logState(id);
+          },
+        },
+        ...fakeClock(),
+      },
+    );
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
+    const report = reportOf(out);
+    expect(decodeCoseSign1(base64ToBytes(report["grantB64"] as string))).toBeDefined();
+    expect(report["outB64"]).toBeUndefined();
+    expect(report["anchor"]).toBeUndefined();
+    expect(chainReads).toBe(0);
+    const stderr = out.lines.filter((l) => l.stream === "stderr").map((l) => l.text);
+    expect(stderr.join("\n")).toContain(`could not write --out-b64 ${tmp}`);
+  });
+
   test("a forest root waits on its contract, with --new-log in 32-hex form", async () => {
     const genesis = path.join(tmp, "root-genesis.cbor");
     const rootKey = new Uint8Array(64).fill(0x42);
