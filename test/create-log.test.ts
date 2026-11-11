@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createCaptureOut } from "@forestrie/cli-kit/reporting";
@@ -414,7 +414,8 @@ describe("runCreateLog --wait-anchored", () => {
     signWith: OWNER_PEM_PATH,
     prepare: false,
     parentGrantB64: PARENT_B64,
-    outB64: undefined,
+    // --json --wait-anchored needs --out-b64: the grant is saved first.
+    outB64: path.join(tmp, "created.b64"),
     bootstrapLog: BOOT_LOG,
     timeoutMs: 5_000,
     pollIntervalMs: 100,
@@ -530,7 +531,10 @@ describe("runCreateLog --wait-anchored", () => {
     expect(process.exitCode).toBe(0);
     const report = reportOf(out);
     expect(report["status"]).toBe("receipt");
-    expect(typeof report["grantB64"]).toBe("string");
+    expect(report["outB64"]).toBe(options.outB64);
+    expect(
+      decodeCoseSign1(base64ToBytes(readFileSync(options.outB64!, "utf8").trim())),
+    ).toBeDefined();
     expect(report["anchor"]).toEqual({
       status: "anchored",
       reason: "peak_in_current_state",
@@ -570,7 +574,7 @@ describe("runCreateLog --wait-anchored", () => {
     process.exitCode = 0;
     await runCreateLog(
       out,
-      { ...options, json: false },
+      { ...options, json: false, outB64: undefined },
       {
         fetchImpl: canopy.fetchImpl,
         anchorChain: ownerChain(
