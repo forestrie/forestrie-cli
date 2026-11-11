@@ -23,6 +23,27 @@ describe("forestrie --help", () => {
     }
   }, 30_000);
 
+  test("log groups wait-anchored, whose help names its inputs", () => {
+    const root = runCli(["--help"]);
+    expect(root.stdout + root.stderr).toContain("log");
+    const group = runCli(["log", "--help"]);
+    expect(group.exitCode).toBe(0);
+    expect(group.stdout + group.stderr).toContain("wait-anchored");
+    const wait = runCli(["log", "wait-anchored", "--help"]);
+    expect(wait.exitCode).toBe(0);
+    const text = wait.stdout + wait.stderr;
+    for (const flag of [
+      "--create-grant",
+      "--genesis",
+      "--univocity",
+      "--rpc-url",
+      "--timeout",
+      "--interval",
+    ]) {
+      expect(text).toContain(flag);
+    }
+  });
+
   test("verify help notes ES256 and offline", () => {
     const result = runCli(["verify", "--help"]);
     const text = result.stdout + result.stderr;

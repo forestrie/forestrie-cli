@@ -150,13 +150,19 @@ export async function fetchOnChainLogState(opts: {
   univocity: string;
   logId: string;
   rpcUrl: string;
+  fetchImpl?: typeof fetch;
 }): Promise<OnChainLogState> {
   const address = normalizeHexAddress(opts.univocity);
   if (address === null) {
     throw new Error(`--univocity is not a valid address: '${opts.univocity}'`);
   }
   const data = LOG_STATE_SELECTOR + toContractLogId(opts.logId).slice(2);
-  const result = await ethCall(opts.rpcUrl, `0x${address}`, data);
+  const result = await ethCall(
+    opts.rpcUrl,
+    `0x${address}`,
+    data,
+    opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {},
+  );
   if (typeof result !== "string" || result === "0x") {
     throw new Error(
       `logState eth_call returned no data for log ${opts.logId} at ${opts.univocity}`,
