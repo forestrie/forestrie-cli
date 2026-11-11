@@ -13,7 +13,12 @@ import {
   buildChildAnchorFixture,
   type ChildAnchorFixture,
 } from "./anchor-wait-fixture.js";
-import { FIXTURE_LOG_ID, buildGenesisCbor } from "./verify-fixture.js";
+import {
+  FIXTURE_LOG_ID,
+  buildGenesisCbor,
+  buildPeakReceipt,
+  generateP256KeyPair,
+} from "./verify-fixture.js";
 
 /** Deterministic clock: `sleep` advances `now` instead of waiting. */
 function fakeClock() {
@@ -167,7 +172,29 @@ describe("waitAnchored (child log)", () => {
     expect(fetches).toBe(1);
   });
 
-  test("a refreshed receipt for another leaf proves nothing", async () => {
+  test("a refreshed receipt for another MMR index is set aside, with a note", async () => {
+    const elsewhere = await buildPeakReceipt({
+      signer: await generateP256KeyPair(),
+      peak: new Uint8Array(32).fill(0x0e),
+      proof: { path: [new Uint8Array(32).fill(0x0f)], mmrIndex: 0n },
+    });
+    const result = await waitAnchored(
+      await childAnchorTarget(fx.completedGrantB64),
+      fakeChain({ states: [{ accumulator: [fx.peak7], size: 7n }] }),
+      {
+        timeoutMs: 0,
+        intervalMs: 5_000,
+        ...fakeClock(),
+        refreshReceipt: async () => elsewhere,
+      },
+    );
+    expect(result.answer.status).toBe("pending");
+    expect(result.answer.detail).toContain(
+      "the refreshed receipt does not include the create grant: it is for another leaf",
+    );
+  });
+
+  test("a refreshed receipt for another grant at this position proves nothing", async () => {
     const other = await buildChildAnchorFixture({ grantDataFill: 0x77 });
     const clock = fakeClock();
     const chain = fakeChain({ states: [{ accumulator: [other.peak7], size: 7n }] });
@@ -388,14 +415,17 @@ describe("waitAnchored (forest root)", () => {
   });
 
   test("a contract whose bootstrap key is not the genesis key is final", async () => {
+    const clock = fakeClock();
     const result = await waitAnchored(
       root(),
       fakeRootChain({
         bootstrap: { alg: -7n, key: new Uint8Array(64).fill(0x43) },
       }),
-      { ...WAIT, ...fakeClock() },
+      { ...WAIT, ...clock },
     );
     expect(result.answer.status).toBe("conflicted");
     expect(result.answer.reason).toBe("bootstrap_key_mismatch");
+    expect(result.rounds).toBe(1);
+    expect(clock.waits).toEqual([]);
   });
 });
