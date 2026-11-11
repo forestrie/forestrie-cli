@@ -257,8 +257,9 @@ genesis forest's. `--json` reports `status`, `reason`, `detail`,
 `create-log --wait-anchored` runs the same wait once the log is
 created, re-fetching the receipt it just got, given `--rpc-url` and
 `--univocity` or `--genesis`; a forest root (`--self-referential`) needs
-`--genesis`. It refuses a genesis for
-another chain or contract before registering the create grant. The
+`--genesis`, and `--json` needs `--out-b64`, since the JSON report
+comes only after the wait. It refuses a genesis for another chain or
+contract before registering the create grant. The
 completed grant is emitted before the wait starts, and the command
 exits non-zero if the log does not anchor within `--anchor-timeout`.
 

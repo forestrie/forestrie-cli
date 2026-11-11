@@ -261,6 +261,17 @@ describe("parseCreateLogOptions", () => {
       ).toThrow(/--self-referential --wait-anchored needs --genesis/);
     });
 
+    test("--json needs --out-b64, so the write-once grant is on disk before the wait", () => {
+      const anchored = { ...child, univocity: "0xabc", "rpc-url": "https://rpc" };
+      expect(() => parseCreateLogOptions({ ...anchored, json: true })).toThrow(
+        /--json --wait-anchored needs --out-b64/,
+      );
+      expect(
+        parseCreateLogOptions({ ...anchored, json: true, "out-b64": "g.b64" })
+          .anchorWait,
+      ).toBeDefined();
+    });
+
     test("--prepare sequences nothing, so there is nothing to wait for", () => {
       expect(() =>
         parseCreateLogOptions({

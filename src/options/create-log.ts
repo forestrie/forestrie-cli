@@ -111,6 +111,13 @@ export function parseCreateLogOptions(args: LooseParsedArgs): CreateLogOptions {
       "--prepare does not sequence the create grant, so there is nothing to wait for: drop --wait-anchored",
     );
   }
+  if (options.json && options.outB64 === undefined) {
+    // --json emits one report, after the wait. The create grant is
+    // write-once, so it must be on disk before a wait that can be cut off.
+    throw new Error(
+      "--json --wait-anchored needs --out-b64: the JSON report comes after the wait, and the completed grant must be saved before it",
+    );
+  }
   const anchorWait = parseAnchorWaitOptions(args, {
     timeout: "anchor-timeout",
     interval: "anchor-interval",

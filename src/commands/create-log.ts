@@ -93,7 +93,7 @@ export default defineForestrieCommand({
     "wait-anchored": {
       type: "boolean",
       description:
-        "Once the log is created, wait until it is anchored, proven from public chain data as `forestrie log wait-anchored` does (needs --rpc-url and --univocity or --genesis; a forest root needs --genesis). Exits non-zero if it does not anchor in --anchor-timeout, after emitting the completed grant",
+        "Once the log is created, wait until it is anchored, proven from public chain data as `forestrie log wait-anchored` does (needs --rpc-url and --univocity or --genesis; a forest root needs --genesis; --json needs --out-b64). Exits non-zero if it does not anchor in --anchor-timeout, after emitting the completed grant",
       default: false,
     },
     genesis: {
