@@ -6,6 +6,10 @@ import {
   type ForestrieCommonOptions,
 } from "./common.js";
 import {
+  parseAnchorWaitOptions,
+  type AnchorWaitOptions,
+} from "./log-wait-anchored.js";
+import {
   DEFAULT_POLL_INTERVAL_SECONDS,
   DEFAULT_TIMEOUT_SECONDS,
   durationOptionMs,
@@ -60,6 +64,12 @@ export type CreateLogOptions = ForestrieCommonOptions & {
   timeoutMs: number;
   /** Poll pacing, milliseconds (`--poll-interval` seconds). */
   pollIntervalMs: number;
+  /**
+   * `--wait-anchored`: once the log is created, wait until it is anchored
+   * on chain (`--anchor-timeout`, `--anchor-interval` seconds), as
+   * `forestrie log wait-anchored` does.
+   */
+  anchorWait?: AnchorWaitOptions;
 };
 
 export function parseCreateLogOptions(args: LooseParsedArgs): CreateLogOptions {
@@ -95,5 +105,27 @@ export function parseCreateLogOptions(args: LooseParsedArgs): CreateLogOptions {
       "either --parent-grant-b64 or --self-referential is required",
     );
   }
-  return options;
+  if (args["wait-anchored"] !== true) return options;
+  if (options.prepare) {
+    throw new Error(
+      "--prepare does not sequence the create grant, so there is nothing to wait for: drop --wait-anchored",
+    );
+  }
+  if (options.json && options.outB64 === undefined) {
+    // --json emits one report, after the wait. The create grant is
+    // write-once, so it must be on disk before a wait that can be cut off.
+    throw new Error(
+      "--json --wait-anchored needs --out-b64: the JSON report comes after the wait, and the completed grant must be saved before it",
+    );
+  }
+  const anchorWait = parseAnchorWaitOptions(args, {
+    timeout: "anchor-timeout",
+    interval: "anchor-interval",
+  });
+  if (options.selfReferential && anchorWait.genesis === undefined) {
+    throw new Error(
+      "--self-referential --wait-anchored needs --genesis: a forest root is anchored by its contract, checked against its genesis",
+    );
+  }
+  return { ...options, anchorWait };
 }

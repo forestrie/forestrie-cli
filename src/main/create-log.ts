@@ -1,5 +1,24 @@
 import type { Out } from "@forestrie/cli-kit/reporting";
-import { readTextFile, writeOutputFile } from "../lib/fsio.js";
+import { uuidToBytes } from "@forestrie/encoding";
+import {
+  anchorFailureLine,
+  anchorRoundNarrator,
+  anchorTargetFor,
+  anchorWaitReport,
+  bindAnchorChain,
+  receiptRefresher,
+  type AnchorWaitReport,
+} from "../lib/anchor-wait-run.js";
+import {
+  waitAnchored,
+  type AnchorChain,
+  type AnchorTarget,
+} from "../lib/anchor-wait.js";
+import {
+  authorityPendingLine,
+  serviceUnavailableLine,
+} from "../lib/register-admission.js";
+import { readBytesFile, readTextFile, writeOutputFile } from "../lib/fsio.js";
 import type { CreateLogOptions } from "../options/create-log.js";
 import {
   RegisterGrantBuildError,
@@ -45,6 +64,15 @@ export type CreateLogReport = {
   outB64?: string;
   /** Completed grant base64 — only when not written to `--out-b64`. */
   grantB64?: string;
+  /** `--wait-anchored`: how the wait for the new log to anchor ended. */
+  anchor?: AnchorWaitReport;
+  /** `--wait-anchored`: why the wait could not start once the log existed. */
+  anchorError?: string;
+  /**
+   * Why --out-b64 could not be written: the grant is in `grantB64`
+   * instead, the command exits 1, and no anchoring wait ran.
+   */
+  outB64Error?: string;
 };
 
 /** `--json` failure shape (problem = CBOR problem-details passthrough). */
@@ -52,6 +80,7 @@ export type CreateLogErrorReport = {
   error:
     | "key_read_failed"
     | "grant_build_failed"
+    | "anchor_setup_failed"
     | "registration_failed"
     | "status_failed"
     | "receipt_failed"
@@ -67,7 +96,18 @@ export type CreateLogErrorReport = {
 };
 
 /** Test seam: effects injected by the create-log tests (real by default). */
-export type CreateLogRunDeps = RegisterGrantFlowDeps;
+export type CreateLogRunDeps = RegisterGrantFlowDeps & {
+  /** `--wait-anchored` chain reads (default: JSON-RPC to `--rpc-url`). */
+  anchorChain?: AnchorChain;
+};
+
+/** `--wait-anchored`, bound before the create grant is registered. */
+type BoundAnchorWait = {
+  chain: AnchorChain;
+  genesisCbor: Uint8Array | undefined;
+  timeoutMs: number;
+  intervalMs: number;
+};
 
 const FLOW_ERROR_CODES = {
   register: "registration_failed",
@@ -120,17 +160,15 @@ function flowErrorReport(err: RegisterFlowError): CreateLogErrorReport {
   return report;
 }
 
-async function reportCompletedGrant(
+function reportCompletedGrant(
   out: Out,
   options: CreateLogOptions,
   built: BuiltCreateLogGrant,
   result: RegisterGrantFlowResult,
   completedB64: string,
-): Promise<void> {
+  extra: Pick<CreateLogReport, "anchor" | "anchorError" | "outB64Error"> = {},
+): void {
   const ownerHex = Buffer.from(built.grantData).toString("hex");
-  if (options.outB64 !== undefined) {
-    await writeOutputFile(options.outB64, completedB64);
-  }
   if (options.json) {
     const report: CreateLogReport = {
       command: "create-log",
@@ -148,7 +186,7 @@ async function reportCompletedGrant(
     } else {
       report.grantB64 = completedB64;
     }
-    out.out(JSON.stringify(report, null, 2));
+    out.out(JSON.stringify({ ...report, ...extra }, null, 2));
     return;
   }
   // Human mode: without --out-b64 the completed grant base64 is the pipeable
@@ -284,12 +322,36 @@ export async function runCreateLog(
     return;
   }
 
+  // 2c. --wait-anchored: bind the chain now, so that with --genesis a wrong
+  // forest, or an RPC that cannot say its chain id, is refused before the
+  // write-once create grant is spent.
+  let anchorWait: BoundAnchorWait | undefined;
+  if (options.anchorWait !== undefined) {
+    try {
+      anchorWait = await bindCreateLogAnchorWait(options, deps.anchorChain);
+    } catch (err) {
+      reportError(out, options, {
+        error: "anchor_setup_failed",
+        command: "create-log",
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+  }
+
+  const { anchorChain: _anchorChain, ...registerDeps } = deps;
   const flowDeps: RegisterGrantFlowDeps = {
-    ...deps,
+    ...registerDeps,
     onProgress:
       deps.onProgress ??
       ((progress) => {
         switch (progress.phase) {
+          case "authority-pending":
+            out.print("%s", authorityPendingLine(progress));
+            break;
+          case "service-unavailable":
+            out.print("%s", serviceUnavailableLine(progress));
+            break;
           case "registered":
             out.print("create grant registered; status: %s", progress.statusUrl);
             break;
@@ -336,7 +398,47 @@ export async function runCreateLog(
       result.receipt,
       result.entryIdHex,
     );
-    await reportCompletedGrant(out, options, built, result, completedB64);
+    if (options.outB64 !== undefined) {
+      try {
+        await writeOutputFile(options.outB64, completedB64);
+      } catch (err) {
+        // The grant is sequenced and write-once: emit it on stdout as if
+        // there were no --out-b64, fail, and do not start a wait.
+        const outB64Error = `could not write --out-b64 ${options.outB64}: ${err instanceof Error ? err.message : String(err)}`;
+        out.warn(
+          `forestrie create-log: ${outB64Error}; the completed grant is on stdout`,
+        );
+        reportCompletedGrant(
+          out,
+          { ...options, outB64: undefined },
+          built,
+          result,
+          completedB64,
+          { outB64Error },
+        );
+        process.exitCode = 1;
+        return;
+      }
+    }
+    if (anchorWait === undefined) {
+      reportCompletedGrant(out, options, built, result, completedB64);
+      return;
+    }
+    // The log exists now: the human-mode grant goes out before the wait,
+    // so an interrupted wait never loses it.
+    if (!options.json) {
+      reportCompletedGrant(out, options, built, result, completedB64);
+    }
+    const anchor = await waitForCreatedLog(
+      out,
+      completedB64,
+      result.receiptUrl,
+      anchorWait,
+      deps,
+    );
+    if (options.json) {
+      reportCompletedGrant(out, options, built, result, completedB64, anchor);
+    }
   } catch (err) {
     if (err instanceof RegisterFlowError) {
       reportError(out, options, flowErrorReport(err));
@@ -344,4 +446,77 @@ export async function runCreateLog(
     }
     throw err;
   }
+}
+
+async function bindCreateLogAnchorWait(
+  options: CreateLogOptions,
+  chain: AnchorChain | undefined,
+): Promise<BoundAnchorWait> {
+  const wait = options.anchorWait!;
+  const genesisCbor =
+    wait.genesis !== undefined
+      ? await readBytesFile(wait.genesis, `genesis file not found: ${wait.genesis}`)
+      : undefined;
+  if (options.selfReferential) {
+    const root = await anchorTargetFor(undefined, genesisCbor);
+    // Compare as bytes: --new-log may be given with or without dashes.
+    const same =
+      Buffer.from(uuidToBytes(root.logId)).equals(
+        Buffer.from(uuidToBytes(options.newLog)),
+      );
+    if (!same) {
+      throw new Error(
+        `the genesis is for root ${root.logId}, not --new-log ${options.newLog}`,
+      );
+    }
+  }
+  return {
+    chain: await bindAnchorChain(
+      { genesisCbor, univocity: wait.univocity, rpcUrl: wait.rpcUrl },
+      chain,
+    ),
+    genesisCbor,
+    timeoutMs: wait.timeoutMs,
+    intervalMs: wait.intervalMs,
+  };
+}
+
+/**
+ * Wait for the log just created to anchor, narrating on stderr, re-fetching
+ * its receipt each round. A log that does not anchor in budget, or never
+ * can, sets the exit code: the log exists and its grant has been emitted,
+ * but it is not usable yet.
+ */
+async function waitForCreatedLog(
+  out: Out,
+  completedB64: string,
+  receiptUrl: string,
+  wait: BoundAnchorWait,
+  deps: CreateLogRunDeps,
+): Promise<Pick<CreateLogReport, "anchor" | "anchorError">> {
+  let target: AnchorTarget;
+  try {
+    target = await anchorTargetFor(completedB64, wait.genesisCbor);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    out.warn("forestrie create-log: cannot wait for anchoring: %s", message);
+    process.exitCode = 1;
+    return { anchorError: message };
+  }
+  const result = await waitAnchored(target, wait.chain, {
+    timeoutMs: wait.timeoutMs,
+    intervalMs: wait.intervalMs,
+    ...(deps.now !== undefined ? { now: deps.now } : {}),
+    ...(deps.sleep !== undefined ? { sleep: deps.sleep } : {}),
+    onRound: anchorRoundNarrator(out),
+    // A root's authority is its contract; only a child has a receipt.
+    ...(target.kind === "child"
+      ? { refreshReceipt: receiptRefresher(receiptUrl, deps.fetchImpl) }
+      : {}),
+  });
+  if (result.answer.status !== "anchored") {
+    out.warn("%s", anchorFailureLine("create-log", target, result, wait.timeoutMs));
+    process.exitCode = 1;
+  }
+  return { anchor: anchorWaitReport(target, result) };
 }

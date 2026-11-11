@@ -24,6 +24,7 @@ export default defineForestrieCommand({
     register: () => import("./commands/register.js").then((m) => m.default),
     "create-log": () =>
       import("./commands/create-log.js").then((m) => m.default),
+    log: () => import("./commands/log.js").then((m) => m.default),
     "register-grant": () =>
       import("./commands/register-grant.js").then((m) => m.default),
     delegate: () => import("./commands/delegate.js").then((m) => m.default),

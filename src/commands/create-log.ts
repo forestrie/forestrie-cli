@@ -81,13 +81,49 @@ export default defineForestrieCommand({
     },
     timeout: {
       type: "string",
-      description: "Overall receipt wait budget in seconds (default 60)",
+      description:
+        "Wait budget in seconds: for admission while canopy answers 409 authority-pending or 503 with Retry-After (a last attempt is made at the deadline), then again for the receipt once admitted (default 60)",
       valueHint: "seconds",
     },
     "poll-interval": {
       type: "string",
       description:
         "Pacing between registration/receipt polls in seconds (default 1; Retry-After wins when longer)",
+      valueHint: "seconds",
+    },
+    "wait-anchored": {
+      type: "boolean",
+      description:
+        "Once the log is created, wait until it is anchored, proven from public chain data as `forestrie log wait-anchored` does (needs --rpc-url and --univocity or --genesis; a forest root needs --genesis; --json needs --out-b64). Exits non-zero if it does not anchor in --anchor-timeout, after emitting the completed grant",
+      default: false,
+    },
+    genesis: {
+      type: "string",
+      description:
+        "With --wait-anchored: forest genesis (genesis.cbor); the contract and the RPC's chain must be its forest's",
+      valueHint: "path",
+    },
+    univocity: {
+      type: "string",
+      description:
+        "With --wait-anchored: ImutableUnivocity contract address (default: the genesis's)",
+      valueHint: "address",
+    },
+    "rpc-url": {
+      type: "string",
+      description:
+        "With --wait-anchored: JSON-RPC endpoint for the contract's chain (env RPC_URL)",
+      valueHint: "url",
+    },
+    "anchor-timeout": {
+      type: "string",
+      description: "With --wait-anchored: anchoring wait budget in seconds (default 600)",
+      valueHint: "seconds",
+    },
+    "anchor-interval": {
+      type: "string",
+      description:
+        "With --wait-anchored: pacing between chain reads in seconds (default 10)",
       valueHint: "seconds",
     },
   },

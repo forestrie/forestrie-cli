@@ -12,6 +12,7 @@ deploy, sign, register, and verify against a forestrie log:
 | `sign-statement` | Produce a SCITT signed statement (plain COSE Sign1 with CWT claims) |
 | `register` | Register a signed statement via SCRAPI, download the receipt |
 | `register-grant` | Authorize a signer for a child/data log (one grant per signer) |
+| `log wait-anchored` | Wait until a log is anchored, proven from public chain data |
 | `complete-grant` | Self-create the `Forestrie-Grant` header from a checkpoint |
 | `resolve-receipt` | Produce or freshen a COSE receipt — from tiles, or tile-free from a `.sth`/calldata chain (alias: `create-receipt`) |
 | `decode-receipt` | Decode a COSE receipt — it is just COSE: Sign1 + MMR inclusion |
@@ -170,6 +171,22 @@ receiptUrl: …/receipt
 wrote receipt (612 bytes) to receipt.cbor
 ```
 
+A log is usable only once its authority is anchored on chain
+([protocol ADR-0070](https://github.com/forestrie/protocol/blob/main/adr/adr-0070-sec-log-authority-anchored-before-use.md)).
+Until then canopy answers 409 `authority-pending`, naming the log's
+`state` and, when another log holds it up, `blockedBy`. `register` and
+`register-grant` retry it within `--timeout`, paced by `Retry-After`,
+and say why on stderr:
+
+```
+authority pending (attempt 1): log 8c2e4b…-… is not anchored on chain yet (state committed, blocked by 0f9a1c7e-…-…); retrying in 30s
+```
+
+409 `authority-conflict` is final and is not retried. A 503 with
+`Retry-After` (canopy could not read the log's authority, or its queue is
+full) is refused before anything is sequenced, and is retried the same
+way.
+
 ### `register-grant`
 
 ```bash
@@ -187,6 +204,76 @@ signer: 04a91f…
 entryId: …
 wrote completed grant base64 to grant.b64
 ```
+
+### `log wait-anchored`
+
+Wait until a log is anchored, proven from public chain data. No operator
+answer is trusted.
+
+```bash
+# A child log: anchored once a checkpoint its owner published on chain
+# includes its create grant.
+forestrie log wait-anchored \
+  --create-grant create-grant.b64 --receipt-url "$RECEIPT_URL" \
+  --genesis genesis.cbor --rpc-url "$RPC_URL"
+
+# A forest root: anchored once its contract is deployed, holds the
+# genesis bootstrap key, and is rooted at no other log.
+forestrie log wait-anchored --genesis genesis.cbor --rpc-url "$RPC_URL"
+```
+
+```
+round 1: pending (receipt_newer_than_anchored_state): owner 0f9a1c7e-…-… has published up to size 1; the create grant is leaf 1
+round 4: anchored (peak_in_current_state): owner 0f9a1c7e-…-…'s on-chain state (size 3) holds the create grant's peak
+anchored (peak_in_current_state): owner 0f9a1c7e-…-…'s on-chain state (size 3) holds the create grant's peak
+```
+
+`--create-grant` is the completed grant `create-log --out-b64` wrote,
+and `--receipt-url` is the `receiptUrl` it printed. The check hashes the
+grant's leaf up a receipt's inclusion path and looks for the peak it
+reaches, byte for byte, in the owner's current on-chain accumulator, then
+in the accumulator of each checkpoint the owner has published. It reads
+the contract's views and the owner's `publishCheckpoint` calldata, and
+trusts no key. Each round reads the chain again (`--interval`, default
+10 s) until `--timeout` (default 600 s). Each request gives up after
+15 s, and the answer comes at most 15 s past `--timeout` (reason
+`round_unfinished` if a round was cut off), so a server that never
+answers cannot stall the wait. Requests that round had in flight still
+run out their own caps before the process exits.
+
+The receipt in the grant proves against the seal current when the grant
+was sequenced, and a re-seal replaces that seal, so it may never reach
+the chain. With `--receipt-url`, each round fetches the receipt again,
+against the latest seal; without it, such a log never shows as
+anchored. The fetched receipt is only a path: a wrong one reaches a peak
+the chain never committed to, so canopy can delay the answer but not
+fake it.
+
+Once the contract has initialized a child (its first checkpoint), the
+chain's record decides instead: the owner and root key it recorded must
+be the grant's. It exits 0 once anchored. It exits non-zero at once when
+the log can never anchor: a child the contract recorded under another
+owner or key, or a forest root whose contract holds another bootstrap
+key or is rooted at another log, is conflicted. It also exits non-zero
+on timeout, printing the last answer.
+
+It checks the log's own record only. Whether the owner log, or any log
+above it, is itself conflicted needs that log's own create grant, which
+the child's grant does not carry, so `anchored` does not rule it out.
+canopy refuses writes under such a log with 409 `authority-conflict`,
+naming it in `blockedBy`. With `--genesis` the contract
+defaults to the genesis's, and both it and the RPC's chain must be the
+genesis forest's. `--json` reports `status`, `reason`, `detail`,
+`logId`, `ownerLogId`, `rounds` and `timedOut`.
+
+`create-log --wait-anchored` runs the same wait once the log is
+created, re-fetching the receipt it just got, given `--rpc-url` and
+`--univocity` or `--genesis`; a forest root (`--self-referential`) needs
+`--genesis`, and `--json` needs `--out-b64`, since the JSON report
+comes only after the wait. It refuses a genesis for another chain or
+contract before registering the create grant. The
+completed grant is emitted before the wait starts, and the command
+exits non-zero if the log does not anchor within `--anchor-timeout`.
 
 ### `complete-grant`
 

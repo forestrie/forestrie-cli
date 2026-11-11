@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createCaptureOut } from "@forestrie/cli-kit/reporting";
+import { encodeCborDeterministic } from "@forestrie/encoding";
 import {
   RegisterFlowError,
   runRegisterFlow,
@@ -71,7 +72,49 @@ function fakeFetch(route: FakeRoute): typeof fetch {
 const see = (location: string): Response =>
   new Response(null, { status: 303, headers: { Location: location } });
 
+const PARENT_LOG = "33333333-3333-3333-3333-333333333333";
+
+/**
+ * canopy's refusal of a write under a log the chain has not anchored yet
+ * (canopy `log-admission.ts`): 409, CBOR body served as plain
+ * `application/cbor`, `Retry-After` in seconds.
+ */
+function authorityPending(): Response {
+  return new Response(
+    encodeCborDeterministic({
+      type: "authority-pending",
+      title: "Authority Pending",
+      status: 409,
+      detail: `Log ${LOG_ID} is not anchored on chain yet.`,
+      logId: LOG_ID,
+      state: "committed",
+      blockedBy: PARENT_LOG,
+    }),
+    {
+      status: 409,
+      headers: { "Content-Type": "application/cbor", "Retry-After": "30" },
+    },
+  );
+}
+
 const BASE = "https://scrapi.example";
+
+/** A server that sends a 409's headers and one body byte, then stalls. */
+function stalledBodyServer() {
+  return Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(new Uint8Array([0xa1]));
+          },
+        }),
+        { status: 409, headers: { "Content-Type": "application/cbor" } },
+      );
+    },
+  });
+}
 
 const flowParams = {
   baseUrl: BASE,
@@ -319,6 +362,64 @@ describe("runRegisterFlow", () => {
   }, 5_000);
 });
 
+describe("runRegisterFlow — admission at the deadline", () => {
+  test("a statement admitted by the last attempt still gets its receipt", async () => {
+    // Each request takes 1 ms, so the second 30 s wait no longer fits the
+    // 60 s budget: it is cut short, the last attempt lands on the
+    // deadline, and admission restarts the budget for the receipt.
+    let t = 0;
+    const waits: number[] = [];
+    let posts = 0;
+    const result = await runRegisterFlow(
+      { ...flowParams, timeoutMs: 60_000 },
+      {
+        fetchImpl: fakeFetch(({ method, url }) => {
+          t += 1;
+          if (method === "POST") {
+            return ++posts < 3 ? authorityPending() : see(STATUS_PATH);
+          }
+          if (url.pathname === STATUS_PATH) return see(RECEIPT_PATH);
+          if (url.pathname === RECEIPT_PATH) {
+            return new Response(RECEIPT, { status: 200 });
+          }
+          return undefined;
+        }),
+        now: () => t,
+        sleep: async (ms: number) => {
+          waits.push(ms);
+          t += ms;
+        },
+      },
+    );
+    expect(posts).toBe(3);
+    expect(waits).toEqual([30_000, 29_998]);
+    expect(result.receipt).toEqual(RECEIPT);
+  });
+});
+
+describe("runRegisterFlow — stalled response body (real fetch, real clock)", () => {
+  test("--timeout bounds a 409 whose body never finishes", async () => {
+    const server = stalledBodyServer();
+    try {
+      const started = Date.now();
+      const err = await runRegisterFlow({
+        ...flowParams,
+        baseUrl: `http://127.0.0.1:${server.port}`,
+        timeoutMs: 300,
+        pollIntervalMs: 50,
+      }).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(err).toBeInstanceOf(RegisterFlowError);
+      expect((err as RegisterFlowError).stage).toBe("timeout");
+    } finally {
+      server.stop(true);
+    }
+  }, 10_000);
+});
+
 describe("runRegisterFlow — hung server (real fetch, real clock)", () => {
   test("F4: --timeout bounds wall-clock even when the server never answers", async () => {
     // Deliberately hanging server: accepts the connection, never responds.
@@ -395,6 +496,45 @@ describe("runRegister (main)", () => {
     expect(report["statusUrl"]).toBe(`${BASE}${STATUS_PATH}`);
     expect(report["receiptUrl"]).toBe(`${BASE}${RECEIPT_PATH}`);
     expect(report["receiptB64"]).toBe(Buffer.from(RECEIPT).toString("base64"));
+  });
+
+  test("a pending log is retried on 409 authority-pending until it anchors, within --timeout", async () => {
+    const out = createCaptureOut();
+    process.exitCode = 0;
+    const clock = fakeClock();
+    let posts = 0;
+    await runRegister(
+      out,
+      { ...baseOptions, timeoutMs: 120_000 },
+      {
+        readStdin: async () => STATEMENT,
+        fetchImpl: fakeFetch(({ method, url }) => {
+          if (method === "POST") {
+            posts++;
+            return posts < 3 ? authorityPending() : see(STATUS_PATH);
+          }
+          if (url.pathname === STATUS_PATH) return see(RECEIPT_PATH);
+          if (url.pathname === RECEIPT_PATH) {
+            return new Response(RECEIPT, { status: 200 });
+          }
+          return undefined;
+        }),
+        ...clock,
+      },
+    );
+    expect(process.exitCode).toBe(0);
+    expect(posts).toBe(3);
+    expect(clock.waits).toEqual([30_000, 30_000]);
+    const stderr = out.lines
+      .filter((l) => l.stream === "stderr")
+      .map((l) => l.text);
+    expect(stderr).toContain(
+      `authority pending (attempt 1): log ${LOG_ID} is not anchored on chain yet (state committed, blocked by ${PARENT_LOG}); retrying in 30s`,
+    );
+    const report = JSON.parse(
+      out.lines.filter((l) => l.stream === "stdout").map((l) => l.text).join("\n"),
+    ) as Record<string, unknown>;
+    expect(report["status"]).toBe("receipt");
   });
 
   test("--json error carries the problem-details passthrough", async () => {

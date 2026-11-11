@@ -8,56 +8,26 @@
  * sends one. Fetch/sleep/clock are injectable for tests.
  */
 import {
-  ScrapiRegistrationError,
   queryRegistrationOnce,
-  registerSignedStatement,
+  registerSignedStatementRaw,
   resolveReceiptOnce,
   toAbsoluteScrapiUrl,
-  type ProblemDetails,
 } from "@forestrie/scrapi-client";
+import {
+  postUntilAdmitted,
+  type AuthorityPendingProgress,
+  type ServiceUnavailableProgress,
+} from "./register-admission.js";
+import { RegisterFlowError } from "./register-flow-error.js";
+import { REQUEST_TIMEOUT_MS } from "./timed-fetch.js";
 
-/** Where the flow failed — drives the `--json` error code. */
-export type RegisterFlowStage =
-  | "register" // POST /register/{logId}/entries rejected
-  | "status" // query-registration-status broke the 303 contract
-  | "receipt" // resolve-receipt answered non-200/404
-  | "network" // fetch itself failed (ECONNREFUSED, DNS, reset) — no response
-  | "timeout"; // `--timeout` budget exhausted (pending, or a hung request)
-
-export class RegisterFlowError extends Error {
-  readonly stage: RegisterFlowStage;
-  readonly httpStatus: number | undefined;
-  /** Problem `detail` (or body preview) from the failing response. */
-  readonly detail: string | undefined;
-  /** RFC 9457 problem details decoded from a CBOR error body. */
-  readonly problem: ProblemDetails | undefined;
-  readonly statusUrl: string | undefined;
-  readonly receiptUrl: string | undefined;
-
-  constructor(
-    message: string,
-    info: {
-      stage: RegisterFlowStage;
-      httpStatus?: number;
-      detail?: string;
-      problem?: ProblemDetails;
-      statusUrl?: string;
-      receiptUrl?: string;
-    },
-  ) {
-    super(message);
-    this.name = "RegisterFlowError";
-    this.stage = info.stage;
-    this.httpStatus = info.httpStatus;
-    this.detail = info.detail;
-    this.problem = info.problem;
-    this.statusUrl = info.statusUrl;
-    this.receiptUrl = info.receiptUrl;
-  }
-}
+export { RegisterFlowError };
+export type { RegisterFlowStage } from "./register-flow-error.js";
 
 /** Progress callbacks so the CLI can narrate long polls on stderr. */
 export type RegisterProgress =
+  | AuthorityPendingProgress
+  | ServiceUnavailableProgress
   | { phase: "registered"; statusUrl: string }
   | { phase: "status-pending"; statusUrl: string; attempt: number }
   | { phase: "receipt-located"; receiptUrl: string; entryIdHex: string }
@@ -135,14 +105,14 @@ function requestUrl(input: Parameters<typeof fetch>[0]): string {
 function boundedFetch(
   baseFetch: typeof fetch,
   now: () => number,
-  deadline: number,
+  deadline: () => number,
   timeoutMs: number,
 ): typeof fetch {
   return (async (
     input: Parameters<typeof fetch>[0],
     init?: RequestInit,
   ): Promise<Response> => {
-    const remaining = deadline - now();
+    const remaining = deadline() - now();
     if (remaining <= 0) {
       throw new RegisterFlowError(
         `timed out after ${timeoutMs}ms waiting for the receipt`,
@@ -152,8 +122,16 @@ function boundedFetch(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), remaining);
     try {
-      return await baseFetch(input, { ...init, signal: controller.signal });
+      const response = await baseFetch(input, {
+        ...init,
+        signal: controller.signal,
+      });
+      // Leave the abort armed for the body, which may still stall after
+      // the headers; unref'd, so it never holds the process open.
+      timer.unref?.();
+      return response;
     } catch (err) {
+      clearTimeout(timer);
       if (err instanceof RegisterFlowError) throw err;
       const url = requestUrl(input);
       if (controller.signal.aborted) {
@@ -166,10 +144,23 @@ function boundedFetch(
         `request to ${url} failed: ${describeFetchError(err)}`,
         { stage: "network", detail: describeFetchError(err) },
       );
-    } finally {
-      clearTimeout(timer);
     }
   }) as typeof fetch;
+}
+
+/** A body read cut off by {@link boundedFetch}'s abort, as a timeout. */
+function asBodyTimeout(err: unknown, timeoutMs: number): unknown {
+  if (
+    err instanceof Error &&
+    !(err instanceof RegisterFlowError) &&
+    (err.name === "AbortError" || err.name === "TimeoutError")
+  ) {
+    return new RegisterFlowError(
+      `timed out after ${timeoutMs}ms: a response body did not finish within the --timeout budget`,
+      { stage: "timeout" },
+    );
+  }
+  return err;
 }
 
 /**
@@ -181,14 +172,38 @@ export async function runRegisterFlow(
   params: RegisterFlowParams,
   deps: RegisterFlowDeps = {},
 ): Promise<RegisterFlowResult> {
+  try {
+    return await runRegisterFlowWithin(params, deps);
+  } catch (err) {
+    throw asBodyTimeout(err, params.timeoutMs);
+  }
+}
+
+async function runRegisterFlowWithin(
+  params: RegisterFlowParams,
+  deps: RegisterFlowDeps,
+): Promise<RegisterFlowResult> {
   const sleep = deps.sleep ?? defaultSleep;
   const now = deps.now ?? Date.now;
   const onProgress = deps.onProgress ?? (() => {});
-  const deadline = now() + params.timeoutMs;
+  // One --timeout budget for admission, and a fresh one for the receipt
+  // once the POST is admitted: an admission near the deadline must not
+  // strand a sequenced grant without the time to collect its receipt.
+  let deadline = now() + params.timeoutMs;
   const fetchImpl = boundedFetch(
     deps.fetchImpl ?? fetch,
     now,
-    deadline,
+    () => deadline,
+    params.timeoutMs,
+  );
+  // The admission POSTs make a last attempt at the deadline, so each gets
+  // at least one request's time (capped by --timeout itself) even once the
+  // budget is spent.
+  const postFloorMs = Math.min(REQUEST_TIMEOUT_MS, params.timeoutMs);
+  const postFetch = boundedFetch(
+    deps.fetchImpl ?? fetch,
+    now,
+    () => Math.max(deadline, now() + postFloorMs),
     params.timeoutMs,
   );
 
@@ -205,27 +220,26 @@ export async function runRegisterFlow(
     await sleep(waitMs);
   };
 
-  // 1. POST /register/{logId}/entries — only 303 + Location succeeds.
-  let statusUrl: string;
-  try {
-    ({ statusUrl } = await registerSignedStatement({
-      baseUrl: params.baseUrl,
-      bootstrapLogId: params.logId,
-      grantBase64: params.grantB64,
-      statement: params.statement,
-      fetchImpl,
-    }));
-  } catch (err) {
-    if (err instanceof ScrapiRegistrationError) {
-      throw new RegisterFlowError(err.message, {
-        stage: "register",
-        httpStatus: err.httpStatus,
-        detail: err.detail,
-        ...(err.problem !== undefined ? { problem: err.problem } : {}),
-      });
-    }
-    throw err;
-  }
+  // 1. POST /register/{logId}/entries — only 303 + Location succeeds; a 409
+  //    authority-pending (the log is not anchored yet) is retried.
+  let statusUrl = await postUntilAdmitted({
+    post: () =>
+      registerSignedStatementRaw({
+        baseUrl: params.baseUrl,
+        bootstrapLogId: params.logId,
+        grantBase64: params.grantB64,
+        statement: params.statement,
+        fetchImpl: postFetch,
+      }),
+    baseUrl: params.baseUrl,
+    pollIntervalMs: params.pollIntervalMs,
+    timeoutMs: params.timeoutMs,
+    deadline,
+    now,
+    sleep,
+    onProgress,
+  });
+  deadline = now() + params.timeoutMs;
   onProgress({ phase: "registered", statusUrl });
 
   // 2. Poll query-registration-status until the receipt redirect.

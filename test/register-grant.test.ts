@@ -17,7 +17,10 @@ import {
   grantDataToBytes,
   verifyCoseSign1WithParsedKey,
 } from "@forestrie/encoding";
-import { decodeCborDeterministic } from "@forestrie/encoding";
+import {
+  decodeCborDeterministic,
+  encodeCborDeterministic,
+} from "@forestrie/encoding";
 import {
   buildGrantStatement,
   es256PublicKeyXyFromPem,
@@ -276,6 +279,36 @@ function fakeFetch(route: (req: FakeRequest) => Response | undefined): typeof fe
 const see = (location: string): Response =>
   new Response(null, { status: 303, headers: { Location: location } });
 
+/**
+ * canopy's refusal of a write under a log the chain has not anchored yet
+ * (canopy `log-admission.ts`): 409, CBOR body served as plain
+ * `application/cbor`, `Retry-After` in seconds.
+ */
+function authorityPending(
+  fields: Record<string, string> = {},
+  retryAfter: string | undefined = "30",
+): Response {
+  return new Response(
+    encodeCborDeterministic({
+      type: "authority-pending",
+      title: "Authority Pending",
+      status: 409,
+      detail: `Log ${OWNER_LOG} is not anchored on chain yet.`,
+      logId: OWNER_LOG,
+      state: "committed",
+      blockedBy: BOOT_LOG,
+      ...fields,
+    }),
+    {
+      status: 409,
+      headers: {
+        "Content-Type": "application/cbor",
+        ...(retryAfter !== undefined ? { "Retry-After": retryAfter } : {}),
+      },
+    },
+  );
+}
+
 /** Deterministic clock: `sleep` advances `now` instead of waiting. */
 function fakeClock() {
   let t = 0;
@@ -288,6 +321,23 @@ function fakeClock() {
     },
     waits,
   };
+}
+
+/** A server that sends a 409's headers and one body byte, then stalls. */
+function stalledBodyServer() {
+  return Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(new Uint8Array([0xa1]));
+          },
+        }),
+        { status: 409, headers: { "Content-Type": "application/cbor" } },
+      );
+    },
+  });
 }
 
 const flowParams = {
@@ -439,6 +489,319 @@ describe("runRegisterGrantFlow", () => {
     expect(err).toBeInstanceOf(RegisterFlowError);
     expect((err as RegisterFlowError).stage).toBe("timeout");
     expect(clock.waits).toEqual([100, 100, 100, 100]);
+  });
+
+  test("retries 409 authority-pending, paced by Retry-After, until the owner anchors", async () => {
+    const clock = fakeClock();
+    const progress: RegisterGrantProgress[] = [];
+    let posts = 0;
+    const result = await runRegisterGrantFlow(
+      { ...flowParams, timeoutMs: 120_000 },
+      {
+        fetchImpl: fakeFetch(({ method, url }) => {
+          if (method === "POST") {
+            posts++;
+            return posts < 3 ? authorityPending() : see(STATUS_PATH);
+          }
+          if (url.pathname === STATUS_PATH) return see(RECEIPT_PATH);
+          if (url.pathname === RECEIPT_PATH) {
+            return new Response(RECEIPT, { status: 200 });
+          }
+          return undefined;
+        }),
+        ...clock,
+        onProgress: (p) => progress.push(p),
+      },
+    );
+    expect(result.receipt).toEqual(RECEIPT);
+    expect(posts).toBe(3);
+    expect(clock.waits).toEqual([30_000, 30_000]);
+    expect(progress.filter((p) => p.phase === "authority-pending")).toEqual([
+      {
+        phase: "authority-pending",
+        attempt: 1,
+        logId: OWNER_LOG,
+        state: "committed",
+        blockedBy: BOOT_LOG,
+        retryAfterMs: 30_000,
+        waitMs: 30_000,
+      },
+      {
+        phase: "authority-pending",
+        attempt: 2,
+        logId: OWNER_LOG,
+        state: "committed",
+        blockedBy: BOOT_LOG,
+        retryAfterMs: 30_000,
+        waitMs: 30_000,
+      },
+    ]);
+  });
+
+  test("a log still pending when the budget runs out times out with its state", async () => {
+    const clock = fakeClock();
+    const err = await runRegisterGrantFlow(
+      { ...flowParams, timeoutMs: 45_000 },
+      {
+        fetchImpl: fakeFetch(({ method }) =>
+          method === "POST" ? authorityPending() : undefined,
+        ),
+        ...clock,
+      },
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(RegisterFlowError);
+    const flowErr = err as RegisterFlowError;
+    expect(flowErr.stage).toBe("timeout");
+    expect(flowErr.httpStatus).toBe(409);
+    expect(flowErr.detail).toBe(
+      `log ${OWNER_LOG} is not anchored on chain yet (state committed, blocked by ${BOOT_LOG})`,
+    );
+    expect(flowErr.problem?.type).toBe("authority-pending");
+    // A 30 s wait, then the 15 s left, then a last attempt at the deadline.
+    expect(clock.waits).toEqual([30_000, 15_000]);
+  });
+
+  /**
+   * A clock on which each request takes 1 ms, as real ones take some time:
+   * a wait that exactly fills the budget no longer fits after a request.
+   */
+  function driftingClock() {
+    let t = 0;
+    const waits: number[] = [];
+    return {
+      now: () => t,
+      sleep: async (ms: number) => {
+        waits.push(ms);
+        t += ms;
+      },
+      tick: () => {
+        t += 1;
+      },
+      waits,
+    };
+  }
+
+  test("a pending log gets a last attempt at the deadline, not half the budget", async () => {
+    const clock = driftingClock();
+    let posts = 0;
+    const err = await runRegisterGrantFlow(
+      { ...flowParams, timeoutMs: 60_000 },
+      {
+        fetchImpl: fakeFetch(({ method }) => {
+          if (method !== "POST") return undefined;
+          clock.tick();
+          posts++;
+          return authorityPending();
+        }),
+        now: clock.now,
+        sleep: clock.sleep,
+      },
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect((err as RegisterFlowError).stage).toBe("timeout");
+    expect(posts).toBe(3);
+    expect(clock.waits).toEqual([30_000, 29_998]);
+  });
+
+  test("a grant admitted at the deadline still gets its receipt: admission restarts the budget", async () => {
+    const clock = driftingClock();
+    let posts = 0;
+    const result = await runRegisterGrantFlow(
+      { ...flowParams, timeoutMs: 60_000 },
+      {
+        fetchImpl: fakeFetch(({ method, url }) => {
+          clock.tick();
+          if (method === "POST") {
+            return ++posts < 3 ? authorityPending() : see(STATUS_PATH);
+          }
+          if (url.pathname === STATUS_PATH) return see(RECEIPT_PATH);
+          if (url.pathname === RECEIPT_PATH) {
+            return new Response(RECEIPT, { status: 200 });
+          }
+          return undefined;
+        }),
+        now: clock.now,
+        sleep: clock.sleep,
+      },
+    );
+    expect(posts).toBe(3);
+    expect(result.receipt).toEqual(RECEIPT);
+  });
+
+  /** canopy's 503 for a refusal it expects to clear: before sequencing. */
+  function unavailable(retryAfter?: string, type = "about:blank"): Response {
+    return new Response(
+      // As canopy-api encodes it: deterministic CBOR.
+      encodeCborDeterministic({
+        type,
+        title: "Service Unavailable",
+        status: 503,
+        detail: "Log authority is unavailable: rpc down",
+      }),
+      {
+        status: 503,
+        headers: {
+          "Content-Type": "application/cbor",
+          ...(retryAfter !== undefined ? { "Retry-After": retryAfter } : {}),
+        },
+      },
+    );
+  }
+
+  test("503 with Retry-After is retried within the budget, then admitted", async () => {
+    const clock = fakeClock();
+    const progress: RegisterGrantProgress[] = [];
+    let posts = 0;
+    const result = await runRegisterGrantFlow(flowParams, {
+      fetchImpl: fakeFetch(({ method, url }) => {
+        if (method === "POST") return ++posts < 2 ? unavailable("5") : see(STATUS_PATH);
+        if (url.pathname === STATUS_PATH) return see(RECEIPT_PATH);
+        if (url.pathname === RECEIPT_PATH) return new Response(RECEIPT, { status: 200 });
+        return undefined;
+      }),
+      onProgress: (p) => progress.push(p),
+      ...clock,
+    });
+    expect(result.receipt).toEqual(RECEIPT);
+    expect(posts).toBe(2);
+    expect(clock.waits).toEqual([5_000]);
+    expect(progress[0]).toMatchObject({
+      phase: "service-unavailable",
+      attempt: 1,
+      waitMs: 5_000,
+      detail: "Log authority is unavailable: rpc down",
+    });
+  });
+
+  test("a 503 that runs out the budget is a timeout carrying the 503", async () => {
+    const clock = fakeClock();
+    const err = await runRegisterGrantFlow(
+      { ...flowParams, timeoutMs: 12_000 },
+      {
+        fetchImpl: fakeFetch(({ method }) =>
+          method === "POST" ? unavailable("5") : undefined,
+        ),
+        ...clock,
+      },
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    const flowErr = err as RegisterFlowError;
+    expect(flowErr.stage).toBe("timeout");
+    expect(flowErr.httpStatus).toBe(503);
+    expect(flowErr.detail).toBe(
+      "canopy is unavailable: Log authority is unavailable: rpc down",
+    );
+    expect(clock.waits).toEqual([5_000, 5_000, 2_000]);
+  });
+
+  test("a conflict is final whatever its status: a 503 authority-conflict is not retried", async () => {
+    let posts = 0;
+    const err = await runRegisterGrantFlow(flowParams, {
+      fetchImpl: fakeFetch(({ method }) => {
+        if (method !== "POST") return undefined;
+        posts++;
+        return unavailable("5", "authority-conflict");
+      }),
+      ...fakeClock(),
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(posts).toBe(1);
+    expect((err as RegisterFlowError).stage).toBe("register");
+  });
+
+  test("503 without Retry-After is not retried", async () => {
+    let posts = 0;
+    const err = await runRegisterGrantFlow(flowParams, {
+      fetchImpl: fakeFetch(({ method }) => {
+        if (method !== "POST") return undefined;
+        posts++;
+        return unavailable();
+      }),
+      ...fakeClock(),
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(posts).toBe(1);
+    expect((err as RegisterFlowError).stage).toBe("register");
+    expect((err as RegisterFlowError).httpStatus).toBe(503);
+  });
+
+  test("409 authority-conflict is final: not retried, its CBOR problem decoded", async () => {
+    let posts = 0;
+    const err = await runRegisterGrantFlow(flowParams, {
+      fetchImpl: fakeFetch(({ method }) => {
+        if (method !== "POST") return undefined;
+        posts++;
+        return new Response(
+          encodeCborDeterministic({
+            type: "authority-conflict",
+            title: "Authority Conflict",
+            status: 409,
+            detail: `Log ${OWNER_LOG} is conflicted. Start a new log.`,
+            logId: OWNER_LOG,
+            state: "conflicted",
+          }),
+          { status: 409, headers: { "Content-Type": "application/cbor" } },
+        );
+      }),
+      ...fakeClock(),
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(posts).toBe(1);
+    const flowErr = err as RegisterFlowError;
+    expect(flowErr.stage).toBe("register");
+    expect(flowErr.httpStatus).toBe(409);
+    expect(flowErr.detail).toBe(`Log ${OWNER_LOG} is conflicted. Start a new log.`);
+    expect(flowErr.problem?.type).toBe("authority-conflict");
+  });
+
+  test("a log under a conflicted ancestor is final, even with blockedBy and a Retry-After", async () => {
+    // canopy refuses a committed claim blocked by a conflict as conflicted,
+    // naming the ancestor; only `authority-pending` is ever retried.
+    let posts = 0;
+    const clock = fakeClock();
+    const err = await runRegisterGrantFlow(flowParams, {
+      fetchImpl: fakeFetch(({ method }) => {
+        if (method !== "POST") return undefined;
+        posts++;
+        return new Response(
+          encodeCborDeterministic({
+            type: "authority-conflict",
+            title: "Authority Conflict",
+            status: 409,
+            detail: `Log ${OWNER_LOG} is under conflicted log ${BOOT_LOG}. Start a new log.`,
+            logId: OWNER_LOG,
+            state: "conflicted",
+            blockedBy: BOOT_LOG,
+          }),
+          {
+            status: 409,
+            headers: { "Content-Type": "application/cbor", "Retry-After": "30" },
+          },
+        );
+      }),
+      ...clock,
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(posts).toBe(1);
+    expect(clock.waits).toEqual([]);
+    const flowErr = err as RegisterFlowError;
+    expect(flowErr.stage).toBe("register");
+    expect(flowErr.problem?.["blockedBy"]).toBe(BOOT_LOG);
   });
 
   test("connection-refused fetch failure maps to stage network", async () => {
@@ -767,4 +1130,27 @@ describe("forestrie register-grant (binary smoke, mock SCRAPI server)", () => {
     expect(report["error"]).toBe("grant_build_failed");
     expect(String(report["message"])).toContain("--data-log");
   });
+});
+
+describe("runRegisterGrantFlow — stalled response body (real fetch, real clock)", () => {
+  test("--timeout bounds a 409 whose body never finishes", async () => {
+    const server = stalledBodyServer();
+    try {
+      const started = Date.now();
+      const err = await runRegisterGrantFlow({
+        ...flowParams,
+        baseUrl: `http://127.0.0.1:${server.port}`,
+        timeoutMs: 300,
+        pollIntervalMs: 50,
+      }).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(err).toBeInstanceOf(RegisterFlowError);
+      expect((err as RegisterFlowError).stage).toBe("timeout");
+    } finally {
+      server.stop(true);
+    }
+  }, 10_000);
 });

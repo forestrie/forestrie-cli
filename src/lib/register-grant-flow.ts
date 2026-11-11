@@ -15,18 +15,25 @@
  * here (kept private there by design).
  */
 import {
-  ScrapiRegistrationError,
   queryRegistrationOnce,
-  registerGrant,
+  registerGrantRaw,
   resolveReceiptOnce,
   toAbsoluteScrapiUrl,
 } from "@forestrie/scrapi-client";
-import { RegisterFlowError } from "./register-flow.js";
+import {
+  postUntilAdmitted,
+  type AuthorityPendingProgress,
+  type ServiceUnavailableProgress,
+} from "./register-admission.js";
+import { RegisterFlowError } from "./register-flow-error.js";
+import { REQUEST_TIMEOUT_MS } from "./timed-fetch.js";
 
 export { RegisterFlowError };
 
 /** Progress callbacks so the CLI can narrate long polls on stderr. */
 export type RegisterGrantProgress =
+  | AuthorityPendingProgress
+  | ServiceUnavailableProgress
   | { phase: "registered"; statusUrl: string }
   | { phase: "status-pending"; statusUrl: string; attempt: number }
   | { phase: "receipt-located"; receiptUrl: string; entryIdHex: string }
@@ -102,14 +109,14 @@ function requestUrl(input: Parameters<typeof fetch>[0]): string {
 function boundedFetch(
   baseFetch: typeof fetch,
   now: () => number,
-  deadline: number,
+  deadline: () => number,
   timeoutMs: number,
 ): typeof fetch {
   return (async (
     input: Parameters<typeof fetch>[0],
     init?: RequestInit,
   ): Promise<Response> => {
-    const remaining = deadline - now();
+    const remaining = deadline() - now();
     if (remaining <= 0) {
       throw new RegisterFlowError(
         `timed out after ${timeoutMs}ms waiting for the grant receipt`,
@@ -119,8 +126,16 @@ function boundedFetch(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), remaining);
     try {
-      return await baseFetch(input, { ...init, signal: controller.signal });
+      const response = await baseFetch(input, {
+        ...init,
+        signal: controller.signal,
+      });
+      // Leave the abort armed for the body, which may still stall after
+      // the headers; unref'd, so it never holds the process open.
+      timer.unref?.();
+      return response;
     } catch (err) {
+      clearTimeout(timer);
       if (err instanceof RegisterFlowError) throw err;
       const url = requestUrl(input);
       if (controller.signal.aborted) {
@@ -133,10 +148,23 @@ function boundedFetch(
         `request to ${url} failed: ${describeFetchError(err)}`,
         { stage: "network", detail: describeFetchError(err) },
       );
-    } finally {
-      clearTimeout(timer);
     }
   }) as typeof fetch;
+}
+
+/** A body read cut off by {@link boundedFetch}'s abort, as a timeout. */
+function asBodyTimeout(err: unknown, timeoutMs: number): unknown {
+  if (
+    err instanceof Error &&
+    !(err instanceof RegisterFlowError) &&
+    (err.name === "AbortError" || err.name === "TimeoutError")
+  ) {
+    return new RegisterFlowError(
+      `timed out after ${timeoutMs}ms: a response body did not finish within the --timeout budget`,
+      { stage: "timeout" },
+    );
+  }
+  return err;
 }
 
 /**
@@ -148,14 +176,38 @@ export async function runRegisterGrantFlow(
   params: RegisterGrantFlowParams,
   deps: RegisterGrantFlowDeps = {},
 ): Promise<RegisterGrantFlowResult> {
+  try {
+    return await runRegisterGrantFlowWithin(params, deps);
+  } catch (err) {
+    throw asBodyTimeout(err, params.timeoutMs);
+  }
+}
+
+async function runRegisterGrantFlowWithin(
+  params: RegisterGrantFlowParams,
+  deps: RegisterGrantFlowDeps,
+): Promise<RegisterGrantFlowResult> {
   const sleep = deps.sleep ?? defaultSleep;
   const now = deps.now ?? Date.now;
   const onProgress = deps.onProgress ?? (() => {});
-  const deadline = now() + params.timeoutMs;
+  // One --timeout budget for admission, and a fresh one for the receipt
+  // once the POST is admitted: an admission near the deadline must not
+  // strand a sequenced grant without the time to collect its receipt.
+  let deadline = now() + params.timeoutMs;
   const fetchImpl = boundedFetch(
     deps.fetchImpl ?? fetch,
     now,
-    deadline,
+    () => deadline,
+    params.timeoutMs,
+  );
+  // The admission POSTs make a last attempt at the deadline, so each gets
+  // at least one request's time (capped by --timeout itself) even once the
+  // budget is spent.
+  const postFloorMs = Math.min(REQUEST_TIMEOUT_MS, params.timeoutMs);
+  const postFetch = boundedFetch(
+    deps.fetchImpl ?? fetch,
+    now,
+    () => Math.max(deadline, now() + postFloorMs),
     params.timeoutMs,
   );
 
@@ -172,29 +224,28 @@ export async function runRegisterGrantFlow(
     await sleep(waitMs);
   };
 
-  // 1. POST /register/{bootstrapLogId}/grants — only 303 + Location succeeds.
-  let statusUrl: string;
-  try {
-    ({ statusUrl } = await registerGrant({
-      baseUrl: params.baseUrl,
-      bootstrapLogId: params.bootstrapLogId,
-      grantBase64: params.grantBase64,
-      ...(params.parentGrantBase64 !== undefined
-        ? { parentGrantBase64: params.parentGrantBase64 }
-        : {}),
-      fetchImpl,
-    }));
-  } catch (err) {
-    if (err instanceof ScrapiRegistrationError) {
-      throw new RegisterFlowError(err.message, {
-        stage: "register",
-        httpStatus: err.httpStatus,
-        detail: err.detail,
-        ...(err.problem !== undefined ? { problem: err.problem } : {}),
-      });
-    }
-    throw err;
-  }
+  // 1. POST /register/{bootstrapLogId}/grants — only 303 + Location succeeds;
+  //    a 409 authority-pending (the owner log is not anchored) is retried.
+  let statusUrl = await postUntilAdmitted({
+    post: () =>
+      registerGrantRaw({
+        baseUrl: params.baseUrl,
+        bootstrapLogId: params.bootstrapLogId,
+        grantBase64: params.grantBase64,
+        ...(params.parentGrantBase64 !== undefined
+          ? { parentGrantBase64: params.parentGrantBase64 }
+          : {}),
+        fetchImpl: postFetch,
+      }),
+    baseUrl: params.baseUrl,
+    pollIntervalMs: params.pollIntervalMs,
+    timeoutMs: params.timeoutMs,
+    deadline,
+    now,
+    sleep,
+    onProgress,
+  });
+  deadline = now() + params.timeoutMs;
   onProgress({ phase: "registered", statusUrl });
 
   // 2. Poll query-registration-status until the receipt redirect.
