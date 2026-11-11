@@ -578,6 +578,43 @@ describe("runRegisterGrantFlow", () => {
     expect(flowErr.problem?.type).toBe("authority-conflict");
   });
 
+  test("a log under a conflicted ancestor is final, even with blockedBy and a Retry-After", async () => {
+    // canopy refuses a committed claim blocked by a conflict as conflicted,
+    // naming the ancestor; only `authority-pending` is ever retried.
+    let posts = 0;
+    const clock = fakeClock();
+    const err = await runRegisterGrantFlow(flowParams, {
+      fetchImpl: fakeFetch(({ method }) => {
+        if (method !== "POST") return undefined;
+        posts++;
+        return new Response(
+          encodeCborDeterministic({
+            type: "authority-conflict",
+            title: "Authority Conflict",
+            status: 409,
+            detail: `Log ${OWNER_LOG} is under conflicted log ${BOOT_LOG}. Start a new log.`,
+            logId: OWNER_LOG,
+            state: "conflicted",
+            blockedBy: BOOT_LOG,
+          }),
+          {
+            status: 409,
+            headers: { "Content-Type": "application/cbor", "Retry-After": "30" },
+          },
+        );
+      }),
+      ...clock,
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(posts).toBe(1);
+    expect(clock.waits).toEqual([]);
+    const flowErr = err as RegisterFlowError;
+    expect(flowErr.stage).toBe("register");
+    expect(flowErr.problem?.["blockedBy"]).toBe(BOOT_LOG);
+  });
+
   test("connection-refused fetch failure maps to stage network", async () => {
     const err = await runRegisterGrantFlow(flowParams, {
       fetchImpl: (async () => {
