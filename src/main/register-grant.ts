@@ -1,4 +1,5 @@
 import type { Out } from "@forestrie/cli-kit/reporting";
+import { authorityPendingLine } from "../lib/register-admission.js";
 import { readTextFile, writeOutputFile } from "../lib/fsio.js";
 import type { RegisterGrantOptions } from "../options/register-grant.js";
 import {
@@ -213,6 +214,9 @@ export async function runRegisterGrant(
       deps.onProgress ??
       ((progress) => {
         switch (progress.phase) {
+          case "authority-pending":
+            out.print("%s", authorityPendingLine(progress));
+            break;
           case "registered":
             out.print("grant registered; status: %s", progress.statusUrl);
             break;

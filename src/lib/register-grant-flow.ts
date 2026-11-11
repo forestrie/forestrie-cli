@@ -15,18 +15,22 @@
  * here (kept private there by design).
  */
 import {
-  ScrapiRegistrationError,
   queryRegistrationOnce,
-  registerGrant,
+  registerGrantRaw,
   resolveReceiptOnce,
   toAbsoluteScrapiUrl,
 } from "@forestrie/scrapi-client";
-import { RegisterFlowError } from "./register-flow.js";
+import {
+  postUntilAdmitted,
+  type AuthorityPendingProgress,
+} from "./register-admission.js";
+import { RegisterFlowError } from "./register-flow-error.js";
 
 export { RegisterFlowError };
 
 /** Progress callbacks so the CLI can narrate long polls on stderr. */
 export type RegisterGrantProgress =
+  | AuthorityPendingProgress
   | { phase: "registered"; statusUrl: string }
   | { phase: "status-pending"; statusUrl: string; attempt: number }
   | { phase: "receipt-located"; receiptUrl: string; entryIdHex: string }
@@ -172,29 +176,27 @@ export async function runRegisterGrantFlow(
     await sleep(waitMs);
   };
 
-  // 1. POST /register/{bootstrapLogId}/grants — only 303 + Location succeeds.
-  let statusUrl: string;
-  try {
-    ({ statusUrl } = await registerGrant({
-      baseUrl: params.baseUrl,
-      bootstrapLogId: params.bootstrapLogId,
-      grantBase64: params.grantBase64,
-      ...(params.parentGrantBase64 !== undefined
-        ? { parentGrantBase64: params.parentGrantBase64 }
-        : {}),
-      fetchImpl,
-    }));
-  } catch (err) {
-    if (err instanceof ScrapiRegistrationError) {
-      throw new RegisterFlowError(err.message, {
-        stage: "register",
-        httpStatus: err.httpStatus,
-        detail: err.detail,
-        ...(err.problem !== undefined ? { problem: err.problem } : {}),
-      });
-    }
-    throw err;
-  }
+  // 1. POST /register/{bootstrapLogId}/grants — only 303 + Location succeeds;
+  //    a 409 authority-pending (the owner log is not anchored) is retried.
+  let statusUrl = await postUntilAdmitted({
+    post: () =>
+      registerGrantRaw({
+        baseUrl: params.baseUrl,
+        bootstrapLogId: params.bootstrapLogId,
+        grantBase64: params.grantBase64,
+        ...(params.parentGrantBase64 !== undefined
+          ? { parentGrantBase64: params.parentGrantBase64 }
+          : {}),
+        fetchImpl,
+      }),
+    baseUrl: params.baseUrl,
+    pollIntervalMs: params.pollIntervalMs,
+    timeoutMs: params.timeoutMs,
+    deadline,
+    now,
+    sleep,
+    onProgress,
+  });
   onProgress({ phase: "registered", statusUrl });
 
   // 2. Poll query-registration-status until the receipt redirect.

@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createCaptureOut } from "@forestrie/cli-kit/reporting";
+import { encodeCborDeterministic } from "@forestrie/encoding";
 import {
   RegisterFlowError,
   runRegisterFlow,
@@ -70,6 +71,31 @@ function fakeFetch(route: FakeRoute): typeof fetch {
 
 const see = (location: string): Response =>
   new Response(null, { status: 303, headers: { Location: location } });
+
+const PARENT_LOG = "33333333-3333-3333-3333-333333333333";
+
+/**
+ * canopy's refusal of a write under a log the chain has not anchored yet
+ * (canopy `log-admission.ts`): 409, CBOR body served as plain
+ * `application/cbor`, `Retry-After` in seconds.
+ */
+function authorityPending(): Response {
+  return new Response(
+    encodeCborDeterministic({
+      type: "authority-pending",
+      title: "Authority Pending",
+      status: 409,
+      detail: `Log ${LOG_ID} is not anchored on chain yet.`,
+      logId: LOG_ID,
+      state: "committed",
+      blockedBy: PARENT_LOG,
+    }),
+    {
+      status: 409,
+      headers: { "Content-Type": "application/cbor", "Retry-After": "30" },
+    },
+  );
+}
 
 const BASE = "https://scrapi.example";
 
@@ -395,6 +421,45 @@ describe("runRegister (main)", () => {
     expect(report["statusUrl"]).toBe(`${BASE}${STATUS_PATH}`);
     expect(report["receiptUrl"]).toBe(`${BASE}${RECEIPT_PATH}`);
     expect(report["receiptB64"]).toBe(Buffer.from(RECEIPT).toString("base64"));
+  });
+
+  test("a pending log is retried on 409 authority-pending until it anchors, within --timeout", async () => {
+    const out = createCaptureOut();
+    process.exitCode = 0;
+    const clock = fakeClock();
+    let posts = 0;
+    await runRegister(
+      out,
+      { ...baseOptions, timeoutMs: 120_000 },
+      {
+        readStdin: async () => STATEMENT,
+        fetchImpl: fakeFetch(({ method, url }) => {
+          if (method === "POST") {
+            posts++;
+            return posts < 3 ? authorityPending() : see(STATUS_PATH);
+          }
+          if (url.pathname === STATUS_PATH) return see(RECEIPT_PATH);
+          if (url.pathname === RECEIPT_PATH) {
+            return new Response(RECEIPT, { status: 200 });
+          }
+          return undefined;
+        }),
+        ...clock,
+      },
+    );
+    expect(process.exitCode).toBe(0);
+    expect(posts).toBe(3);
+    expect(clock.waits).toEqual([30_000, 30_000]);
+    const stderr = out.lines
+      .filter((l) => l.stream === "stderr")
+      .map((l) => l.text);
+    expect(stderr).toContain(
+      `authority pending (attempt 1): log ${LOG_ID} is not anchored on chain yet (state committed, blocked by ${PARENT_LOG}); retrying in 30s`,
+    );
+    const report = JSON.parse(
+      out.lines.filter((l) => l.stream === "stdout").map((l) => l.text).join("\n"),
+    ) as Record<string, unknown>;
+    expect(report["status"]).toBe("receipt");
   });
 
   test("--json error carries the problem-details passthrough", async () => {

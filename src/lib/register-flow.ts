@@ -8,56 +8,23 @@
  * sends one. Fetch/sleep/clock are injectable for tests.
  */
 import {
-  ScrapiRegistrationError,
   queryRegistrationOnce,
-  registerSignedStatement,
+  registerSignedStatementRaw,
   resolveReceiptOnce,
   toAbsoluteScrapiUrl,
-  type ProblemDetails,
 } from "@forestrie/scrapi-client";
+import {
+  postUntilAdmitted,
+  type AuthorityPendingProgress,
+} from "./register-admission.js";
+import { RegisterFlowError } from "./register-flow-error.js";
 
-/** Where the flow failed — drives the `--json` error code. */
-export type RegisterFlowStage =
-  | "register" // POST /register/{logId}/entries rejected
-  | "status" // query-registration-status broke the 303 contract
-  | "receipt" // resolve-receipt answered non-200/404
-  | "network" // fetch itself failed (ECONNREFUSED, DNS, reset) — no response
-  | "timeout"; // `--timeout` budget exhausted (pending, or a hung request)
-
-export class RegisterFlowError extends Error {
-  readonly stage: RegisterFlowStage;
-  readonly httpStatus: number | undefined;
-  /** Problem `detail` (or body preview) from the failing response. */
-  readonly detail: string | undefined;
-  /** RFC 9457 problem details decoded from a CBOR error body. */
-  readonly problem: ProblemDetails | undefined;
-  readonly statusUrl: string | undefined;
-  readonly receiptUrl: string | undefined;
-
-  constructor(
-    message: string,
-    info: {
-      stage: RegisterFlowStage;
-      httpStatus?: number;
-      detail?: string;
-      problem?: ProblemDetails;
-      statusUrl?: string;
-      receiptUrl?: string;
-    },
-  ) {
-    super(message);
-    this.name = "RegisterFlowError";
-    this.stage = info.stage;
-    this.httpStatus = info.httpStatus;
-    this.detail = info.detail;
-    this.problem = info.problem;
-    this.statusUrl = info.statusUrl;
-    this.receiptUrl = info.receiptUrl;
-  }
-}
+export { RegisterFlowError };
+export type { RegisterFlowStage } from "./register-flow-error.js";
 
 /** Progress callbacks so the CLI can narrate long polls on stderr. */
 export type RegisterProgress =
+  | AuthorityPendingProgress
   | { phase: "registered"; statusUrl: string }
   | { phase: "status-pending"; statusUrl: string; attempt: number }
   | { phase: "receipt-located"; receiptUrl: string; entryIdHex: string }
@@ -205,27 +172,25 @@ export async function runRegisterFlow(
     await sleep(waitMs);
   };
 
-  // 1. POST /register/{logId}/entries — only 303 + Location succeeds.
-  let statusUrl: string;
-  try {
-    ({ statusUrl } = await registerSignedStatement({
-      baseUrl: params.baseUrl,
-      bootstrapLogId: params.logId,
-      grantBase64: params.grantB64,
-      statement: params.statement,
-      fetchImpl,
-    }));
-  } catch (err) {
-    if (err instanceof ScrapiRegistrationError) {
-      throw new RegisterFlowError(err.message, {
-        stage: "register",
-        httpStatus: err.httpStatus,
-        detail: err.detail,
-        ...(err.problem !== undefined ? { problem: err.problem } : {}),
-      });
-    }
-    throw err;
-  }
+  // 1. POST /register/{logId}/entries — only 303 + Location succeeds; a 409
+  //    authority-pending (the log is not anchored yet) is retried.
+  let statusUrl = await postUntilAdmitted({
+    post: () =>
+      registerSignedStatementRaw({
+        baseUrl: params.baseUrl,
+        bootstrapLogId: params.logId,
+        grantBase64: params.grantB64,
+        statement: params.statement,
+        fetchImpl,
+      }),
+    baseUrl: params.baseUrl,
+    pollIntervalMs: params.pollIntervalMs,
+    timeoutMs: params.timeoutMs,
+    deadline,
+    now,
+    sleep,
+    onProgress,
+  });
   onProgress({ phase: "registered", statusUrl });
 
   // 2. Poll query-registration-status until the receipt redirect.
