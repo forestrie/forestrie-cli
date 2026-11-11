@@ -99,6 +99,23 @@ function authorityPending(): Response {
 
 const BASE = "https://scrapi.example";
 
+/** A server that sends a 409's headers and one body byte, then stalls. */
+function stalledBodyServer() {
+  return Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(new Uint8Array([0xa1]));
+          },
+        }),
+        { status: 409, headers: { "Content-Type": "application/cbor" } },
+      );
+    },
+  });
+}
+
 const flowParams = {
   baseUrl: BASE,
   logId: LOG_ID,
@@ -378,6 +395,29 @@ describe("runRegisterFlow — admission at the deadline", () => {
     expect(waits).toEqual([30_000, 29_998]);
     expect(result.receipt).toEqual(RECEIPT);
   });
+});
+
+describe("runRegisterFlow — stalled response body (real fetch, real clock)", () => {
+  test("--timeout bounds a 409 whose body never finishes", async () => {
+    const server = stalledBodyServer();
+    try {
+      const started = Date.now();
+      const err = await runRegisterFlow({
+        ...flowParams,
+        baseUrl: `http://127.0.0.1:${server.port}`,
+        timeoutMs: 300,
+        pollIntervalMs: 50,
+      }).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(err).toBeInstanceOf(RegisterFlowError);
+      expect((err as RegisterFlowError).stage).toBe("timeout");
+    } finally {
+      server.stop(true);
+    }
+  }, 10_000);
 });
 
 describe("runRegisterFlow — hung server (real fetch, real clock)", () => {

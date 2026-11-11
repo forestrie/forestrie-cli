@@ -124,8 +124,16 @@ function boundedFetch(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), remaining);
     try {
-      return await baseFetch(input, { ...init, signal: controller.signal });
+      const response = await baseFetch(input, {
+        ...init,
+        signal: controller.signal,
+      });
+      // Leave the abort armed for the body, which may still stall after
+      // the headers; unref'd, so it never holds the process open.
+      timer.unref?.();
+      return response;
     } catch (err) {
+      clearTimeout(timer);
       if (err instanceof RegisterFlowError) throw err;
       const url = requestUrl(input);
       if (controller.signal.aborted) {
@@ -138,10 +146,23 @@ function boundedFetch(
         `request to ${url} failed: ${describeFetchError(err)}`,
         { stage: "network", detail: describeFetchError(err) },
       );
-    } finally {
-      clearTimeout(timer);
     }
   }) as typeof fetch;
+}
+
+/** A body read cut off by {@link boundedFetch}'s abort, as a timeout. */
+function asBodyTimeout(err: unknown, timeoutMs: number): unknown {
+  if (
+    err instanceof Error &&
+    !(err instanceof RegisterFlowError) &&
+    (err.name === "AbortError" || err.name === "TimeoutError")
+  ) {
+    return new RegisterFlowError(
+      `timed out after ${timeoutMs}ms: a response body did not finish within the --timeout budget`,
+      { stage: "timeout" },
+    );
+  }
+  return err;
 }
 
 /**
@@ -152,6 +173,17 @@ function boundedFetch(
 export async function runRegisterGrantFlow(
   params: RegisterGrantFlowParams,
   deps: RegisterGrantFlowDeps = {},
+): Promise<RegisterGrantFlowResult> {
+  try {
+    return await runRegisterGrantFlowWithin(params, deps);
+  } catch (err) {
+    throw asBodyTimeout(err, params.timeoutMs);
+  }
+}
+
+async function runRegisterGrantFlowWithin(
+  params: RegisterGrantFlowParams,
+  deps: RegisterGrantFlowDeps,
 ): Promise<RegisterGrantFlowResult> {
   const sleep = deps.sleep ?? defaultSleep;
   const now = deps.now ?? Date.now;
