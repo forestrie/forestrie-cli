@@ -39,7 +39,6 @@ function rpcFetch(answers: {
 const ROOT_LOG_ID = toFunctionSelector("rootLogId()");
 const BOOTSTRAP_CONFIG = toFunctionSelector("bootstrapConfig()");
 const LOG_STATE = toFunctionSelector("logState(bytes32)");
-const IS_LOG_INITIALIZED = toFunctionSelector("isLogInitialized(bytes32)");
 const LOG_CONFIG = toFunctionSelector("logConfig(bytes32)");
 
 describe("rpcAnchorChain", () => {
@@ -87,43 +86,57 @@ describe("rpcAnchorChain", () => {
     expect(await at("0x6080")).toBe(true);
   });
 
-  test("logConfig: undefined until initialized, then the recorded owner and key", async () => {
+  describe("logConfig", () => {
     const child = "7a6b5c4d-0000-4000-8000-000000000002";
     const owner = "7a6b5c4d-0000-4000-8000-000000000001";
-    const key = new Uint8Array(64).fill(0x5c);
-    const read = (initialized: boolean) =>
+    const ownerWord = `0x${"00".repeat(16)}${owner.replaceAll("-", "")}` as const;
+    const record = (authLogId: `0x${string}`, rootKey: `0x${string}`, initializedAt: bigint) =>
+      encodeAbiParameters(
+        [
+          {
+            type: "tuple",
+            components: [
+              { type: "uint8" },
+              { type: "bytes32" },
+              { type: "bytes" },
+              { type: "uint256" },
+            ],
+          },
+        ],
+        [[initializedAt === 0n ? 0 : 2, authLogId, rootKey, initializedAt]],
+      );
+    const read = (answer: string, seen?: Call[]) =>
       rpcAnchorChain({
         univocity: UNIVOCITY,
         rpcUrl: RPC,
-        fetchImpl: rpcFetch({
-          calls: {
-            [IS_LOG_INITIALIZED]: encodeAbiParameters([{ type: "bool" }], [initialized]),
-            [LOG_CONFIG]: encodeAbiParameters(
-              [
-                {
-                  type: "tuple",
-                  components: [
-                    { type: "uint8" },
-                    { type: "bytes32" },
-                    { type: "bytes" },
-                    { type: "uint256" },
-                  ],
-                },
-              ],
-              [
-                [
-                  2,
-                  `0x${"00".repeat(16)}${owner.replaceAll("-", "")}`,
-                  `0x${"5c".repeat(64)}`,
-                  1234n,
-                ],
-              ],
-            ),
-          },
-        }),
+        fetchImpl: rpcFetch({ calls: { [LOG_CONFIG]: answer }, ...(seen ? { seen } : {}) }),
       }).logConfig(child);
-    expect(await read(false)).toBeUndefined();
-    expect(await read(true)).toEqual({ ownerLogId: owner, rootKey: key });
+
+    test("the recorded owner and key, from one read of the record", async () => {
+      const seen: Call[] = [];
+      expect(await read(record(ownerWord, `0x${"5c".repeat(64)}`, 1234n), seen)).toEqual({
+        ownerLogId: owner,
+        rootKey: new Uint8Array(64).fill(0x5c),
+      });
+      // One eth_call: initialization is read from the same record, so two
+      // nodes behind a load balancer cannot give a torn answer.
+      expect(seen).toHaveLength(1);
+    });
+
+    test("undefined while the record is unset", async () => {
+      expect(await read(record(`0x${"00".repeat(32)}`, "0x", 0n))).toBeUndefined();
+    });
+
+    test("an initialized record with a malformed root key is a chain error, not a claim", async () => {
+      // univocity only records 64- or 20-byte keys; anything else is a bad
+      // answer, and must never become a final conflicted.
+      await expect(read(record(ownerWord, "0x", 99n))).rejects.toThrow(
+        /root key of 0 bytes/,
+      );
+      await expect(read(record(ownerWord, `0x${"5c".repeat(33)}`, 99n))).rejects.toThrow(
+        /root key of 33 bytes/,
+      );
+    });
   });
 
   test("logState reads the owner's accumulator through the injected fetch", async () => {

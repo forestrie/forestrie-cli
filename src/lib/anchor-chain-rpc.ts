@@ -21,8 +21,6 @@ import { fetchOnChainLogState, toContractLogId } from "./verify-anchored.js";
 const BOOTSTRAP_CONFIG_SELECTOR = "0x198865fe";
 /** `rootLogId()` → `bytes32`, zero until the root's first checkpoint. */
 const ROOT_LOG_ID_SELECTOR = "0x72b76e4d";
-/** `isLogInitialized(bytes32)` → `bool`. */
-const IS_LOG_INITIALIZED_SELECTOR = "0x1642b181";
 /** `logConfig(bytes32)` → `(uint8 kind, bytes32 authLogId, bytes rootKey, uint256 initializedAt)`. */
 const LOG_CONFIG_SELECTOR = "0xa106d0ee";
 
@@ -93,12 +91,10 @@ export function rpcAnchorChain(opts: {
       return /^0x0+$/i.test(word) ? undefined : logIdOfWord(word);
     },
     async logConfig(logId) {
+      // One read: univocity's isLogInitialized is `initializedAt != 0` on
+      // this same record, so reading both could give a torn answer from
+      // two nodes behind one RPC URL.
       const arg = toContractLogId(logId).slice(2);
-      const [initialized] = decodeAbiParameters(
-        [{ type: "bool" }],
-        await call(IS_LOG_INITIALIZED_SELECTOR + arg),
-      );
-      if (!initialized) return undefined;
       const [config] = decodeAbiParameters(
         [
           {
@@ -113,10 +109,16 @@ export function rpcAnchorChain(opts: {
         ],
         await call(LOG_CONFIG_SELECTOR + arg),
       );
-      return {
-        ownerLogId: logIdOfWord(config.authLogId),
-        rootKey: Buffer.from(config.rootKey.slice(2), "hex"),
-      };
+      if (config.initializedAt === 0n) return undefined;
+      const rootKey = Buffer.from(config.rootKey.slice(2), "hex");
+      // The contract records only 64-byte (ES256 x||y) or 20-byte (KS256)
+      // root keys. Anything else is a bad answer, never a final conflict.
+      if (rootKey.length !== 64 && rootKey.length !== 20) {
+        throw new Error(
+          `the contract's record for log ${logId} has a root key of ${rootKey.length} bytes, not 64 or 20`,
+        );
+      }
+      return { ownerLogId: logIdOfWord(config.authLogId), rootKey };
     },
     async chainId() {
       const v = await ethRpc(opts.rpcUrl, "eth_chainId", [], rpc);
