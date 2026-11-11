@@ -14,6 +14,7 @@ import {
 import { decodeAbiParameters, type Hex } from "viem";
 import type { AnchorChain, PublishedStep } from "./anchor-wait.js";
 import { calldataCheckpointChain } from "./checkpoint-provider.js";
+import { REQUEST_TIMEOUT_MS, timedFetch } from "./timed-fetch.js";
 import { fetchOnChainLogState, toContractLogId } from "./verify-anchored.js";
 
 /** `bootstrapConfig()` → `(int64 bootstrapAlg, bytes bootstrapKey)`. */
@@ -41,12 +42,17 @@ export function rpcAnchorChain(opts: {
   univocity: string;
   rpcUrl: string;
   fetchImpl?: typeof fetch;
+  /** Cap on each JSON-RPC request (default {@link REQUEST_TIMEOUT_MS}). */
+  requestTimeoutMs?: number;
 }): AnchorChain {
   const address = normalizeHexAddress(opts.univocity);
   if (address === null) {
     throw new Error(`--univocity is not a valid address: '${opts.univocity}'`);
   }
-  const rpc = opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {};
+  // Every read, including the calldata scan's raw requests, is bounded.
+  const rpc = {
+    fetchImpl: timedFetch(opts.fetchImpl, opts.requestTimeoutMs ?? REQUEST_TIMEOUT_MS),
+  };
   const call = async (selector: string): Promise<Hex> => {
     const result = await ethCall(opts.rpcUrl, `0x${address}`, selector, rpc);
     if (typeof result !== "string" || !result.startsWith("0x")) {

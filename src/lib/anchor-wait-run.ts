@@ -11,6 +11,7 @@ import {
   decodeForestrieGrantCose,
 } from "@forestrie/receipt-verify";
 import { rpcAnchorChain } from "./anchor-chain-rpc.js";
+import { REQUEST_TIMEOUT_MS, timedFetch } from "./timed-fetch.js";
 import {
   childAnchorTarget,
   rootAnchorTarget,
@@ -152,11 +153,13 @@ function messageOf(err: unknown): string {
 export function receiptRefresher(
   receiptUrl: string,
   fetchImpl?: typeof fetch,
+  requestTimeoutMs: number = REQUEST_TIMEOUT_MS,
 ): () => Promise<Uint8Array> {
+  const bounded = timedFetch(fetchImpl, requestTimeoutMs);
   return async () => {
     const resolution = await resolveReceiptOnce({
       receiptUrl,
-      ...(fetchImpl !== undefined ? { fetchImpl } : {}),
+      fetchImpl: bounded,
     });
     if (resolution.status === "receipt") return resolution.body;
     throw new Error(

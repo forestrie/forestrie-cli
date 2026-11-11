@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { encodeAbiParameters, toFunctionSelector } from "viem";
 import { rpcAnchorChain } from "../src/lib/anchor-chain-rpc.js";
+import { receiptRefresher } from "../src/lib/anchor-wait-run.js";
 import { encodeLogStateResult } from "./verify-fixture.js";
 
 const UNIVOCITY = "0x" + "ab".repeat(20);
@@ -141,5 +142,28 @@ describe("rpcAnchorChain", () => {
     expect((seen[0]!.params[0] as { data: string }).data).toBe(
       LOG_STATE + "00".repeat(16) + "7a6b5c4d000040008000000000000001",
     );
+  });
+});
+
+/** A server that accepts the request and never answers, ignoring aborts. */
+const silent = (() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+
+describe("request timeouts", () => {
+  test("a chain read that never answers fails within the request timeout", async () => {
+    const chain = rpcAnchorChain({
+      univocity: UNIVOCITY,
+      rpcUrl: RPC,
+      fetchImpl: silent,
+      requestTimeoutMs: 20,
+    });
+    await expect(chain.publishedSteps("7a6b5c4d-0000-4000-8000-000000000001")).rejects.toThrow(
+      /no response .* within 20 ms/,
+    );
+    await expect(chain.logState("7a6b5c4d-0000-4000-8000-000000000001")).rejects.toThrow();
+  });
+
+  test("a receipt URL that never answers fails the refresh within the request timeout", async () => {
+    const refresh = receiptRefresher("https://scrapi.example/r", silent, 20);
+    await expect(refresh()).rejects.toThrow(/no response .* within 20 ms/);
   });
 });
