@@ -678,6 +678,29 @@ describe("runRegisterGrantFlow", () => {
     });
   });
 
+  test("a 503 that runs out the budget is a timeout carrying the 503", async () => {
+    const clock = fakeClock();
+    const err = await runRegisterGrantFlow(
+      { ...flowParams, timeoutMs: 12_000 },
+      {
+        fetchImpl: fakeFetch(({ method }) =>
+          method === "POST" ? unavailable("5") : undefined,
+        ),
+        ...clock,
+      },
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    const flowErr = err as RegisterFlowError;
+    expect(flowErr.stage).toBe("timeout");
+    expect(flowErr.httpStatus).toBe(503);
+    expect(flowErr.detail).toBe(
+      "canopy is unavailable: Log authority is unavailable: rpc down",
+    );
+    expect(clock.waits).toEqual([5_000, 5_000, 2_000]);
+  });
+
   test("a conflict is final whatever its status: a 503 authority-conflict is not retried", async () => {
     let posts = 0;
     const err = await runRegisterGrantFlow(flowParams, {

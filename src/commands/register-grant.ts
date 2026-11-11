@@ -61,7 +61,7 @@ export default defineForestrieCommand({
     timeout: {
       type: "string",
       description:
-        "Wait budget in seconds: for admission while canopy answers 409 authority-pending (a last attempt is made at the deadline), then again for the receipt once admitted (default 60)",
+        "Wait budget in seconds: for admission while canopy answers 409 authority-pending or 503 with Retry-After (a last attempt is made at the deadline), then again for the receipt once admitted (default 60)",
       valueHint: "seconds",
     },
     "poll-interval": {
