@@ -1,4 +1,5 @@
 import type { Out } from "@forestrie/cli-kit/reporting";
+import { uuidToBytes } from "@forestrie/encoding";
 import {
   anchorFailureLine,
   anchorRoundNarrator,
@@ -313,8 +314,9 @@ export async function runCreateLog(
     return;
   }
 
-  // 2c. --wait-anchored: bind the chain now, so a wrong forest or an
-  // unreachable RPC is refused before the write-once create grant is spent.
+  // 2c. --wait-anchored: bind the chain now, so that with --genesis a wrong
+  // forest, or an RPC that cannot say its chain id, is refused before the
+  // write-once create grant is spent.
   let anchorWait: BoundAnchorWait | undefined;
   if (options.anchorWait !== undefined) {
     try {
@@ -427,7 +429,12 @@ async function bindCreateLogAnchorWait(
       : undefined;
   if (options.selfReferential) {
     const root = await anchorTargetFor(undefined, genesisCbor);
-    if (root.logId !== options.newLog.toLowerCase()) {
+    // Compare as bytes: --new-log may be given with or without dashes.
+    const same =
+      Buffer.from(uuidToBytes(root.logId)).equals(
+        Buffer.from(uuidToBytes(options.newLog)),
+      );
+    if (!same) {
       throw new Error(
         `the genesis is for root ${root.logId}, not --new-log ${options.newLog}`,
       );

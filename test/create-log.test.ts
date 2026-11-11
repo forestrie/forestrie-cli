@@ -26,7 +26,7 @@ import { es256PublicKeyXyFromPem } from "../src/lib/register-grant-build.js";
 import { runCreateLog } from "../src/main/create-log.js";
 import type { CreateLogOptions } from "../src/options/create-log.js";
 import { receiptForLeaf } from "./anchor-wait-fixture.js";
-import { buildGenesisCbor } from "./verify-fixture.js";
+import { FIXTURE_LOG_ID, buildGenesisCbor } from "./verify-fixture.js";
 
 // --- fixed key material --------------------------------------------------
 
@@ -590,6 +590,56 @@ describe("runCreateLog --wait-anchored", () => {
     expect(stderr).toContain(
       `forestrie create-log: log ${NEW_LOG} is not anchored after 30s (4 rounds)`,
     );
+  });
+
+  test("a forest root waits on its contract, with --new-log in 32-hex form", async () => {
+    const genesis = path.join(tmp, "root-genesis.cbor");
+    const rootKey = new Uint8Array(64).fill(0x42);
+    writeFileSync(genesis, buildGenesisCbor(rootKey));
+    const hexRoot = FIXTURE_LOG_ID.replaceAll("-", "");
+    const canopy = sequencingCanopy();
+    const clock = fakeClock();
+    const out = createCaptureOut();
+    process.exitCode = 0;
+    await runCreateLog(
+      out,
+      {
+        ...options,
+        newLog: hexRoot,
+        ownerLog: hexRoot,
+        selfReferential: true,
+        parentGrantB64: undefined,
+        signerPem: undefined,
+        anchorWait: {
+          ...options.anchorWait!,
+          genesis,
+          univocity: undefined,
+        },
+      },
+      {
+        fetchImpl: canopy.fetchImpl,
+        anchorChain: {
+          ...ownerChain(() => [], canopy.peak),
+          async hasCode() {
+            return true;
+          },
+          async bootstrapConfig() {
+            return { alg: -7n, key: rootKey };
+          },
+          async rootLogId() {
+            return undefined;
+          },
+        },
+        ...clock,
+      },
+    );
+    expect(process.exitCode).toBe(0);
+    expect(reportOf(out)["anchor"]).toMatchObject({
+      status: "anchored",
+      reason: "contract_root_unset",
+      logId: FIXTURE_LOG_ID,
+      rounds: 1,
+    });
   });
 
   test("a genesis bound to another chain is refused before the grant is registered", async () => {
