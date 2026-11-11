@@ -623,6 +623,8 @@ describe("runCreateLog --wait-anchored", () => {
     const report = reportOf(out);
     expect(decodeCoseSign1(base64ToBytes(report["grantB64"] as string))).toBeDefined();
     expect(report["outB64"]).toBeUndefined();
+    // The JSON consumer is told the write failed and the wait was skipped.
+    expect(report["outB64Error"]).toEqual(expect.stringContaining(tmp));
     expect(report["anchor"]).toBeUndefined();
     expect(chainReads).toBe(0);
     const stderr = out.lines.filter((l) => l.stream === "stderr").map((l) => l.text);

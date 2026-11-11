@@ -68,6 +68,11 @@ export type CreateLogReport = {
   anchor?: AnchorWaitReport;
   /** `--wait-anchored`: why the wait could not start once the log existed. */
   anchorError?: string;
+  /**
+   * Why --out-b64 could not be written: the grant is in `grantB64`
+   * instead, the command exits 1, and no anchoring wait ran.
+   */
+  outB64Error?: string;
 };
 
 /** `--json` failure shape (problem = CBOR problem-details passthrough). */
@@ -161,7 +166,7 @@ function reportCompletedGrant(
   built: BuiltCreateLogGrant,
   result: RegisterGrantFlowResult,
   completedB64: string,
-  anchor: Pick<CreateLogReport, "anchor" | "anchorError"> = {},
+  extra: Pick<CreateLogReport, "anchor" | "anchorError" | "outB64Error"> = {},
 ): void {
   const ownerHex = Buffer.from(built.grantData).toString("hex");
   if (options.json) {
@@ -181,7 +186,7 @@ function reportCompletedGrant(
     } else {
       report.grantB64 = completedB64;
     }
-    out.out(JSON.stringify({ ...report, ...anchor }, null, 2));
+    out.out(JSON.stringify({ ...report, ...extra }, null, 2));
     return;
   }
   // Human mode: without --out-b64 the completed grant base64 is the pipeable
@@ -399,8 +404,9 @@ export async function runCreateLog(
       } catch (err) {
         // The grant is sequenced and write-once: emit it on stdout as if
         // there were no --out-b64, fail, and do not start a wait.
+        const outB64Error = `could not write --out-b64 ${options.outB64}: ${err instanceof Error ? err.message : String(err)}`;
         out.warn(
-          `forestrie create-log: could not write --out-b64 ${options.outB64}: ${err instanceof Error ? err.message : String(err)}; the completed grant is on stdout`,
+          `forestrie create-log: ${outB64Error}; the completed grant is on stdout`,
         );
         reportCompletedGrant(
           out,
@@ -408,6 +414,7 @@ export async function runCreateLog(
           built,
           result,
           completedB64,
+          { outB64Error },
         );
         process.exitCode = 1;
         return;
